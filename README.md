@@ -40,12 +40,13 @@ npm start
 
 左下角會顯示偵測到的 CLI 與版本。找不到時請確認指令在登入 shell 的 `PATH` 裡。
 
-打包成 .app / .dmg:
+打包成 .dmg:
 
 ```bash
-npm install --save-dev electron-builder
 npm run dist
 ```
+
+輸出在 `release/AI Roundtable-<版本>.dmg`,也可以直接到 [Releases](https://github.com/yanmin841111-byte/ai-roundtable/releases) 下載。沒有 Apple 開發者憑證,所以 app 未簽章:第一次開啟請在 Finder 對 app 按右鍵 → 打開,或到「系統設定 → 隱私權與安全性」允許。
 
 ## 流程
 

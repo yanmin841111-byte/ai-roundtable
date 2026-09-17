@@ -4,6 +4,12 @@
 
 ## [未發布]
 
+尚無。
+
+## [0.1.0] - 2026-09-17
+
+第一個版本。
+
 ### 新增
 
 - 圓桌流程:成員輪流討論、主持人分工、平行執行、交叉審查、修復回合與總結;另有「只討論,不執行」模式。
@@ -22,7 +28,9 @@
 
 - 主程序、介面與測試改用 TypeScript(strict)撰寫;`npm start` 會先建置到 `dist/`,介面由 esbuild 打包。
 - 主程序與介面共用 IPC 型別定義。
-- 新增 GitHub Actions CI,每次 push 與 pull request 都跑型別檢查、測試與建置。
+- 新增 GitHub Actions CI,每次 push 與 pull request 都跑型別檢查、測試、建置與端對端測試(`npm run e2e`,用假成員跑完整流程)。
+- 內建 Claude Code / Codex CLI 轉接器有了重播 stream-json 事件的測試。
+- `npm run dist` 產生未簽章的 dmg 到 `release/`;推送 `v*` 標籤會自動建置並附到 GitHub Release。
 
 ### 安全
 
@@ -30,4 +38,5 @@
 - `secrets.json` 損壞時先備份原檔,不會被新的 key 覆寫。
 - 附件、歷史紀錄、擴充檔的路徑一律在主程序驗證。
 
-[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/commits/main
+[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/yanmin841111-byte/ai-roundtable/releases/tag/v0.1.0

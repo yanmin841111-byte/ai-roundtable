@@ -46,11 +46,19 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "directories": {
+      "output": "release"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}.${ext}"
     }
   },
   "devDependencies": {
     "electron": "^33.0.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "marked": "^15.0.0",
     "tsx": "^4.23.12",
