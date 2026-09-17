@@ -3,7 +3,7 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const crypto = require('crypto');
-const { runTurn, CLI_TYPES } = require('./adapters');
+const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
 const { hasMarker, stripMarker } = require('./shared');
 
 const AGREED = 'AGREED';
@@ -157,7 +157,7 @@ class Orchestrator extends EventEmitter {
     const codes = new Map();
     agents.forEach((a, i) => codes.set(`A${i + 1}`, a));
     const roster = [...codes.entries()]
-      .map(([code, a]) => `- ${code} =「${a.name}」(${(CLI_TYPES[a.cli] || {}).label || a.cli}${a.canEdit ? '' : ',唯讀,不能修改檔案'})`)
+      .map(([code, a]) => `- ${code} =「${a.name}」(${(getAdapter(a.cli) || {}).label || a.cli}${effectiveCanEdit(a) ? '' : ',唯讀,不能修改檔案'})`)
       .join('\n');
     const prompt = [
       '【分工】你是本次的主持人。請根據到目前為止的討論結果,把任務拆解並分配給以下成員:',
@@ -212,7 +212,7 @@ class Orchestrator extends EventEmitter {
       const taskText = mine.map((a) => a.task).join('\n');
       const prompt = [
         `【執行】以下是分配給你的工作,請現在實際完成它(工作目錄:${cwd})。`,
-        agent.canEdit ? '你可以直接建立、修改檔案與執行指令。' : '注意:你目前沒有修改檔案的權限,請把要做的內容以完整程式碼或步驟寫出來。',
+        effectiveCanEdit(agent) ? '你可以直接建立、修改檔案與執行指令。' : '注意:你目前沒有修改檔案的權限,請把要做的內容以完整程式碼或步驟寫出來。',
         '完成後請簡潔回報:做了什麼、建立或修改了哪些檔案、有什麼未完成或需要別人配合的地方。',
         '',
         taskText,
@@ -289,7 +289,7 @@ class Orchestrator extends EventEmitter {
     const unresolved = [];
     const jobs = [];
     for (const it of issues.values()) {
-      if (it.agent.canEdit === false) { unresolved.push(it); continue; }
+      if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
       const prompt = [
         '【修復】以下是其他成員對你剛才成果的審查意見。請現在就處理:能修的直接改檔案,不打算修的要明確說明理由。',
         '這是最後一輪修改,之後不會再審查。請簡潔回報你改了什麼、哪些沒改以及為什麼。',
@@ -383,7 +383,7 @@ class Orchestrator extends EventEmitter {
   // 收集該成員尚未看到的訊息,組成「[名稱]: 內容」的紀錄
   unseenTranscript(agent, current) {
     const seen = this.lastSeen[agent.id];
-    const from = CLI_TYPES[agent.cli]?.supportsResume ? (seen == null ? (this.taskStartIndex || 0) : seen) : 0;
+    const from = getAdapter(agent.cli)?.supportsResume ? (seen == null ? (this.taskStartIndex || 0) : seen) : 0;
     const lines = [];
     for (let i = from; i < this.messages.length; i++) {
       const m = this.messages[i];
@@ -401,7 +401,7 @@ class Orchestrator extends EventEmitter {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running' });
     const transcript = this.unseenTranscript(agent, msg);
-    const resumable = CLI_TYPES[agent.cli]?.supportsResume && this.sessions[agent.id];
+    const resumable = getAdapter(agent.cli)?.supportsResume && this.sessions[agent.id];
     const prompt = [
       transcript ? (resumable ? '【新訊息】' : '【目前為止的對話紀錄】') + '\n' + transcript : '',
       instruction,

@@ -1,0 +1,11 @@
+{
+  "id": "openrouter",
+  "label": "OpenRouter",
+  "type": "openai",
+  "description": "透過 OpenRouter 使用上百種模型(含 DeepSeek、Kimi、Grok、Qwen…)。需要環境變數 OPENROUTER_API_KEY。modelFilter 可用正規表示式縮小清單。",
+  "baseUrl": "https://openrouter.ai/api/v1",
+  "apiKeyEnv": "OPENROUTER_API_KEY",
+  "headers": { "X-Title": "AI Roundtable" },
+  "models": "auto",
+  "modelFilter": "^(deepseek|moonshotai|x-ai|qwen|google|anthropic|openai)/"
+}

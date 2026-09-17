@@ -1,0 +1,31 @@
+{
+  "id": "kimi",
+  "label": "Kimi Code CLI",
+  "type": "cli",
+  "description": "Moonshot Kimi Code CLI(指令 kimi)。依官方 print mode 文件撰寫,尚未在作者電腦實測。print mode 沒有輸出 session id,所以每回合會送完整對話紀錄。",
+  "bin": "kimi",
+  "input": "arg",
+  "systemPrompt": "prepend",
+  "args": [
+    "--print",
+    "-p", "{prompt}",
+    "--output-format", "stream-json",
+    "-w", "{cwd}",
+    ["-m", "{model}"],
+    { "if": "canEdit", "then": ["--yolo"] }
+  ],
+  "output": {
+    "format": "jsonl",
+    "rules": [
+      { "match": { "role": "assistant" }, "text": "content", "mode": "message" },
+      {
+        "match": { "role": "assistant", "tool_calls": { "$exists": true } },
+        "each": "tool_calls",
+        "activity": { "id": "{id}", "title": "工具:{function.name}", "detail": "{function.arguments}", "status": "running" }
+      },
+      { "match": { "role": "tool" }, "activity": { "id": "{tool_call_id}", "result": "{content}", "status": "done" } }
+    ]
+  },
+  "supportsResume": false,
+  "models": []
+}

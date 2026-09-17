@@ -35,7 +35,19 @@
           <label class="field half"><span>回覆語言</span><input id="language" type="text" /></label>
         </div>
         <label class="field"><span>主持人(負責分工與總結)</span><select id="lead-agent"></select></label>
-        <div id="cli-status" class="cli-status"></div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-head">
+          <span>CLI 與擴充</span>
+          <span class="row">
+            <button id="ext-add" class="ghost small" title="從範本新增 CLI 或 API">+ 新增</button>
+            <button id="ext-open-dir" class="ghost small" title="開啟擴充資料夾">📁</button>
+            <button id="ext-reload" class="ghost small" title="重新載入擴充">↻</button>
+          </span>
+        </div>
+        <div id="ext-list" class="ext-list"></div>
+        <button id="ext-docs" class="link small">擴充撰寫說明 ↗</button>
       </div>
     </aside>
 
@@ -90,7 +102,7 @@
           <label class="field half"><span>強度(推理力度)</span><select id="f-effort"></select></label>
           <label class="field half checks">
             <span>&nbsp;</span>
-            <label class="check"><input id="f-canEdit" type="checkbox" /> 允許修改檔案與執行指令</label>
+            <label class="check" id="f-canEdit-wrap"><input id="f-canEdit" type="checkbox" /> 允許修改檔案與執行指令</label>
             <label class="check"><input id="f-enabled" type="checkbox" /> 啟用</label>
           </label>
         </div>
@@ -108,6 +120,36 @@
         <button id="modal-delete" class="danger small">刪除成員</button>
         <div class="spacer"></div>
         <button id="modal-save" class="primary">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 擴充範本選擇 -->
+  <div id="ext-picker" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><span>新增 CLI / API</span><button id="ext-picker-close" class="ghost small">✕</button></div>
+      <div class="modal-body">
+        <div class="hint" style="margin-bottom:10px">選一個範本複製到你的擴充資料夾,之後可以直接編輯。沒有你要的 CLI 或 API 時,選空白範本自己填。</div>
+        <div id="ext-templates" class="template-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 擴充編輯器 -->
+  <div id="ext-editor" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head"><span id="ext-editor-title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
+      <div class="modal-body">
+        <label class="field"><span>檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
+        <textarea id="ext-content" class="code-editor" rows="22" spellcheck="false"></textarea>
+        <div id="ext-error" class="error-text" hidden></div>
+        <div id="ext-ok" class="ok-text" hidden></div>
+      </div>
+      <div class="modal-foot">
+        <button id="ext-delete" class="danger small">刪除擴充</button>
+        <div class="spacer"></div>
+        <button id="ext-editor-docs" class="ghost small">欄位說明 ↗</button>
+        <button id="ext-save" class="primary">儲存並載入</button>
       </div>
     </div>
   </div>

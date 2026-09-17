@@ -1,0 +1,15 @@
+{
+  "id": "my-cli",
+  "label": "我的 CLI",
+  "type": "cli",
+  "description": "空白 CLI 範本。預設把提示詞從 stdin 送入、stdout 當作回覆;完整欄位說明見 docs/adapters.md。",
+  "bin": "my-cli",
+  "input": "stdin",
+  "systemPrompt": "prepend",
+  "args": [
+    ["--model", "{model}"],
+    { "if": "canEdit", "then": ["--allow-edits"] }
+  ],
+  "output": { "format": "text" },
+  "models": []
+}

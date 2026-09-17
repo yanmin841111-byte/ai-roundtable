@@ -28,7 +28,7 @@
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "electron-builder --mac",
-    "test": "node test/models.test.js"
+    "test": "node test/models.test.js && node test/adapters.test.js"
   },
   "build": {
     "appId": "io.github.yanmin841111-byte.airoundtable",
@@ -38,7 +38,8 @@
       "preload.js",
       "src/**",
       "renderer/**",
-      "node_modules/marked/**"
+      "node_modules/marked/**",
+      "adapters/**"
     ],
     "mac": {
       "target": "dmg",

@@ -1,0 +1,9 @@
+{
+  "id": "kimi-api",
+  "label": "Kimi API (Moonshot)",
+  "type": "openai",
+  "description": "Moonshot Kimi 官方 API,模型清單自動從 /models 取得。需要環境變數 MOONSHOT_API_KEY;中國大陸帳號請把 baseUrl 改成 https://api.moonshot.cn/v1。",
+  "baseUrl": "https://api.moonshot.ai/v1",
+  "apiKeyEnv": "MOONSHOT_API_KEY",
+  "models": "auto"
+}

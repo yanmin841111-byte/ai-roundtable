@@ -39,6 +39,7 @@
     if (!want) return { effort: null, note: null };
     var m = findModel(models, modelName);
     if (!m) return { effort: want, note: null }; // 不認得的模型無從驗證,照使用者設定送出
+    if (m.unrestrictedEffort) return { effort: want, note: null }; // 設定檔沒限制強度,照使用者設定送出
     var supported = m.efforts || [];
     if (supported.length === 0) return { effort: null, note: m.label + ' 不支援強度設定,已略過 ' + want };
     if (supported.indexOf(want) >= 0) return { effort: want, note: null };

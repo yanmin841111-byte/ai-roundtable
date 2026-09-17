@@ -1,0 +1,13 @@
+{
+  "id": "deepseek",
+  "label": "DeepSeek API",
+  "type": "openai",
+  "description": "DeepSeek 官方 API。需要環境變數 DEEPSEEK_API_KEY。API 成員只能討論與審查,不能修改檔案。",
+  "baseUrl": "https://api.deepseek.com",
+  "apiKeyEnv": "DEEPSEEK_API_KEY",
+  "models": [
+    { "id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "efforts": ["low", "high", "max"], "defaultEffort": "high" },
+    { "id": "deepseek-flash", "label": "DeepSeek V4.1 Flash", "efforts": ["low", "high", "max"], "defaultEffort": "high" }
+  ],
+  "effortBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "{effort}" }
+}

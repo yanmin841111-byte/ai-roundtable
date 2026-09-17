@@ -2,6 +2,9 @@
 const $ = (s) => document.querySelector(s);
 let config = null;
 let cliTypes = {};
+let cliStatus = {};
+let extSummary = { entries: [], templates: [] };
+let editingExtFile = null;
 let editingId = null;
 const msgEls = new Map();
 let running = false;
@@ -21,8 +24,9 @@ const Marker = window.Shared || {
 
 // ---------- 初始化 ----------
 async function init() {
-  [config, cliTypes] = await Promise.all([window.api.getConfig(), window.api.cliTypes()]);
+  [config, cliTypes, extSummary] = await Promise.all([window.api.getConfig(), window.api.cliTypes(), window.api.ext.list()]);
   renderSidebar();
+  renderExtensions();
   const snap = await window.api.snapshot();
   snap.messages.forEach(renderMessage);
   setState(snap);
@@ -46,6 +50,19 @@ async function init() {
   $('#pick-dir').onclick = async () => { const d = await window.api.pickDir(); if (d) { $('#work-dir').value = d; saveSettings(); } };
   $('#open-dir').onclick = () => window.api.openPath($('#work-dir').value);
   for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent']) $(id).addEventListener('change', saveSettings);
+  $('#ext-add').onclick = openTemplatePicker;
+  $('#ext-open-dir').onclick = () => window.api.ext.openDir();
+  $('#ext-reload').onclick = () => reloadExtensions();
+  $('#ext-docs').onclick = () => window.api.ext.openDocs();
+  $('#ext-editor-docs').onclick = () => window.api.ext.openDocs();
+  $('#ext-picker-close').onclick = () => $('#ext-picker').classList.add('hidden');
+  $('#ext-editor-close').onclick = () => $('#ext-editor').classList.add('hidden');
+  $('#ext-save').onclick = saveExtension;
+  $('#ext-delete').onclick = deleteExtension;
+  $('#ext-content').addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); }
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveExtension(); }
+  });
   $('#mode').value = config.settings.mode || 'divide';
   $('#mode').onchange = () => { config.settings.mode = $('#mode').value; window.api.saveConfig(config); };
 }
@@ -58,8 +75,119 @@ function emptyEl() {
 }
 
 async function checkClis() {
-  const r = await window.api.checkCli();
-  $('#cli-status').innerHTML = Object.entries(r).map(([k, v]) => `<div><span class="${v.ok ? 'ok' : 'bad'}">${v.ok ? '●' : '○'}</span> ${cliTypes[k].label}:${v.ok ? escapeHtml(v.version) : '找不到指令 ' + cliTypes[k].bin}</div>`).join('');
+  cliStatus = await window.api.checkCli();
+  renderExtensions();
+}
+
+// ---------- CLI 與擴充 ----------
+const TYPE_LABEL = { builtin: '內建', cli: 'CLI', openai: 'API', js: 'JS 外掛' };
+
+async function refreshCatalog() {
+  [cliTypes, extSummary] = await Promise.all([window.api.cliTypes(), window.api.ext.list()]);
+  renderSidebar();
+  renderExtensions();
+  checkClis();
+}
+
+async function reloadExtensions() {
+  await window.api.ext.reload();
+  await refreshCatalog();
+}
+
+function renderExtensions() {
+  const list = $('#ext-list');
+  if (!list) return;
+  const rows = [];
+  // 已載入的轉接器(內建 + 擴充)
+  for (const t of Object.values(cliTypes)) {
+    const st = cliStatus[t.id];
+    const dot = !st ? '<span class="unknown">○</span>' : st.ok ? '<span class="ok">●</span>' : '<span class="bad">○</span>';
+    const sub = st ? (st.ok ? st.version : st.error) : t.bin ? '檢查中…' : '不需檢查';
+    const badges = [`<span class="badge">${TYPE_LABEL[t.type] || t.type}</span>`];
+    if (!t.supportsEdit) badges.push('<span class="badge">只能討論</span>');
+    const entry = extSummary.entries.find((e) => e.file === t.file);
+    if (entry && entry.overrides) badges.push('<span class="badge warn">覆寫內建</span>');
+    if (t.modelError) badges.push('<span class="badge warn">模型清單讀取失敗</span>');
+    rows.push({ file: t.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(t.label)}</b>${badges.join('')}</div><div class="ext-sub" title="${escapeHtml(sub || '')}">${escapeHtml(sub || '')}</div>${t.modelError ? `<div class="ext-err">${escapeHtml(t.modelError)}</div>` : ''}</div>` });
+  }
+  // 載入失敗的擴充
+  for (const e of extSummary.entries.filter((x) => x.error)) {
+    rows.push({ file: e.file, broken: true, html: `<span class="bad">✕</span><div class="ext-main"><div class="ext-title"><b>${escapeHtml(e.file)}</b><span class="badge bad">載入失敗</span></div><div class="ext-err">${escapeHtml(e.error)}</div></div>` });
+  }
+  list.innerHTML = '';
+  for (const r of rows) {
+    const el = document.createElement('div');
+    el.className = `ext-item${r.file ? ' clickable' : ''}${r.broken ? ' broken' : ''}`;
+    el.innerHTML = r.html;
+    if (r.file) { el.title = `點擊編輯 ${r.file}`; el.onclick = () => openExtEditor(r.file); }
+    list.appendChild(el);
+  }
+}
+
+function openTemplatePicker() {
+  const box = $('#ext-templates');
+  box.innerHTML = '';
+  for (const t of extSummary.templates) {
+    const el = document.createElement('button');
+    el.className = 'template';
+    el.innerHTML = `<span class="row"><b>${escapeHtml(t.label)}</b><span class="badge">${TYPE_LABEL[t.type] || t.type}</span></span><span class="hint">${escapeHtml(t.description)}</span>`;
+    el.onclick = async () => {
+      try {
+        const { file } = await window.api.ext.install(t.file);
+        $('#ext-picker').classList.add('hidden');
+        await refreshCatalog();
+        openExtEditor(file);
+      } catch (e) { alert(`新增失敗:${cleanIpcError(e)}`); }
+    };
+    box.appendChild(el);
+  }
+  $('#ext-picker').classList.remove('hidden');
+}
+
+async function openExtEditor(file) {
+  try {
+    const content = await window.api.ext.read(file);
+    editingExtFile = file;
+    $('#ext-editor-title').textContent = `編輯擴充:${file}`;
+    $('#ext-file').value = file;
+    $('#ext-content').value = content;
+    const entry = extSummary.entries.find((e) => e.file === file);
+    showExtResult(entry && entry.error, null);
+    $('#ext-editor').classList.remove('hidden');
+  } catch (e) { alert(`無法開啟:${cleanIpcError(e)}`); }
+}
+
+function showExtResult(error, ok) {
+  $('#ext-error').hidden = !error;
+  $('#ext-error').textContent = error ? `⚠ ${error}` : '';
+  $('#ext-ok').hidden = !ok;
+  $('#ext-ok').textContent = ok || '';
+}
+
+async function saveExtension() {
+  const file = $('#ext-file').value.trim();
+  try {
+    const { error } = await window.api.ext.write(file, $('#ext-content').value, editingExtFile);
+    editingExtFile = file;
+    $('#ext-editor-title').textContent = `編輯擴充:${file}`;
+    await refreshCatalog();
+    showExtResult(error, error ? null : '✓ 已儲存並載入。成員編輯視窗的 CLI 選單已更新。');
+  } catch (e) {
+    showExtResult(cleanIpcError(e), null);
+  }
+}
+
+async function deleteExtension() {
+  if (!editingExtFile || !confirm(`確定刪除 ${editingExtFile}?使用這個 CLI 的成員會無法發言。`)) return;
+  await window.api.ext.remove(editingExtFile);
+  $('#ext-editor').classList.add('hidden');
+  editingExtFile = null;
+  await refreshCatalog();
+}
+
+// Electron 會把主程序錯誤包成 "Error invoking remote method 'x': Error: 訊息"
+function cleanIpcError(e) {
+  return String((e && e.message) || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
 // ---------- 側欄 ----------
@@ -73,7 +201,7 @@ function renderSidebar() {
     el.innerHTML = `
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
-        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? '<span class="badge lead">主持人</span>' : ''} ${a.canEdit ? '' : '<span class="badge">唯讀</span>'}</div>
+        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? '<span class="badge lead">主持人</span>' : ''} ${!cliTypes[a.cli] ? '<span class="badge bad">找不到 CLI</span>' : a.canEdit && cliTypes[a.cli].supportsEdit ? '' : '<span class="badge">唯讀</span>'}</div>
         <div class="agent-meta">${(cliTypes[a.cli] || {}).label || a.cli} · ${escapeHtml(a.model || '預設模型')} · ${escapeHtml(a.effort || '預設強度')}</div>
         <div class="agent-meta">${escapeHtml(a.persona || '')}</div>
       </div>`;
@@ -103,7 +231,13 @@ async function openModal(id) {
   try { cliTypes = await window.api.cliTypes(); } catch {}
   const a = id ? config.agents.find((x) => x.id === id) : { name: '', cli: 'claude', model: '', effort: '', persona: '', color: randomColor(), canEdit: true, enabled: true, customCommand: '' };
   $('#modal-title').textContent = id ? '編輯成員' : '新增成員';
-  $('#f-cli').innerHTML = Object.entries(cliTypes).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('');
+  const groups = [['內建', (t) => t.origin === 'builtin'], ['擴充', (t) => t.origin !== 'builtin']];
+  let cliOptions = groups.map(([name, pick]) => {
+    const opts = Object.values(cliTypes).filter(pick).map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}${t.type !== 'builtin' ? `(${TYPE_LABEL[t.type] || t.type})` : ''}</option>`).join('');
+    return opts ? `<optgroup label="${name}">${opts}</optgroup>` : '';
+  }).join('');
+  if (a.cli && !cliTypes[a.cli]) cliOptions += `<option value="${escapeHtml(a.cli)}">${escapeHtml(a.cli)}(找不到,請重新選擇)</option>`;
+  $('#f-cli').innerHTML = cliOptions;
   $('#f-cli').value = a.cli;
   $('#f-name').value = a.name;
   $('#f-color').value = a.color;
@@ -123,7 +257,7 @@ const findModel = (cli, name) => ModelRules.findModel(modelsOf(cli), name);
 
 function fillCliDependentFields(cli, model, effort) {
   const models = modelsOf(cli);
-  const isCustomCli = cli === 'custom';
+  const isCustomCli = !!(cliTypes[cli] && cliTypes[cli].usesCustomCommand);
   const sel = $('#f-model-select');
   sel.innerHTML = '<option value="">(CLI 預設模型)</option>'
     + models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label !== m.id ? `${m.id}(${m.label})` : m.id)}</option>`).join('')
@@ -138,7 +272,25 @@ function fillCliDependentFields(cli, model, effort) {
   $('#f-model').value = manual ? raw : '';
   $('#f-model').style.display = manual ? '' : 'none';
   $('#f-custom-wrap').style.display = isCustomCli ? '' : 'none';
+  updateEditCapability(cli);
   refreshModelDependents(effort);
+}
+
+// 轉接器不支援修改檔案時(例如 API),停用勾選框並說明原因;成員原本的設定保留不動。
+function updateEditCapability(cli) {
+  const t = cliTypes[cli];
+  const supported = !t || t.supportsEdit;
+  const box = $('#f-canEdit');
+  box.disabled = !supported;
+  let note = $('#f-canEdit-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'f-canEdit-note';
+    note.className = 'field-note';
+    $('#f-canEdit-wrap').after(note);
+  }
+  note.textContent = supported ? '' : `${t.label} 不能修改檔案,只能參與討論與審查`;
+  note.hidden = supported;
 }
 
 function currentModel() {
@@ -156,26 +308,39 @@ function onModelSelect() {
 // 依目前選的模型更新說明文字與強度選單。effort 未給時沿用畫面上的選擇。
 function refreshModelDependents(effort) {
   const cli = $('#f-cli').value;
-  const source = (cliTypes[cli] || {}).modelSource;
+  const t = cliTypes[cli] || {};
+  const source = t.modelSource;
   const info = findModel(cli, currentModel());
   const notes = [];
   if (info && info.description) notes.push(info.description);
   if (source === 'fallback') notes.push('(讀不到 CLI 的模型快取,顯示內建清單;先執行一次該 CLI 通常就會產生)');
+  if (source === 'error') notes.push(`(模型清單讀取失敗:${t.modelError || '未知錯誤'};可以選「其他(手動輸入)」)`);
+  if (source === 'loading') notes.push('(模型清單讀取中,稍後重新打開這個視窗)');
+  if (t.description && t.origin !== 'builtin' && !info) notes.push(t.description);
   $('#f-model-desc').textContent = notes.join(' ');
   fillEfforts(cli, info, effort === undefined ? $('#f-effort').value : effort);
 }
 
 function fillEfforts(cli, info, wanted) {
   const eff = $('#f-effort');
-  // 認得的模型用它自己的強度清單;手動輸入的模型無從得知,列出該 CLI 所有模型強度的聯集。
-  const efforts = info ? info.efforts : ModelRules.EFFORT_RANK.filter((e) => modelsOf(cli).some((m) => m.efforts.includes(e)));
-  const unsupported = !!info && efforts.length === 0;
-  eff.disabled = unsupported || efforts.length === 0;
+  const t = cliTypes[cli] || {};
+  const restricted = !!info && !info.unrestrictedEffort;
+  // 認得且有限制的模型用它自己的強度清單;其他情況列出轉接器設定的強度與所有模型強度的聯集。
+  let efforts;
+  if (restricted) efforts = info.efforts;
+  else {
+    const pool = new Set([...(t.efforts || []), ...modelsOf(cli).flatMap((m) => m.efforts || [])]);
+    efforts = [...ModelRules.EFFORT_RANK.filter((e) => pool.has(e)), ...[...pool].filter((e) => !ModelRules.EFFORT_RANK.includes(e))];
+  }
+  const unsupported = restricted && efforts.length === 0;
+  eff.disabled = efforts.length === 0;
   eff.innerHTML = unsupported
     ? '<option value="">(此模型不支援強度設定)</option>'
-    : `<option value="">(預設${info && info.defaultEffort ? ':' + info.defaultEffort : ''})</option>` + efforts.map((e) => `<option value="${e}">${e}</option>`).join('');
+    : efforts.length === 0
+      ? '<option value="">(這個 CLI 沒有設定強度選項)</option>'
+      : `<option value="">(預設${info && info.defaultEffort ? ':' + info.defaultEffort : ''})</option>` + efforts.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
   // 換模型時保留原本的強度;新模型不支援就降到最接近的等級,跟實際執行時的規則一致。
-  const resolved = info ? ModelRules.resolveEffort([info], info.id, wanted).effort : wanted;
+  const resolved = restricted ? ModelRules.resolveEffort([info], info.id, wanted).effort : wanted;
   eff.value = resolved && efforts.includes(resolved) ? resolved : '';
 }
 

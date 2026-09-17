@@ -5,14 +5,26 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { Store } = require('./src/store');
 const { Orchestrator } = require('./src/orchestrator');
-const { CLI_TYPES, checkCli, cliCatalog } = require('./src/adapters');
+const { Registry, setRegistry } = require('./src/adapters');
 
-// 從 Finder / Dock 啟動時 PATH 很精簡,補上登入 shell 的 PATH 才找得到 claude / codex。
-function fixPath() {
+// 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
+// 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
+function importShellEnv() {
   const extra = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.npm-global/bin')];
+  const marker = '__AI_ROUNDTABLE_ENV__';
   try {
-    const shellPath = execSync(`${process.env.SHELL || '/bin/zsh'} -ilc 'echo -n "$PATH"'`, { encoding: 'utf8', timeout: 5000 });
-    if (shellPath) extra.unshift(...shellPath.split(':'));
+    const out = execSync(`${process.env.SHELL || '/bin/zsh'} -ilc 'echo ${marker}; env'`, { encoding: 'utf8', timeout: 5000 });
+    const lines = out.slice(out.indexOf(marker) + marker.length).split('\n');
+    let key = null;
+    const shellEnv = {};
+    for (const line of lines) {
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m) { key = m[1]; shellEnv[key] = m[2]; } else if (key) shellEnv[key] += '\n' + line; // 多行值
+    }
+    if (shellEnv.PATH) extra.unshift(...shellEnv.PATH.split(':'));
+    for (const [k, v] of Object.entries(shellEnv)) {
+      if (k !== 'PATH' && process.env[k] === undefined && !/^(_|SHLVL|PWD|OLDPWD)$/.test(k)) process.env[k] = v;
+    }
   } catch {}
   const seen = new Set();
   process.env.PATH = [...extra, ...(process.env.PATH || '').split(':')].filter((p) => p && !seen.has(p) && seen.add(p)).join(':');
@@ -21,6 +33,7 @@ function fixPath() {
 let win;
 let store;
 let orchestrator;
+let registry;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -49,8 +62,14 @@ function send(channel, payload) { if (win && !win.isDestroyed()) win.webContents
 function stopOrchestrator() { if (orchestrator) orchestrator.stop(); }
 
 app.whenReady().then(async () => {
-  fixPath();
+  importShellEnv();
   store = new Store(app.getPath('userData'));
+  // 擴充資料夾可用 AI_ROUNDTABLE_ADAPTERS_DIR 覆寫(方便開發外掛)
+  registry = new Registry({
+    userDir: process.env.AI_ROUNDTABLE_ADAPTERS_DIR || path.join(app.getPath('userData'), 'adapters'),
+    templatesDir: path.join(__dirname, 'adapters', 'templates'),
+  });
+  setRegistry(registry);
   orchestrator = new Orchestrator(store);
   orchestrator.on('message', (m) => send('chat:message', m));
   orchestrator.on('state', (s) => send('chat:state', s));
@@ -58,12 +77,18 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('config:get', () => store.get());
   ipcMain.handle('config:save', (_e, cfg) => store.save(cfg));
-  ipcMain.handle('cli:types', () => cliCatalog());
-  ipcMain.handle('cli:check', async () => {
-    const out = {};
-    for (const [key, t] of Object.entries(CLI_TYPES)) if (t.bin) out[key] = await checkCli(t.bin);
-    return out;
-  });
+  ipcMain.handle('cli:types', () => registry.catalog());
+  ipcMain.handle('cli:check', () => registry.checkAll());
+
+  // CLI 擴充管理
+  ipcMain.handle('ext:list', () => registry.summary());
+  ipcMain.handle('ext:reload', () => registry.reload());
+  ipcMain.handle('ext:install', (_e, templateFile) => registry.installTemplate(templateFile));
+  ipcMain.handle('ext:read', (_e, file) => registry.readFile(file));
+  ipcMain.handle('ext:write', (_e, { file, content, originalFile }) => registry.writeFile(file, content, { originalFile }));
+  ipcMain.handle('ext:delete', (_e, file) => registry.deleteFile(file));
+  ipcMain.handle('ext:openDir', () => shell.openPath(registry.userDir));
+  ipcMain.handle('ext:openDocs', () => shell.openExternal('https://github.com/yanmin841111-byte/ai-roundtable/blob/main/docs/adapters.md'));
   ipcMain.handle('dialog:pickDir', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : r.filePaths[0];

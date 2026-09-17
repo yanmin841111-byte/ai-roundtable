@@ -1,0 +1,29 @@
+{
+  "id": "grok",
+  "label": "Grok CLI",
+  "type": "cli",
+  "description": "xAI Grok Build CLI(指令 grok)。依官方 headless 文件撰寫,尚未在作者電腦實測;若參數不同請依你安裝的版本調整。",
+  "bin": "grok",
+  "input": "arg",
+  "systemPrompt": "prepend",
+  "args": [
+    "-p", "{prompt}",
+    "--output-format", "streaming-json",
+    "--no-auto-update",
+    "--cwd", "{cwd}",
+    ["-m", "{model}"],
+    ["--effort", "{effort}"],
+    ["--resume", "{sessionId}"],
+    { "if": "canEdit", "then": ["--always-approve"] }
+  ],
+  "output": {
+    "format": "jsonl",
+    "rules": [
+      { "match": { "type": "text" }, "text": "data" },
+      { "match": { "type": "end" }, "sessionId": "sessionId" },
+      { "match": { "type": "error" }, "error": "message" }
+    ]
+  },
+  "efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  "models": []
+}
