@@ -494,10 +494,9 @@ function closeHistoryModal() {
 
 function formatHistoryTime(value: string | number | undefined): string {
   const date = new Date(value ?? NaN);
+  // 側欄一行放不下秒數與時區;匯出檔仍保留完整時間
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(localeTag(), {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false, timeZoneName: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   });
 }
 
