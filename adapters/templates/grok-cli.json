@@ -7,23 +7,69 @@
   "input": "arg",
   "systemPrompt": "prepend",
   "args": [
-    "-p", "{prompt}",
-    "--output-format", "streaming-json",
+    "-p",
+    "{prompt}",
+    "--output-format",
+    "streaming-json",
     "--no-auto-update",
-    "--cwd", "{cwd}",
-    ["-m", "{model}"],
-    ["--effort", "{effort}"],
-    ["--resume", "{sessionId}"],
-    { "if": "canEdit", "then": ["--always-approve"] }
+    "--cwd",
+    "{cwd}",
+    [
+      "-m",
+      "{model}"
+    ],
+    [
+      "--effort",
+      "{effort}"
+    ],
+    [
+      "--resume",
+      "{sessionId}"
+    ],
+    {
+      "if": "canEdit",
+      "then": [
+        "--always-approve"
+      ]
+    }
   ],
   "output": {
     "format": "jsonl",
     "rules": [
-      { "match": { "type": "text" }, "text": "data" },
-      { "match": { "type": "end" }, "sessionId": "sessionId" },
-      { "match": { "type": "error" }, "error": "message" }
+      {
+        "match": {
+          "type": "text"
+        },
+        "text": "data"
+      },
+      {
+        "match": {
+          "type": "end"
+        },
+        "sessionId": "sessionId"
+      },
+      {
+        "match": {
+          "type": "error"
+        },
+        "error": "message"
+      }
     ]
   },
-  "efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-  "models": []
+  "efforts": [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "models": [],
+  "capabilities": {
+    "attachments": [
+      "filePath"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

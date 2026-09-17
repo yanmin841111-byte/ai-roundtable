@@ -2,8 +2,18 @@
   "id": "my-api",
   "label": "我的 API",
   "type": "openai",
-  "description": "空白 OpenAI 相容 API 範本。填 baseUrl、apiKeyEnv(或 apiKey)與模型即可。",
+  "description": "空白 OpenAI 相容 API 範本。填 baseUrl、API URL、環境變數或安全儲存的 API key與模型即可。",
   "baseUrl": "https://api.example.com/v1",
   "apiKeyEnv": "MY_API_KEY",
-  "models": ["model-a", "model-b"]
+  "models": [
+    "model-a",
+    "model-b"
+  ],
+  "capabilities": {
+    "attachments": [
+      "imageInline",
+      "textInline"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

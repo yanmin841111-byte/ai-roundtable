@@ -203,6 +203,7 @@ function createCursorAdapter({ bin = 'cursor-agent' } = {}) {
     bin,
     supportsResume: true,
     supportsEdit: true,
+    capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
     efforts: [],
     listModels,
     refreshModels,

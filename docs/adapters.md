@@ -31,6 +31,18 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 | `efforts` | 否 | 手動輸入模型、或模型沒限制強度時可選的強度 |
 | `timeoutMs` | 否 | 單回合逾時,預設 10 分鐘 |
 | `usageShape` | 否 | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷 |
+| `capabilities` | 否 | 附件能力,格式見下方 |
+
+### 附件能力
+
+```json
+"capabilities": {
+  "attachments": ["filePath"],
+  "attachmentsNeedCwd": false
+}
+```
+
+`attachments` 可包含 `filePath`、`imageInline`、`textInline`。CLI 通常使用 `filePath`;OpenAI 相容 API 通常使用 `imageInline` 與 `textInline`。只有確定 CLI 無法讀取工作目錄外的絕對路徑時才將 `attachmentsNeedCwd` 設為 `true`。
 
 ### 模型清單
 
@@ -183,8 +195,8 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 | 欄位 | 預設 | 說明 |
 | --- | --- | --- |
 | `baseUrl` | 必填 | API 根網址 |
-| `apiKeyEnv` | 無 | 讀取 API key 的環境變數名稱(建議) |
-| `apiKey` | 無 | 直接寫 API key。會以明碼存在擴充資料夾,不建議 |
+| `secretRef` | 無 | 「設定 → CLI 與擴充」安全儲存 API key 後自動寫入的參照;不要手動放入 key |
+| `apiKeyEnv` | 無 | 讀取 API key 的環境變數名稱;安全儲存未設定時使用 |
 | `headers` | 無 | 額外 HTTP header |
 | `path` | `/chat/completions` | 對話端點 |
 | `models` | 無 | 模型清單,或 `"auto"` 從 `modelsPath` 取得(每 10 分鐘更新) |
@@ -202,7 +214,7 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 
 ### 設定 API key
 
-在 `~/.zshrc` 加上:
+一般使用者可在「設定 → CLI 與擴充」的 API key 欄位輸入,app 會用作業系統安全儲存加密,不會把明文寫進擴充 JSON。也可以在 `~/.zshrc` 加上:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."

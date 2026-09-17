@@ -5,6 +5,7 @@ let cliTypes = {};
 let cliStatus = {};
 let extSummary = { entries: [], templates: [] };
 let editingExtFile = null;
+let editingExtSpec = null;
 let extTemplateFilter = 'all';
 let editingId = null;
 const msgEls = new Map();
@@ -36,18 +37,21 @@ async function init() {
   renderSidebar();
   renderExtensions();
   const snap = await window.api.snapshot();
-  snap.messages.forEach(renderMessage);
+  snap.messages.forEach((m) => renderMessage(m, { animate: false }));
   setState(snap);
   checkClis();
+  setupComposerAttachments();
 
-  window.api.onMessage(renderMessage);
+  window.api.onMessage((m) => renderMessage(m, { animate: true }));
   window.api.onState(setState);
   window.api.onReset(() => {
     msgEls.clear();
     messageData.clear();
     $('#timeline').innerHTML = '';
     $('#timeline').appendChild(emptyEl());
+    clearPendingAttachments();
     updateUsageTotal();
+    updateSpeakingHighlight();
   });
 
   $('#send-btn').onclick = sendMessage;
@@ -114,6 +118,19 @@ async function init() {
   $('#ext-editor-close').onclick = () => $('#ext-editor').classList.add('hidden');
   $('#ext-save').onclick = saveExtension;
   $('#ext-delete').onclick = deleteExtension;
+  $('#ext-tab-basic').onclick = () => showExtEditorTab('basic');
+  $('#ext-tab-advanced').onclick = () => showExtEditorTab('advanced');
+  $('#ext-pick-bin').onclick = pickExtensionExecutable;
+  $('#ext-key-clear').onclick = clearExtensionSecret;
+  $('#ext-key-test').onclick = testExtensionConnection;
+  for (const id of ['#ext-id', '#ext-label', '#ext-type', '#ext-bin', '#ext-args', '#ext-base-url', '#ext-api-env', '#ext-models']) {
+    $(id).addEventListener('input', syncExtBasicToJson);
+  }
+  $('#ext-type').addEventListener('change', updateExtTypeFields);
+  $('#ext-content').addEventListener('blur', () => {
+    if (!editingExtFile || editingExtFile.endsWith('.js')) return;
+    try { fillExtBasic(JSON.parse($('#ext-content').value)); } catch {}
+  });
   $('#ext-content').addEventListener('keydown', (e) => {
     if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); }
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveExtension(); }
@@ -191,7 +208,7 @@ function saveAppearance() {
 function emptyEl() {
   const d = document.createElement('div');
   d.id = 'empty'; d.className = 'empty';
-  d.innerHTML = '<div class="empty-icon">◎</div><div class="empty-title">把任務丟給圓桌</div><div class="empty-sub">成員會輪流討論、達成共識後由主持人分工,各自在工作目錄執行,最後互相審查。</div>';
+  d.innerHTML = '<div class="empty-icon">◎</div><div class="empty-title">把任務丟給圓桌</div><div class="empty-sub">成員會輪流討論、達成共識後由主持人分工,各自在工作目錄執行,最後互相審查。</div><div class="empty-steps"><span>① 討論</span><span class="arrow">→</span><span>② 分工執行</span><span class="arrow">→</span><span>③ 交叉審查</span></div>';
   return d;
 }
 
@@ -312,6 +329,12 @@ function renderHistoryPreview(messages) {
     body.className = 'body';
     body.innerHTML = marked.parse(String(message.text || ''));
     card.append(head, body);
+    if (Array.isArray(message.attachments) && message.attachments.length) {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = attachmentsMarkup(message.attachments);
+      if (wrap.firstChild) card.appendChild(wrap.firstChild);
+      hydrateAttachmentThumbs(card, message.attachments);
+    }
     if (message.error) {
       const error = document.createElement('div');
       error.className = 'error-text';
@@ -495,15 +518,152 @@ function appendTemplateGroup(container, title, templates) {
 
 async function openExtEditor(file) {
   try {
-    const content = await window.api.ext.read(file);
+    const result = await window.api.ext.read(file);
+    const content = typeof result === 'string' ? result : result.content;
+    const migration = typeof result === 'object' && result ? result.migration : '';
+    const migrationError = typeof result === 'object' && result ? result.migrationError : '';
     editingExtFile = file;
     $('#ext-editor-title').textContent = `編輯擴充:${file}`;
     $('#ext-file').value = file;
     $('#ext-content').value = content;
+    $('#ext-api-key').value = '';
+    if (file.endsWith('.json')) {
+      // JSON 壞掉時 showExtEditorTab 會退回「進階 JSON」分頁，讓使用者直接修
+      editingExtSpec = null;
+      showExtEditorTab('basic');
+      await refreshExtensionSecretStatus();
+    } else {
+      editingExtSpec = null;
+      showExtEditorTab('advanced');
+    }
+    if (migration) await refreshCatalog();
     const entry = extSummary.entries.find((e) => e.file === file);
-    showExtResult(entry && entry.error, null);
+    showExtResult(migrationError || (migration ? null : entry && entry.error), migration || null);
     $('#ext-editor').classList.remove('hidden');
   } catch (e) { alert(`無法開啟:${cleanIpcError(e)}`); }
+}
+
+function showExtEditorTab(tab) {
+  if (tab === 'basic' && editingExtFile && editingExtFile.endsWith('.js')) tab = 'advanced';
+  if (tab === 'basic') {
+    try {
+      editingExtSpec = JSON.parse($('#ext-content').value);
+      fillExtBasic(editingExtSpec);
+    } catch (e) {
+      showExtResult(`JSON 格式錯誤:${e.message}`, null);
+      tab = 'advanced';
+    }
+  }
+  const basic = tab === 'basic';
+  $('#ext-basic').hidden = !basic;
+  $('#ext-advanced').hidden = basic;
+  $('#ext-tab-basic').classList.toggle('active', basic);
+  $('#ext-tab-advanced').classList.toggle('active', !basic);
+  $('#ext-tab-basic').setAttribute('aria-selected', String(basic));
+  $('#ext-tab-advanced').setAttribute('aria-selected', String(!basic));
+  $('#ext-tab-basic').disabled = !!(editingExtFile && editingExtFile.endsWith('.js'));
+}
+
+function fillExtBasic(spec) {
+  const isJson = !!spec && typeof spec === 'object' && !Array.isArray(spec);
+  $('#ext-basic-unavailable').hidden = isJson;
+  $('#ext-basic-fields').hidden = !isJson;
+  if (!isJson) return;
+  $('#ext-id').value = spec.id || '';
+  $('#ext-label').value = spec.label || '';
+  $('#ext-type').value = spec.type === 'openai' ? 'openai' : 'cli';
+  $('#ext-bin').value = spec.bin || '';
+  const simpleArgs = Array.isArray(spec.args) && spec.args.every((arg) => typeof arg === 'string');
+  $('#ext-args').disabled = Array.isArray(spec.args) && !simpleArgs;
+  $('#ext-args').value = simpleArgs ? spec.args.join('\n') : '';
+  $('#ext-args-help').textContent = $('#ext-args').disabled ? '此範本含條件或參數群組，請在「進階 JSON」調整。' : '';
+  $('#ext-base-url').value = spec.baseUrl || '';
+  $('#ext-api-env').value = spec.apiKeyEnv || '';
+  $('#ext-models').disabled = false;
+  $('#ext-models').dataset.original = JSON.stringify(spec.models == null ? [] : spec.models);
+  $('#ext-models').value = spec.models === 'auto' ? 'auto' : Array.isArray(spec.models) ? spec.models.map((model) => typeof model === 'string' ? model : model.id).filter(Boolean).join(', ') : '';
+  $('#ext-models-help').textContent = Array.isArray(spec.models) && spec.models.some((model) => model && typeof model === 'object') ? '既有模型的名稱與強度設定會保留。' : '';
+  updateExtTypeFields();
+}
+
+function updateExtTypeFields() {
+  const api = $('#ext-type').value === 'openai';
+  $('#ext-cli-fields').hidden = api;
+  $('#ext-api-fields').hidden = !api;
+}
+
+function syncExtBasicToJson() {
+  if (!editingExtFile || editingExtFile.endsWith('.js')) return;
+  let spec;
+  try { spec = JSON.parse($('#ext-content').value); } catch { spec = editingExtSpec || {}; }
+  spec.id = $('#ext-id').value.trim();
+  spec.label = $('#ext-label').value.trim();
+  spec.type = $('#ext-type').value;
+  if (!$('#ext-args').disabled) spec.args = $('#ext-args').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  spec.bin = $('#ext-bin').value.trim();
+  spec.baseUrl = $('#ext-base-url').value.trim();
+  const env = $('#ext-api-env').value.trim();
+  if (env) spec.apiKeyEnv = env; else delete spec.apiKeyEnv;
+  const modelText = $('#ext-models').value.trim();
+  if (modelText === 'auto') spec.models = 'auto';
+  else {
+    const ids = modelText.split(',').map((id) => id.trim()).filter(Boolean);
+    let original = [];
+    try { original = JSON.parse($('#ext-models').dataset.original || '[]'); } catch {}
+    const byId = new Map((Array.isArray(original) ? original : []).filter((item) => item && typeof item === 'object').map((item) => [item.id, item]));
+    spec.models = ids.map((id) => byId.get(id) || id);
+  }
+  if (!spec.capabilities) spec.capabilities = { attachments: spec.type === 'openai' ? ['imageInline', 'textInline'] : ['filePath'], attachmentsNeedCwd: false };
+  editingExtSpec = spec;
+  $('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
+  updateExtTypeFields();
+}
+
+function extensionSecretRef(spec = editingExtSpec) {
+  return (spec && spec.secretRef) || `adapter:${(spec && spec.id) || $('#ext-id').value.trim()}`;
+}
+
+async function refreshExtensionSecretStatus() {
+  if (!editingExtSpec || editingExtSpec.type !== 'openai') return;
+  try {
+    const status = await window.api.secrets.status(extensionSecretRef(), editingExtSpec.apiKeyEnv || '');
+    const badge = $('#ext-key-status');
+    badge.classList.toggle('configured', status.configured);
+    badge.textContent = status.configured ? `已設定 ${status.hint}${status.source === 'environment' ? '(環境變數)' : ''}` : '尚未設定';
+    $('#ext-key-clear').disabled = status.source !== 'safeStorage';
+  } catch (e) { showExtResult(cleanIpcError(e), null); }
+}
+
+async function pickExtensionExecutable() {
+  const file = await window.api.pickExecutable();
+  if (!file) return;
+  $('#ext-bin').value = file;
+  syncExtBasicToJson();
+}
+
+async function clearExtensionSecret() {
+  try {
+    await window.api.secrets.clear(extensionSecretRef());
+    const spec = JSON.parse($('#ext-content').value);
+    delete spec.secretRef;
+    editingExtSpec = spec;
+    $('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
+    $('#ext-api-key').value = '';
+    syncExtBasicToJson();
+    await refreshExtensionSecretStatus();
+    showExtResult(null, '✓ 已清除「設定 → CLI 與擴充」裡填入的 API key');
+  } catch (e) { showExtResult(cleanIpcError(e), null); }
+}
+
+async function testExtensionConnection() {
+  const saved = await saveExtension({ quiet: true });
+  if (!saved) return;
+  $('#ext-key-test').disabled = true;
+  try {
+    const result = await window.api.secrets.test(editingExtSpec.id);
+    showExtResult(result.ok ? null : result.error, result.ok ? `✓ ${result.version || '連線成功'}` : null);
+  } catch (e) { showExtResult(cleanIpcError(e), null); }
+  finally { $('#ext-key-test').disabled = false; }
 }
 
 function showExtResult(error, ok) {
@@ -513,16 +673,32 @@ function showExtResult(error, ok) {
   $('#ext-ok').textContent = ok || '';
 }
 
-async function saveExtension() {
+async function saveExtension({ quiet = false } = {}) {
   const file = $('#ext-file').value.trim();
   try {
+    if (!file.endsWith('.js')) {
+      // 在「進階 JSON」分頁儲存時以 JSON 為準，不能拿基本欄位的舊值覆蓋
+      if (!$('#ext-basic').hidden) syncExtBasicToJson();
+      const spec = JSON.parse($('#ext-content').value);
+      const key = $('#ext-api-key').value.trim();
+      if (spec.type === 'openai' && key) {
+        spec.secretRef = extensionSecretRef(spec);
+        await window.api.secrets.set(spec.secretRef, key);
+        $('#ext-api-key').value = '';
+        editingExtSpec = spec;
+        $('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
+      }
+    }
     const { error } = await window.api.ext.write(file, $('#ext-content').value, editingExtFile);
     editingExtFile = file;
     $('#ext-editor-title').textContent = `編輯擴充:${file}`;
     await refreshCatalog();
-    showExtResult(error, error ? null : '✓ 已儲存並載入。成員編輯視窗的 CLI 選單已更新。');
+    await refreshExtensionSecretStatus();
+    if (error || !quiet) showExtResult(error, error ? null : '✓ 已儲存並載入。成員編輯視窗的 CLI 選單已更新。');
+    return !error;
   } catch (e) {
     showExtResult(cleanIpcError(e), null);
+    return false;
   }
 }
 
@@ -547,6 +723,7 @@ function renderSidebar() {
   for (const a of config.agents) {
     const el = document.createElement('div');
     el.className = 'agent-card' + (a.enabled === false ? ' disabled' : '');
+    el.dataset.agentId = a.id;
     el.innerHTML = `
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
@@ -567,6 +744,7 @@ function renderSidebar() {
   $('#workdir-chip').title = `工作目錄:${workDir || '未設定'}(點擊更換)`;
   const sel = $('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
+  updateSpeakingHighlight();
 }
 
 function saveSettings() {
@@ -724,11 +902,37 @@ function deleteAgent() {
 }
 
 // ---------- 對話 ----------
+const STAGE_LABEL = { discuss: '① 討論', execute: '② 分工執行', review: '③ 交叉審查' };
+const ATTACH_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'txt', 'md', 'json', 'csv', 'log', 'pdf']);
+const ATTACH_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+const pendingAttachments = [];
+let attachLimits = { maxFiles: 10, maxFileBytes: 20 * 1024 * 1024, maxTotalBytes: 50 * 1024 * 1024 };
+
 async function sendMessage() {
   const text = $('#input').value.trim();
-  if (!text) return;
+  if (!text && !pendingAttachments.length) return;
+  const attachments = pendingAttachments.map((item) => ({
+    id: item.id,
+    name: item.name,
+    mime: item.mime,
+    size: item.size,
+    kind: item.kind,
+    path: item.path || null,
+    relPath: item.relPath || null,
+    thumb: item.thumb || null,
+  }));
+  const toClear = pendingAttachments.splice(0, pendingAttachments.length);
   $('#input').value = '';
-  await window.api.send(text, $('#mode').value);
+  renderAttachChips();
+  clearAttachError();
+  try {
+    await window.api.send(text, $('#mode').value, attachments);
+    revokeThumbUrls(toClear);
+  } catch (error) {
+    pendingAttachments.unshift(...toClear);
+    renderAttachChips();
+    showAttachError(cleanIpcError(error) || '送出失敗');
+  }
 }
 
 function setState(s) {
@@ -738,9 +942,10 @@ function setState(s) {
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
   $('#stop-btn').disabled = !running;
   $('#hint').textContent = running ? '進行中,現在送出的訊息會在下一位成員發言時帶入' : '';
+  updateSpeakingHighlight();
 }
 
-function renderMessage(m) {
+function renderMessage(m, { animate = false } = {}) {
   messageData.set(m.id, m);
   updateUsageTotal();
   const tl = $('#timeline');
@@ -748,22 +953,137 @@ function renderMessage(m) {
   if (empty) empty.style.display = 'none';
   let el = msgEls.get(m.id);
   const atBottom = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 80;
+  const isNew = !el;
   if (!el) {
     el = document.createElement('div');
     msgEls.set(m.id, el);
     tl.appendChild(el);
+    if (animate) {
+      el.classList.add('enter');
+      el.addEventListener('animationend', () => el.classList.remove('enter'), { once: true });
+    }
   }
-  el.className = `msg ${m.kind} ${m.level || ''}`;
+  el.className = `msg ${m.kind} ${m.level || ''} ${m.status === 'running' ? 'streaming' : ''}${el.classList.contains('enter') ? ' enter' : ''}${el.classList.contains('msg-continue') ? ' msg-continue' : ''}`;
+  if (m.agentId) el.dataset.agentId = m.agentId;
+  else delete el.dataset.agentId;
   if (m.kind === 'agent') renderAgentMessage(el, m);
-  else el.innerHTML = m.kind === 'user' ? userHtml(m) : systemHtml(m);
+  else if (m.kind === 'user') renderUserMessage(el, m);
+  else el.innerHTML = systemHtml(m);
+  if (isNew) insertTimelineMarkers(el, m);
+  updateContinuation(el);
+  updateSpeakingHighlight();
   if (atBottom) tl.scrollTop = tl.scrollHeight;
 }
 
+function stageFromMessage(m) {
+  const phase = String(m.phase || '');
+  if (/^討論/.test(phase)) return 'discuss';
+  if (phase === '分工' || phase === '執行') return 'execute';
+  if (phase === '審查' || phase === '修復' || phase === '總結') return 'review';
+  return '';
+}
+
+function roundFromMessage(m) {
+  const match = String(m.phase || '').match(/討論\s*R(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function adjacentMsg(el, dir) {
+  let node = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+  while (node && !node.classList.contains('msg')) {
+    node = dir < 0 ? node.previousElementSibling : node.nextElementSibling;
+  }
+  return node;
+}
+
+function insertTimelineMarkers(el, m) {
+  const prev = adjacentMsg(el, -1);
+  const inherited = prev ? prev.dataset.stage : '';
+  const stage = stageFromMessage(m) || inherited || (m.kind === 'user' ? 'discuss' : '');
+  const round = roundFromMessage(m);
+  el.dataset.stage = stage || '';
+  el.dataset.round = round ? String(round) : (stage && stage === inherited ? (prev && prev.dataset.round) || '' : '');
+  if (stage && stage !== inherited) {
+    const divider = document.createElement('div');
+    divider.className = 'tl-stage';
+    divider.innerHTML = `<span class="tl-stage-label">${STAGE_LABEL[stage] || stage}</span>`;
+    el.before(divider);
+  }
+  if (round && String(round) !== (prev && prev.dataset.round || '')) {
+    const maxRounds = Number(config && config.settings && config.settings.maxRounds) || 0;
+    const divider = document.createElement('div');
+    divider.className = 'tl-round';
+    divider.textContent = maxRounds ? `第 ${round} 輪 / ${maxRounds}` : `第 ${round} 輪`;
+    el.before(divider);
+  }
+}
+
+function updateContinuation(el) {
+  const prev = adjacentMsg(el, -1);
+  const key = el.dataset.agentId || '';
+  el.classList.toggle('msg-continue', !!(key && el.classList.contains('agent') && prev && prev.dataset.agentId === key));
+  const next = adjacentMsg(el, 1);
+  if (next) next.classList.toggle('msg-continue', !!(next.dataset.agentId && next.classList.contains('agent') && next.dataset.agentId === key));
+}
+
+function updateSpeakingHighlight() {
+  const speaking = new Set();
+  for (const message of messageData.values()) {
+    if (message.kind === 'agent' && message.status === 'running' && message.agentId) speaking.add(message.agentId);
+  }
+  document.querySelectorAll('#agent-list .agent-card').forEach((card) => {
+    card.classList.toggle('speaking', speaking.has(card.dataset.agentId));
+  });
+}
+
 function userHtml(m) {
-  return `<div class="avatar" style="background:var(--user-avatar)">我</div><div class="bubble"><div class="body">${marked.parse(m.text || '')}</div></div>`;
+  return `<div class="avatar" style="background:var(--user-avatar)">我</div><div class="bubble"><div class="body">${marked.parse(m.text || '')}</div>${attachmentsMarkup(m.attachments)}</div>`;
 }
 function systemHtml(m) {
   return `<div class="bubble"><div class="body">${marked.parse(m.text || '')}</div></div>`;
+}
+
+function renderUserMessage(el, m) {
+  el.innerHTML = userHtml(m);
+  hydrateAttachmentThumbs(el, m.attachments);
+}
+
+function attachmentsMarkup(list) {
+  if (!Array.isArray(list) || !list.length) return '';
+  return `<div class="msg-attachments">${list.map((item) => attachmentChipMarkup(item, false)).join('')}</div>`;
+}
+
+function attachmentChipMarkup(item, removable) {
+  const kind = item.kind || kindFromName(item.name, item.mime);
+  const isImage = kind === 'image' || kind === 'imageInline';
+  const thumb = item.thumbUrl
+    ? `<img class="attach-thumb" alt="" src="${escapeHtml(item.thumbUrl)}">`
+    : `<span class="attach-thumb file">${isImage ? '🖼' : '📄'}</span>`;
+  const remove = removable
+    ? `<button type="button" class="ghost small icon attach-remove" data-attach-id="${escapeHtml(item.id)}" title="移除附件" aria-label="移除 ${escapeHtml(item.name)}">✕</button>`
+    : '';
+  return `<div class="attach-chip" data-attach-id="${escapeHtml(item.id || '')}">${thumb}<span class="attach-meta"><span class="attach-name" title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '未命名')}</span><span class="attach-size">${escapeHtml(formatBytes(item.size))}</span></span>${remove}</div>`;
+}
+
+function hydrateAttachmentThumbs(root, list) {
+  if (!root || !Array.isArray(list)) return;
+  for (const raw of list) {
+    const item = normalizeAttachment(raw);
+    if (!item.id) continue;
+    const img = root.querySelector(`.attach-chip[data-attach-id="${cssEscape(item.id)}"] img.attach-thumb`);
+    if (img && img.getAttribute('src')) continue;
+    loadAttachmentThumb(item).then((url) => {
+      if (!url) return;
+      const chip = root.querySelector(`.attach-chip[data-attach-id="${cssEscape(item.id)}"]`);
+      if (!chip) return;
+      const current = chip.querySelector('.attach-thumb');
+      const next = document.createElement('img');
+      next.className = 'attach-thumb';
+      next.alt = '';
+      next.src = url;
+      if (current) current.replaceWith(next);
+    }).catch(() => {});
+  }
 }
 
 function renderAgentMessage(el, m) {
@@ -784,6 +1104,7 @@ function renderAgentMessage(el, m) {
   const usage = usageText(m.usage);
   shell.usage.hidden = !usage;
   setTextIfChanged(shell.usage, usage);
+  setTextIfChanged(shell.statusLine, '正在輸出…');
 }
 
 function ensureAgentShell(el) {
@@ -805,9 +1126,17 @@ function ensureAgentShell(el) {
     error.className = 'error-text';
     const usage = document.createElement('div');
     usage.className = 'usage';
-    bubble.append(head, thinking, activities, body, error, usage);
+    const statusLine = document.createElement('div');
+    statusLine.className = 'bubble-status';
+    statusLine.textContent = '正在輸出…';
+    bubble.append(head, thinking, activities, body, error, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
+  } else if (!el.querySelector('.bubble-status')) {
+    const statusLine = document.createElement('div');
+    statusLine.className = 'bubble-status';
+    statusLine.textContent = '正在輸出…';
+    el.querySelector(':scope > .bubble').appendChild(statusLine);
   }
   return {
     avatar: el.querySelector(':scope > .avatar'),
@@ -818,6 +1147,7 @@ function ensureAgentShell(el) {
     body: el.querySelector('.body'),
     error: el.querySelector('.error-text'),
     usage: el.querySelector('.usage'),
+    statusLine: el.querySelector('.bubble-status'),
   };
 }
 
@@ -988,6 +1318,370 @@ async function exportConversation() {
     exporting = false;
     updateUsageTotal();
   }
+}
+
+// ---------- Composer 附件 ----------
+function attachmentsApi() {
+  return (window.api && window.api.attachments) || null;
+}
+
+function applyAttachLimits(limits) {
+  if (!limits || typeof limits !== 'object') return;
+  const maxFiles = Number(limits.maxFiles);
+  const maxFileBytes = Number(limits.maxFileBytes);
+  const maxTotalBytes = Number(limits.maxTotalBytes);
+  if (Number.isFinite(maxFiles) && maxFiles > 0) attachLimits.maxFiles = maxFiles;
+  if (Number.isFinite(maxFileBytes) && maxFileBytes > 0) attachLimits.maxFileBytes = maxFileBytes;
+  if (Number.isFinite(maxTotalBytes) && maxTotalBytes > 0) attachLimits.maxTotalBytes = maxTotalBytes;
+}
+
+function setupComposerAttachments() {
+  const box = document.querySelector('.composer-box');
+  const bar = document.querySelector('.composer-bar');
+  if (!box || !bar || $('#attach-btn')) return;
+
+  const hint = document.createElement('div');
+  hint.className = 'composer-drop-hint';
+  hint.textContent = '放開以附加檔案';
+  box.prepend(hint);
+
+  const chips = document.createElement('div');
+  chips.id = 'attach-chips';
+  chips.className = 'attach-chips';
+  chips.setAttribute('aria-live', 'polite');
+  const error = document.createElement('div');
+  error.id = 'attach-error';
+  error.className = 'attach-error';
+  error.setAttribute('role', 'alert');
+  const input = $('#input');
+  input.after(chips);
+  chips.after(error);
+
+  const button = document.createElement('button');
+  button.id = 'attach-btn';
+  button.type = 'button';
+  button.className = 'ghost small icon';
+  button.title = '附加檔案';
+  button.setAttribute('aria-label', '附加檔案');
+  button.textContent = '📎';
+  button.onclick = () => pickAttachments();
+  bar.insertBefore(button, bar.querySelector('.spacer'));
+
+  const api = attachmentsApi();
+  if (!api || typeof api.pick !== 'function') {
+    const fileInput = document.createElement('input');
+    fileInput.id = 'attach-input';
+    fileInput.type = 'file';
+    fileInput.multiple = true;
+    fileInput.hidden = true;
+    fileInput.accept = '.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.json,.csv,.log,.pdf';
+    fileInput.addEventListener('change', async () => {
+      await addAttachmentFiles(fileInput.files);
+      fileInput.value = '';
+    });
+    box.appendChild(fileInput);
+  }
+
+  box.addEventListener('dragenter', (event) => { if (isFileDrag(event)) { event.preventDefault(); box.classList.add('dragover'); } });
+  box.addEventListener('dragover', (event) => { if (isFileDrag(event)) { event.preventDefault(); box.classList.add('dragover'); } });
+  box.addEventListener('dragleave', (event) => { if (!box.contains(event.relatedTarget)) box.classList.remove('dragover'); });
+  box.addEventListener('drop', async (event) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    box.classList.remove('dragover');
+    await addAttachmentFiles(event.dataTransfer.files);
+  });
+  syncPendingAttachments();
+}
+
+function isFileDrag(event) {
+  return !!(event.dataTransfer && [...event.dataTransfer.types].includes('Files'));
+}
+
+async function syncPendingAttachments() {
+  const api = attachmentsApi();
+  if (!api || typeof api.list !== 'function') return;
+  try {
+    applyPendingFromResult(await api.list(), { keepError: true });
+  } catch {}
+}
+
+async function pickAttachments() {
+  const api = attachmentsApi();
+  if (api && typeof api.pick === 'function') {
+    try {
+      applyPendingFromResult(await api.pick());
+    } catch (error) {
+      showAttachError(formatAttachError('', cleanIpcError(error)));
+    }
+    return;
+  }
+  const input = $('#attach-input');
+  if (input) input.click();
+}
+
+function applyPendingFromResult(result, { keepError = false } = {}) {
+  if (!result) return;
+  applyAttachLimits(result.limits);
+  if (Array.isArray(result.attachments)) {
+    pendingAttachments.splice(0, pendingAttachments.length, ...result.attachments.map((item) => normalizeAttachment(item)));
+  } else if (Array.isArray(result.added)) {
+    for (const item of result.added) pendingAttachments.push(normalizeAttachment(item));
+  }
+  renderAttachChips();
+  if (result.canceled) return;
+  const errors = Array.isArray(result.errors) ? result.errors : [];
+  if (errors.length) {
+    showAttachError(formatAttachResultError(errors[0]));
+  } else if (!keepError) {
+    clearAttachError();
+  }
+}
+
+async function addAttachmentFiles(fileList) {
+  const files = [...(fileList || [])].filter(Boolean);
+  if (!files.length) return;
+  const api = attachmentsApi();
+  if (api && typeof api.add === 'function') {
+    try {
+      const items = [];
+      for (const file of files) {
+        items.push(await fileToAddItem(file, api));
+      }
+      applyPendingFromResult(await api.add(items));
+    } catch (error) {
+      const names = files.map((file) => file && file.name).filter(Boolean);
+      showAttachError(formatAttachError(names[0] || '', cleanIpcError(error)));
+    }
+    return;
+  }
+  const errors = [];
+  let total = pendingAttachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  for (const file of files) {
+    const name = file.name || '未命名檔案';
+    const ext = extensionOf(name);
+    const size = Number(file.size) || 0;
+    if (pendingAttachments.length >= attachLimits.maxFiles) {
+      errors.push(formatAttachError(name, `一次最多 ${attachLimits.maxFiles} 個檔案`));
+      continue;
+    }
+    if (!ATTACH_EXTS.has(ext)) {
+      errors.push(formatAttachError(name, '不支援此類型,請改傳圖片、文字檔或 PDF'));
+      continue;
+    }
+    if (size > attachLimits.maxFileBytes) {
+      errors.push(formatAttachError(name, `單檔不能超過 ${formatBytes(attachLimits.maxFileBytes)}`));
+      continue;
+    }
+    if (total + size > attachLimits.maxTotalBytes) {
+      errors.push(formatAttachError(name, `這次附件合計不能超過 ${formatBytes(attachLimits.maxTotalBytes)}`));
+      continue;
+    }
+    const mismatch = mimeConflictsWithName(name, file.type);
+    if (mismatch) {
+      errors.push(formatAttachError(name, mismatch));
+      continue;
+    }
+    try {
+      const added = await storeAttachmentStub(file);
+      pendingAttachments.push(added);
+      total += added.size || size;
+    } catch (error) {
+      errors.push(formatAttachError(name, cleanIpcError(error)));
+    }
+  }
+  renderAttachChips();
+  if (errors.length) showAttachError(errors[0]);
+  else clearAttachError();
+}
+
+async function fileToAddItem(file, api) {
+  const name = file.name || '未命名';
+  const filePath = typeof api.pathForFile === 'function' ? String(api.pathForFile(file) || '') : '';
+  if (filePath) return { name, path: filePath };
+  const data = await file.arrayBuffer();
+  return { name, data };
+}
+
+async function storeAttachmentStub(file) {
+  const id = (crypto.randomUUID && crypto.randomUUID()) || `att-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const item = normalizeAttachment({
+    id,
+    name: file.name,
+    mime: file.type || mimeFromName(file.name),
+    size: file.size,
+    kind: kindFromName(file.name, file.type),
+    file,
+  }, file);
+  if (item.kind === 'image' && file instanceof Blob) item.thumbUrl = await readFileDataUrl(file);
+  return item;
+}
+
+function normalizeAttachment(item, file) {
+  const src = item || {};
+  const name = src.name || (file && file.name) || '未命名';
+  const mime = src.mime || src.type || (file && file.type) || mimeFromName(name);
+  const kind = src.kind || kindFromName(name, mime);
+  return {
+    id: src.id,
+    name,
+    mime,
+    size: Number(src.size != null ? src.size : file && file.size) || 0,
+    kind,
+    path: src.path || null,
+    relPath: src.relPath || null,
+    thumb: src.thumb || null,
+    thumbUrl: src.thumbUrl || null,
+    file: src.file || file || null,
+  };
+}
+
+function renderAttachChips() {
+  const row = $('#attach-chips');
+  const button = $('#attach-btn');
+  if (!row) return;
+  row.innerHTML = pendingAttachments.map((item) => attachmentChipMarkup(item, true)).join('');
+  row.querySelectorAll('.attach-remove').forEach((btn) => {
+    btn.onclick = () => removePendingAttachment(btn.dataset.attachId);
+  });
+  if (button) button.disabled = pendingAttachments.length >= attachLimits.maxFiles;
+  hydrateAttachmentThumbs(row, pendingAttachments);
+}
+
+async function removePendingAttachment(id) {
+  const index = pendingAttachments.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  const [item] = pendingAttachments.splice(index, 1);
+  await forgetAttachments([item]);
+  renderAttachChips();
+  clearAttachError();
+}
+
+async function clearPendingAttachments() {
+  const items = pendingAttachments.splice(0, pendingAttachments.length);
+  await forgetAttachments(items);
+  renderAttachChips();
+  clearAttachError();
+}
+
+function revokeThumbUrls(items) {
+  for (const item of items || []) {
+    if (item.thumbUrl && String(item.thumbUrl).startsWith('blob:')) URL.revokeObjectURL(item.thumbUrl);
+  }
+}
+
+async function forgetAttachments(items) {
+  revokeThumbUrls(items);
+  const api = attachmentsApi();
+  if (!api || typeof api.remove !== 'function') return;
+  for (const item of items || []) {
+    if (!item.id) continue;
+    try { await api.remove(item.id); } catch {}
+  }
+}
+
+async function loadAttachmentThumb(item) {
+  if (!item) return '';
+  if (item.thumbUrl) return item.thumbUrl;
+  const kind = item.kind || kindFromName(item.name, item.mime);
+  if (kind !== 'image' && kind !== 'imageInline') return '';
+  const api = attachmentsApi();
+  if (api && typeof api.thumb === 'function' && (item.relPath || item.thumb || item.id)) {
+    const result = await api.thumb(item);
+    return typeof result === 'string' ? result : (result && (result.dataUrl || result.url)) || '';
+  }
+  if (item.file instanceof Blob) return readFileDataUrl(item.file);
+  return '';
+}
+
+function formatAttachResultError(entry) {
+  if (entry == null) return formatAttachError('', '');
+  if (typeof entry === 'string') return formatAttachError('', entry);
+  return formatAttachError(entry.name, entry.error || entry.message || '');
+}
+
+function formatAttachError(name, reason) {
+  const file = String(name || '').trim();
+  let detail = String(reason || '').trim();
+  detail = detail.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  if (file && (detail.includes(`「${file}」`) || /^無法附加「/.test(detail))) return detail;
+  if (file && detail) return `無法附加「${file}」:${detail.replace(/^[:：,，]\s*/, '')}`;
+  if (file) return `無法附加「${file}」`;
+  if (detail) return /^無法附加/.test(detail) ? detail : `無法附加檔案:${detail}`;
+  return '無法附加檔案:發生未知錯誤';
+}
+
+function mimeConflictsWithName(name, mime) {
+  const type = String(mime || '').toLowerCase();
+  if (!type || type === 'application/octet-stream') return '';
+  const ext = extensionOf(name);
+  if (!ATTACH_EXTS.has(ext)) return '';
+  if (ATTACH_IMAGE_EXTS.has(ext)) {
+    const expected = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : mimeFromName(name);
+    return type === expected ? '' : `內容不是 ${ext.toUpperCase()} 格式(副檔名與實際內容不符)`;
+  }
+  if (ext === 'pdf') return type === 'application/pdf' ? '' : '內容不是 PDF 格式(副檔名與實際內容不符)';
+  if (type.startsWith('image/') || type === 'application/pdf' || /executable|zip|octet/.test(type)) {
+    return `內容不是 ${ext.toUpperCase()} 格式(副檔名與實際內容不符)`;
+  }
+  return '';
+}
+
+function showAttachError(message) {
+  const el = $('#attach-error');
+  if (!el) return;
+  el.textContent = message;
+}
+
+function clearAttachError() {
+  const el = $('#attach-error');
+  if (el) el.textContent = '';
+}
+
+function extensionOf(name) {
+  const match = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match ? match[1] : '';
+}
+
+function kindFromName(name, mime) {
+  const ext = extensionOf(name);
+  if (ATTACH_IMAGE_EXTS.has(ext) || (mime && String(mime).startsWith('image/'))) return 'image';
+  if (ext === 'pdf' || mime === 'application/pdf') return 'pdf';
+  return 'text';
+}
+
+function mimeFromName(name) {
+  const ext = extensionOf(name);
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'json') return 'application/json';
+  if (ext === 'csv') return 'text/csv';
+  if (ext === 'md') return 'text/markdown';
+  return 'text/plain';
+}
+
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readFileDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('無法讀取預覽'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) return CSS.escape(String(value));
+  return String(value).replace(/"/g, '\\"');
 }
 
 // ---------- 小工具 ----------

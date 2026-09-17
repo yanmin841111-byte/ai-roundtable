@@ -5,5 +5,12 @@
   "description": "xAI Grok 官方 API,模型清單自動從 /models 取得。需要環境變數 XAI_API_KEY。",
   "baseUrl": "https://api.x.ai/v1",
   "apiKeyEnv": "XAI_API_KEY",
-  "models": "auto"
+  "models": "auto",
+  "capabilities": {
+    "attachments": [
+      "imageInline",
+      "textInline"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

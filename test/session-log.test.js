@@ -233,7 +233,7 @@ t('readSession 對新舊格式都回傳同一種形狀', () => {
   for (const id of ['old.json', 'new.json']) {
     const r = readSession(dir, id);
     assert.strictEqual(r.ok, true, id);
-    assert.deepStrictEqual(Object.keys(r.session).sort(), ['agents', 'createdAt', 'messages', 'title', 'version']);
+    assert.deepStrictEqual(Object.keys(r.session).sort(), ['agents', 'conversationId', 'createdAt', 'messages', 'title', 'version']);
     assert.strictEqual(r.session.version, 1);
     assert.ok(Array.isArray(r.session.messages));
   }

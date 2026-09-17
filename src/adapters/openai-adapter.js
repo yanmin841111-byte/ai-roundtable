@@ -3,17 +3,21 @@
 // 規格見 docs/adapters.md。
 
 const crypto = require('crypto');
+const fs = require('fs');
 const { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } = require('./process');
 const { renderDeep } = require('./template');
 const { resolveModelId, resolveEffort } = require('../model-rules');
-const { normalizeModels } = require('./spec');
+const { normalizeModels, normalizeCapabilities } = require('./spec');
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
+const SECRET_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 
 function validateOpenAISpec(spec, errors) {
   if (typeof spec.baseUrl !== 'string' || !/^https?:\/\//.test(spec.baseUrl)) errors.push('baseUrl 必須是 http:// 或 https:// 開頭的網址');
   if (spec.apiKeyEnv != null && typeof spec.apiKeyEnv !== 'string') errors.push('apiKeyEnv 必須是環境變數名稱');
+  if (spec.secretRef != null && (typeof spec.secretRef !== 'string' || !SECRET_REF_PATTERN.test(spec.secretRef))) errors.push('secretRef 格式不正確');
+  if (spec.apiKey != null) errors.push('apiKey 明文欄位已停用，請在擴充設定的 API key 欄位安全移轉');
   if (spec.headers != null && (typeof spec.headers !== 'object' || Array.isArray(spec.headers))) errors.push('headers 必須是物件');
   if (spec.body != null && (typeof spec.body !== 'object' || Array.isArray(spec.body))) errors.push('body 必須是物件');
   if (spec.effortBody != null && (typeof spec.effortBody !== 'object' || Array.isArray(spec.effortBody))) errors.push('effortBody 必須是物件');
@@ -26,14 +30,43 @@ function joinUrl(base, p) {
   return base.replace(/\/+$/, '') + '/' + String(p).replace(/^\/+/, '');
 }
 
-function createOpenAIAdapter(spec, { fetchImpl } = {}) {
+function missingApiKeyMessage(spec) {
+  return spec.apiKeyEnv
+    ? `缺少 API key:請到「設定 → CLI 與擴充」填入,或設定環境變數 ${spec.apiKeyEnv}`
+    : '缺少 API key:請到「設定 → CLI 與擴充」填入並儲存';
+}
+
+function buildUserContent(prompt, attachments, capabilities) {
+  const modes = capabilities && Array.isArray(capabilities.attachments) ? capabilities.attachments : [];
+  if (!modes.includes('imageInline')) return prompt;
+  const images = [];
+  for (const item of Array.isArray(attachments) ? attachments : []) {
+    if (!item || item.kind !== 'image' || typeof item.path !== 'string' || !/^image\/(png|jpeg|webp|gif)$/.test(item.mime || '')) continue;
+    try {
+      const data = fs.readFileSync(item.path);
+      images.push({ type: 'image_url', image_url: { url: `data:${item.mime};base64,${data.toString('base64')}` } });
+    } catch {}
+  }
+  return images.length ? [{ type: 'text', text: prompt }, ...images] : prompt;
+}
+
+function createOpenAIAdapter(spec, { fetchImpl, getSecret } = {}) {
   const doFetch = fetchImpl || ((...a) => fetch(...a));
   const staticModels = spec.models === 'auto' ? null : normalizeModels(spec.models);
   const sessions = new Map(); // sessionId -> [{ role, content }]
   const maxHistory = spec.maxHistoryMessages || 80;
+  const capabilities = normalizeCapabilities(spec.capabilities, ['imageInline', 'textInline']);
   let fetched = { models: [], at: 0, error: null, pending: null };
 
-  const apiKey = () => spec.apiKey || (spec.apiKeyEnv ? process.env[spec.apiKeyEnv] : '') || '';
+  const apiKey = () => {
+    if (spec.secretRef && getSecret) {
+      try {
+        const secret = getSecret(spec.secretRef);
+        if (secret) return secret;
+      } catch {}
+    }
+    return (spec.apiKeyEnv ? process.env[spec.apiKeyEnv] : '') || '';
+  };
   const headers = () => {
     const h = { 'Content-Type': 'application/json', ...(spec.headers || {}) };
     const key = apiKey();
@@ -78,21 +111,36 @@ function createOpenAIAdapter(spec, { fetchImpl } = {}) {
     supportsEdit: false,
     efforts: spec.efforts || [],
     usageShape: 'openai', // OpenAI 相容端點:prompt_tokens 已含快取,cached 在 prompt_tokens_details
+    capabilities,
     listModels: () => {
       if (staticModels) return { models: staticModels, source: 'config' };
       return { models: fetched.models, source: fetched.error ? 'error' : fetched.at ? 'api' : 'loading', error: fetched.error };
     },
     refreshModels,
     check: async () => {
-      if (spec.apiKeyEnv && !apiKey()) return { ok: false, error: `缺少環境變數 ${spec.apiKeyEnv}` };
+      if ((spec.secretRef || spec.apiKeyEnv) && !apiKey()) return { ok: false, error: missingApiKeyMessage(spec) };
       return { ok: true, version: `API ${spec.baseUrl}` };
+    },
+    testConnection: async () => {
+      if ((spec.secretRef || spec.apiKeyEnv) && !apiKey()) return { ok: false, error: missingApiKeyMessage(spec) };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS);
+      try {
+        const res = await doFetch(joinUrl(spec.baseUrl, spec.modelsPath || '/models'), { headers: headers(), signal: controller.signal });
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status} ${truncate(await res.text(), 200)}` };
+        return { ok: true, version: `已連線 ${spec.baseUrl}` };
+      } catch (e) {
+        return { ok: false, error: e.name === 'AbortError' ? '測試連線逾時' : e.message };
+      } finally {
+        clearTimeout(timer);
+      }
     },
     run: (agent, ctx) => runChat(agent, ctx),
   };
 
   async function runChat(agent, ctx) {
-    if (spec.apiKeyEnv && !apiKey() && !spec.apiKeyOptional) {
-      return { text: '', thinking: '', sessionId: null, usage: null, error: `缺少 API key:請設定環境變數 ${spec.apiKeyEnv},或在擴充設定填 apiKey` };
+    if ((spec.secretRef || spec.apiKeyEnv) && !apiKey() && !spec.apiKeyOptional) {
+      return { text: '', thinking: '', sessionId: null, usage: null, error: missingApiKeyMessage(spec) };
     }
     const models = currentModels();
     const model = resolveModelId(models, agent.model || spec.defaultModel || '');
@@ -103,7 +151,8 @@ function createOpenAIAdapter(spec, { fetchImpl } = {}) {
     const history = (spec.history !== false && ctx.sessionId && sessions.get(ctx.sessionId)) || [];
     const messages = [];
     if (ctx.systemPrompt) messages.push({ role: spec.systemRole || 'system', content: ctx.systemPrompt });
-    messages.push(...history, { role: 'user', content: ctx.prompt });
+    const userContent = buildUserContent(ctx.prompt, ctx.attachments, capabilities);
+    messages.push(...history, { role: 'user', content: userContent });
 
     const vars = { model, effort: eff.effort || '', agentName: agent.name || '' };
     const effortBody = spec.effortBody || { reasoning_effort: '{effort}' };
@@ -171,7 +220,7 @@ function createOpenAIAdapter(spec, { fetchImpl } = {}) {
     let sessionId = ctx.sessionId || null;
     if (!error && spec.history !== false) {
       sessionId = sessionId || crypto.randomUUID();
-      const next = [...history, { role: 'user', content: ctx.prompt }, { role: 'assistant', content: text }];
+      const next = [...history, { role: 'user', content: userContent }, { role: 'assistant', content: text }];
       sessions.set(sessionId, next.slice(-maxHistory));
       ctx.onSession(sessionId);
     }
@@ -202,4 +251,4 @@ async function readSse(body, onData) {
   if (buf.trim()) handleLine(buf.trim());
 }
 
-module.exports = { createOpenAIAdapter, validateOpenAISpec };
+module.exports = { createOpenAIAdapter, validateOpenAISpec, buildUserContent };

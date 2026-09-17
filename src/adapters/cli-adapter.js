@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const { runProcess, parseJson, truncate, checkCli } = require('./process');
 const { getPath, render, buildArgs, matches } = require('./template');
 const { resolveModelId, resolveEffort } = require('../model-rules');
-const { normalizeModels } = require('./spec');
+const { normalizeModels, normalizeCapabilities } = require('./spec');
 
 const TEXT_MODES = ['append', 'replace', 'message'];
 
@@ -49,6 +49,7 @@ function createCliAdapter(spec) {
     supportsEdit: spec.supportsEdit != null ? !!spec.supportsEdit : true,
     efforts: spec.efforts || [],
     usageShape: spec.usageShape || null, // 沒填就交給 usage.js 依欄位特徵判斷
+    capabilities: normalizeCapabilities(spec.capabilities, ['filePath']),
     listModels: () => ({ models, source: models.length ? 'config' : 'none' }),
     check: () => (spec.versionArgs === false ? Promise.resolve({ ok: true, version: '(略過檢查)' }) : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'])),
     run: (agent, ctx) => runCli(spec, { format, rules, models }, agent, ctx),

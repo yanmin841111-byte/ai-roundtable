@@ -28,7 +28,7 @@
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "electron-builder --mac",
-    "test": "node test/models.test.js && node test/adapters.test.js && node test/orchestrator.test.js && node test/session-log.test.js && node test/usage.test.js && node test/cursor.test.js"
+    "test": "node test/models.test.js && node test/adapters.test.js && node test/secrets.test.js && node test/orchestrator.test.js && node test/session-log.test.js && node test/attachments.test.js && node test/usage.test.js && node test/cursor.test.js"
   },
   "build": {
     "appId": "io.github.yanmin841111-byte.airoundtable",

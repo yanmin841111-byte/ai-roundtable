@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { builtinAdapters } = require('./builtin');
-const { validateCommon, normalizeModels } = require('./spec');
+const { validateCommon, normalizeModels, normalizeCapabilities } = require('./spec');
 const { createCliAdapter, validateCliSpec } = require('./cli-adapter');
 const { createOpenAIAdapter, validateOpenAISpec } = require('./openai-adapter');
 const kit = require('./kit');
@@ -23,10 +23,12 @@ const kit = require('./kit');
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
 class Registry {
-  constructor({ userDir, templatesDir, fetchImpl } = {}) {
+  constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret } = {}) {
     this.userDir = userDir;
     this.templatesDir = templatesDir;
     this.fetchImpl = fetchImpl;
+    this.getSecret = getSecret;
+    this.setSecret = setSecret;
     this.adapters = new Map();
     this.entries = []; // 使用者擴充的載入結果(含錯誤)
     this.reload();
@@ -45,6 +47,10 @@ class Registry {
       const full = path.join(this.userDir, file);
       const entry = { file, path: full };
       try {
+        if (file.endsWith('.json')) {
+          const migration = this.migrateLegacyApiKey(file);
+          if (migration.error) throw new Error(migration.error);
+        }
         const adapter = this.loadFile(full);
         entry.id = adapter.id;
         entry.label = adapter.label;
@@ -75,7 +81,7 @@ class Registry {
       else if (type === 'openai') validateOpenAISpec(spec, errors);
       else errors.push('type 必須是 "cli" 或 "openai"(需要更多彈性時請改寫成 .js 外掛)');
       if (errors.length) throw new Error(errors.join(';'));
-      adapter = type === 'cli' ? createCliAdapter(spec) : createOpenAIAdapter(spec, { fetchImpl: this.fetchImpl });
+      adapter = type === 'cli' ? createCliAdapter(spec) : createOpenAIAdapter(spec, { fetchImpl: this.fetchImpl, getSecret: this.getSecret });
     } else {
       delete require.cache[require.resolve(full)];
       let mod = require(full);
@@ -93,6 +99,7 @@ class Registry {
         supportsResume: !!mod.supportsResume,
         supportsEdit: mod.supportsEdit != null ? !!mod.supportsEdit : true,
         efforts: mod.efforts || [],
+        capabilities: normalizeCapabilities(mod.capabilities),
         listModels: () => {
           if (typeof mod.listModels === 'function') {
             const r = mod.listModels(kit);
@@ -133,6 +140,7 @@ class Registry {
         bin: a.bin || null,
         supportsResume: !!a.supportsResume,
         supportsEdit: !!a.supportsEdit,
+        capabilities: normalizeCapabilities(a.capabilities),
         usesCustomCommand: !!a.usesCustomCommand,
         efforts: a.efforts || [],
         models: models.models || [],
@@ -199,6 +207,30 @@ class Registry {
 
   readFile(file) {
     return fs.readFileSync(this.safeUserPath(file), 'utf8');
+  }
+
+  // 舊版擴充把 API key 明文寫在 apiKey 欄位。先存進安全儲存，成功後才改寫檔案；
+  // 任何一步失敗都保留原檔，避免 key 遺失。JSON 壞掉或沒有 apiKey 時什麼都不做。
+  migrateLegacyApiKey(file) {
+    const full = this.safeUserPath(file);
+    let spec;
+    try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { return { migrated: false }; }
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec) || spec.apiKey == null) return { migrated: false };
+    const legacyKey = typeof spec.apiKey === 'string' ? spec.apiKey.trim() : '';
+    if (legacyKey && !spec.secretRef && (typeof spec.id !== 'string' || !spec.id)) return { migrated: false };
+    const ref = spec.secretRef || `adapter:${spec.id}`;
+    try {
+      if (legacyKey) {
+        if (typeof this.setSecret !== 'function') throw new Error('系統安全儲存目前不可用');
+        this.setSecret(ref, legacyKey);
+        spec.secretRef = ref;
+      }
+      delete spec.apiKey;
+      fs.writeFileSync(full, JSON.stringify(spec, null, 2) + '\n');
+    } catch (e) {
+      return { migrated: false, error: `偵測到舊版明文 API key，但${e.message}。請設定環境變數後移除檔案中的 apiKey` };
+    }
+    return { migrated: !!legacyKey };
   }
 
   writeFile(file, content, { originalFile } = {}) {

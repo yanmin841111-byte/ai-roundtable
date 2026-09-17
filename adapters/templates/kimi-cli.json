@@ -8,24 +8,66 @@
   "systemPrompt": "prepend",
   "args": [
     "--print",
-    "-p", "{prompt}",
-    "--output-format", "stream-json",
-    "-w", "{cwd}",
-    ["-m", "{model}"],
-    { "if": "canEdit", "then": ["--yolo"] }
+    "-p",
+    "{prompt}",
+    "--output-format",
+    "stream-json",
+    "-w",
+    "{cwd}",
+    [
+      "-m",
+      "{model}"
+    ],
+    {
+      "if": "canEdit",
+      "then": [
+        "--yolo"
+      ]
+    }
   ],
   "output": {
     "format": "jsonl",
     "rules": [
-      { "match": { "role": "assistant" }, "text": "content", "mode": "message" },
       {
-        "match": { "role": "assistant", "tool_calls": { "$exists": true } },
-        "each": "tool_calls",
-        "activity": { "id": "{id}", "title": "工具:{function.name}", "detail": "{function.arguments}", "status": "running" }
+        "match": {
+          "role": "assistant"
+        },
+        "text": "content",
+        "mode": "message"
       },
-      { "match": { "role": "tool" }, "activity": { "id": "{tool_call_id}", "result": "{content}", "status": "done" } }
+      {
+        "match": {
+          "role": "assistant",
+          "tool_calls": {
+            "$exists": true
+          }
+        },
+        "each": "tool_calls",
+        "activity": {
+          "id": "{id}",
+          "title": "工具:{function.name}",
+          "detail": "{function.arguments}",
+          "status": "running"
+        }
+      },
+      {
+        "match": {
+          "role": "tool"
+        },
+        "activity": {
+          "id": "{tool_call_id}",
+          "result": "{content}",
+          "status": "done"
+        }
+      }
     ]
   },
   "supportsResume": false,
-  "models": []
+  "models": [],
+  "capabilities": {
+    "attachments": [
+      "filePath"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

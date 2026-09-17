@@ -7,22 +7,84 @@
   "input": "arg",
   "systemPrompt": "prepend",
   "args": [
-    "-p", "{prompt}",
-    "--output-format", "stream-json",
-    ["-m", "{model}"],
-    { "if": "canEdit", "then": ["--yolo"] }
+    "-p",
+    "{prompt}",
+    "--output-format",
+    "stream-json",
+    [
+      "-m",
+      "{model}"
+    ],
+    {
+      "if": "canEdit",
+      "then": [
+        "--yolo"
+      ]
+    }
   ],
   "output": {
     "format": "jsonl",
     "rules": [
-      { "match": { "type": "message", "role": "assistant", "delta": true }, "text": "content" },
-      { "match": { "type": "message", "role": "assistant", "delta": { "$ne": true } }, "text": "content", "mode": "message" },
-      { "match": { "type": "tool_use" }, "activity": { "id": "{tool_id}", "title": "工具:{tool_name}", "detail": "{parameters}", "status": "running" } },
-      { "match": { "type": "tool_result" }, "activity": { "id": "{tool_id}", "result": "{output}", "status": "done" } },
-      { "match": { "type": "error" }, "error": "message" },
-      { "match": { "type": "result" }, "usage": "stats" }
+      {
+        "match": {
+          "type": "message",
+          "role": "assistant",
+          "delta": true
+        },
+        "text": "content"
+      },
+      {
+        "match": {
+          "type": "message",
+          "role": "assistant",
+          "delta": {
+            "$ne": true
+          }
+        },
+        "text": "content",
+        "mode": "message"
+      },
+      {
+        "match": {
+          "type": "tool_use"
+        },
+        "activity": {
+          "id": "{tool_id}",
+          "title": "工具:{tool_name}",
+          "detail": "{parameters}",
+          "status": "running"
+        }
+      },
+      {
+        "match": {
+          "type": "tool_result"
+        },
+        "activity": {
+          "id": "{tool_id}",
+          "result": "{output}",
+          "status": "done"
+        }
+      },
+      {
+        "match": {
+          "type": "error"
+        },
+        "error": "message"
+      },
+      {
+        "match": {
+          "type": "result"
+        },
+        "usage": "stats"
+      }
     ]
   },
   "supportsResume": false,
-  "models": []
+  "models": [],
+  "capabilities": {
+    "attachments": [
+      "filePath"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

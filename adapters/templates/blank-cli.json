@@ -7,9 +7,25 @@
   "input": "stdin",
   "systemPrompt": "prepend",
   "args": [
-    ["--model", "{model}"],
-    { "if": "canEdit", "then": ["--allow-edits"] }
+    [
+      "--model",
+      "{model}"
+    ],
+    {
+      "if": "canEdit",
+      "then": [
+        "--allow-edits"
+      ]
+    }
   ],
-  "output": { "format": "text" },
-  "models": []
+  "output": {
+    "format": "text"
+  },
+  "models": [],
+  "capabilities": {
+    "attachments": [
+      "filePath"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

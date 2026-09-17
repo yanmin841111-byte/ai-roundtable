@@ -46,6 +46,7 @@ function defaultConfig() {
 
 class Store {
   constructor(userDataDir) {
+    this.userDataDir = userDataDir;
     this.file = path.join(userDataDir, 'config.json');
     this.config = this.load();
   }

@@ -3,6 +3,7 @@
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const { SHAPES: USAGE_SHAPES } = require('../usage');
+const ATTACHMENT_CAPABILITIES = ['filePath', 'imageInline', 'textInline'];
 
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
 function normalizeModels(list) {
@@ -33,6 +34,27 @@ function validateCommon(spec, errors) {
   if (spec.efforts != null && !Array.isArray(spec.efforts)) errors.push('efforts 必須是陣列');
   if (spec.timeoutMs != null && !(Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0)) errors.push('timeoutMs 必須是正數');
   if (spec.usageShape != null && !USAGE_SHAPES.includes(spec.usageShape)) errors.push(`usageShape 必須是 ${USAGE_SHAPES.join('、')};不填則依欄位特徵自動判斷`);
+  if (spec.capabilities != null) {
+    const caps = spec.capabilities;
+    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) errors.push('capabilities 必須是物件');
+    else {
+      if (!Array.isArray(caps.attachments)) errors.push('capabilities.attachments 必須是陣列');
+      else {
+        const invalid = caps.attachments.filter((value) => !ATTACHMENT_CAPABILITIES.includes(value));
+        if (invalid.length) errors.push(`capabilities.attachments 只接受 ${ATTACHMENT_CAPABILITIES.join('、')}`);
+        if (new Set(caps.attachments).size !== caps.attachments.length) errors.push('capabilities.attachments 不可重複');
+      }
+      if (caps.attachmentsNeedCwd != null && typeof caps.attachmentsNeedCwd !== 'boolean') errors.push('capabilities.attachmentsNeedCwd 必須是布林值');
+    }
+  }
 }
 
-module.exports = { ID_PATTERN, normalizeModels, validateCommon };
+function normalizeCapabilities(capabilities, fallback = []) {
+  const caps = capabilities && typeof capabilities === 'object' ? capabilities : {};
+  return {
+    attachments: Array.isArray(caps.attachments) ? [...new Set(caps.attachments)] : [...fallback],
+    attachmentsNeedCwd: !!caps.attachmentsNeedCwd,
+  };
+}
+
+module.exports = { ID_PATTERN, ATTACHMENT_CAPABILITIES, normalizeModels, normalizeCapabilities, validateCommon };

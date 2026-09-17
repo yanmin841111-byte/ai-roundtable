@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { deleteConversation } = require('./attachments');
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
@@ -40,6 +41,18 @@ function deriveTitle(messages) {
   return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX)}…` : text;
 }
 
+// 附件目錄名就是 conversationId。舊檔沒有這個欄位時從 relPath 的第一段還原,
+// 這樣即使 envelope 少了欄位,刪對話還是能連動清掉附件。
+function deriveConversationId(messages) {
+  for (const m of Array.isArray(messages) ? messages : []) {
+    for (const a of Array.isArray(m && m.attachments) ? m.attachments : []) {
+      const first = typeof a?.relPath === 'string' ? a.relPath.split('/')[0] : '';
+      if (first) return first;
+    }
+  }
+  return null;
+}
+
 function deriveAgents(messages) {
   const names = [];
   for (const m of Array.isArray(messages) ? messages : []) {
@@ -66,6 +79,7 @@ function toEnvelope(parsed, fallbackDate) {
       createdAt: deriveCreatedAt(parsed, fallbackDate),
       title: deriveTitle(parsed),
       agents: deriveAgents(parsed),
+      conversationId: deriveConversationId(parsed),
       messages: parsed,
     };
   }
@@ -78,13 +92,14 @@ function toEnvelope(parsed, fallbackDate) {
     createdAt: parsed.createdAt || deriveCreatedAt(messages, fallbackDate),
     title: parsed.title || deriveTitle(messages),
     agents: Array.isArray(parsed.agents) ? parsed.agents : deriveAgents(messages),
+    conversationId: parsed.conversationId || deriveConversationId(messages),
     messages,
   };
 }
 
 // 寫入同一目錄的暫存檔後 rename，避免留下只寫了一半的 session。
 // 所有錯誤都轉成回傳值，呼叫端不需要為記錄失敗中止任務。
-function writeSession(userDataDir, messages, { now, logger } = {}) {
+function writeSession(userDataDir, messages, { now, logger, conversationId } = {}) {
   // 連檔名與 envelope 的組裝都要在 try 裡:呼叫端傳進壞掉的 now 或 userDataDir 時,
   // 這裡一樣只能回傳錯誤,絕不能讓記錄失敗把整個任務炸掉。
   let tmp = null;
@@ -100,6 +115,8 @@ function writeSession(userDataDir, messages, { now, logger } = {}) {
       createdAt: deriveCreatedAt(list, at),
       title: deriveTitle(list),
       agents: deriveAgents(list),
+      // 附件存在 userData/attachments/<conversationId>/,刪這份紀錄時要連動清掉
+      conversationId: conversationId || deriveConversationId(list),
       messages: list,
     };
     fs.mkdirSync(dir, { recursive: true });
@@ -157,7 +174,8 @@ function listSessions(userDataDir, { limit = LIST_LIMIT } = {}) {
     const parsed = readEnvelope(path.join(dir, name), stat);
     if (!parsed.ok) return { ...base, title: '(無法讀取)', agents: [], messageCount: 0, error: parsed.error };
     const e = parsed.envelope;
-    return { ...base, title: e.title, agents: e.agents, createdAt: e.createdAt, messageCount: e.messages.length };
+    const attachmentCount = e.messages.reduce((n, m) => n + (Array.isArray(m.attachments) ? m.attachments.length : 0), 0);
+    return { ...base, title: e.title, agents: e.agents, createdAt: e.createdAt, messageCount: e.messages.length, conversationId: e.conversationId || null, attachmentCount };
   });
   return { sessions };
 }
@@ -181,12 +199,35 @@ function deleteSession(userDataDir, id) {
   try {
     const stat = fs.statSync(full);
     if (!stat.isFile()) return { ok: false, error: '無效的紀錄代號' };
+    // 先讀出 conversationId 再刪檔:檔案沒了就查不到要清哪個附件目錄
+    const parsed = readEnvelope(full, stat);
+    const conversationId = parsed.ok ? parsed.envelope.conversationId : null;
     fs.rmSync(full);
     parseCache.delete(full);
+    // 同一個 conversation 可能分段寫成多份 session;最後一份刪除後才能清附件。
+    if (conversationId && !listConversationIds(userDataDir).includes(conversationId)) deleteConversation(userDataDir, conversationId);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error.message };
   }
+}
+
+// 給孤兒清理用:掃出所有已經寫進 session 的 conversationId,這些附件不能被清掉
+function listConversationIds(userDataDir) {
+  const dir = sessionsDir(userDataDir);
+  const ids = new Set();
+  let names;
+  try { names = fs.readdirSync(dir).filter((name) => ID_PATTERN.test(name)); } catch { return []; }
+  for (const name of names) {
+    const full = path.join(dir, name);
+    try {
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) continue;
+      const parsed = readEnvelope(full, stat);
+      if (parsed.ok && parsed.envelope.conversationId) ids.add(parsed.envelope.conversationId);
+    } catch {}
+  }
+  return [...ids];
 }
 
 function formatTime(ts) {
@@ -243,11 +284,15 @@ function messagesToMarkdown(messages) {
     sections.push(`## ${messageTitle(message)}${meta ? ` · ${meta}` : ''}`);
     const usage = usageMarkdown(message.usage);
     if (usage) sections.push(usage);
+    if (Array.isArray(message.attachments) && message.attachments.length) {
+      sections.push(`> 附件：${message.attachments.map((a) => `${a.name}（${a.mime}）`).join('、')}`);
+    }
     if (message.text) sections.push(String(message.text));
     if (message.error) sections.push(`> 錯誤：${String(message.error).replace(/\n/g, '\n> ')}`);
-    if (!message.text && !message.error) sections.push('_(無文字內容)_');
+    const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
+    if (!message.text && !message.error && !hasAttachments) sections.push('_(無文字內容)_');
   }
   return `${sections.join('\n\n')}\n`;
 }
 
-module.exports = { writeSession, listSessions, readSession, deleteSession, messagesToMarkdown, usageMarkdown, resolveSessionPath };
+module.exports = { writeSession, listSessions, readSession, deleteSession, listConversationIds, messagesToMarkdown, usageMarkdown, resolveSessionPath };

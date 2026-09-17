@@ -6,6 +6,9 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
 const { hasMarker, stripMarker } = require('./shared');
+const {
+  RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath,
+} = require('./attachments');
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
@@ -19,6 +22,11 @@ class Orchestrator extends EventEmitter {
   constructor(store) {
     super();
     this.store = store;
+    // 附件要在「送出當下」就有歸屬,不能等任務結束寫 session 時才有 id
+    this.conversationId = newConversationId();
+    this.attachments = [];        // 本次任務的附件 metadata
+    this.staged = [];             // 沙箱 CLI 用的工作目錄副本
+    this.attachmentsSeen = new Set(); // 已經看過完整附件區塊的 agentId
     this.messages = [];
     this.sessions = {};   // agentId -> session id
     this.lastSeen = {};   // agentId -> 該成員上次發言時的訊息數
@@ -32,6 +40,7 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 狀態與事件 ----------
   get config() { return this.store.get(); }
+  get userDataDir() { return this.store.userDataDir; }
   get agents() { return this.config.agents.filter((a) => a.enabled !== false); }
   get lead() {
     const agents = this.agents;
@@ -39,7 +48,13 @@ class Orchestrator extends EventEmitter {
   }
 
   snapshot() {
-    return { running: this.running, phase: this.phase, messages: this.messages };
+    return {
+      running: this.running,
+      phase: this.phase,
+      messages: this.messages,
+      conversationId: this.conversationId,
+      attachments: this.attachments,
+    };
   }
   setPhase(phase) { this.phase = phase; this.emit('state', { running: this.running, phase }); }
 
@@ -78,8 +93,19 @@ class Orchestrator extends EventEmitter {
   system(text, extra = {}) { return this.pushMessage({ kind: 'system', text, ...extra }); }
 
   // ---------- 對外操作 ----------
-  async userMessage(text, mode) {
-    const msg = this.pushMessage({ kind: 'user', text });
+  async userMessage(text, mode, attachments = []) {
+    const list = Array.isArray(attachments) ? attachments : [];
+    // metadata 跟著訊息走,歷史對話重開才看得到附件;絕不放 base64 內容
+    const msg = this.pushMessage({ kind: 'user', text, attachments: list });
+    if (list.length) {
+      this.attachments = this.running ? [...this.attachments, ...list] : list;
+      this.attachmentsSeen.clear(); // 有新附件就讓每位成員重新看到完整清單
+      // 進行中追加的附件也要補進沙箱 CLI 的 cwd 暫存,不能只處理任務開始前的那一批。
+      if (this.running) this.stageAttachments(this.agents, this.config.settings.workDir, list, false);
+    } else if (!this.running) {
+      this.attachments = [];
+      this.attachmentsSeen.clear();
+    }
     if (this.running) return msg; // 進行中:訊息會在下一位成員發言時自動帶入
     this.runTask(text, mode || this.config.settings.mode).catch((e) => this.system(`發生錯誤:${e.message}`, { level: 'error' }));
     return msg;
@@ -88,11 +114,20 @@ class Orchestrator extends EventEmitter {
   stop() {
     this.stopped = true;
     for (const p of this.procs) { try { p.kill('SIGTERM'); } catch {} }
+    // stop / app quit 不必等外部 CLI 真正退出才清附件副本。
+    this.staged = [];
+    clearRuntime(this.config.settings.workDir, this.conversationId);
   }
 
   reset() {
     this.stop();
     this.clearEmitTimers();
+    // 舊對話的工作目錄暫存一定要清掉,不能留在使用者的 repo 裡
+    clearRuntime(this.config.settings.workDir, this.conversationId);
+    this.conversationId = newConversationId();
+    this.attachments = [];
+    this.staged = [];
+    this.attachmentsSeen.clear();
     this.messages = [];
     this.sessions = {};
     this.lastSeen = {};
@@ -111,6 +146,7 @@ class Orchestrator extends EventEmitter {
     this.running = true;
     this.stopped = false;
     this.taskStartIndex = this.messages.length - 1; // user 訊息的位置
+    this.stageAttachments(agents, cwd);
     try {
       const agreed = await this.discussPhase(agents, task);
       if (this.stopped) return;
@@ -134,9 +170,29 @@ class Orchestrator extends EventEmitter {
     } finally {
       this.running = false;
       this.clearEmitTimers();
+      // 不論正常結束、出錯或被停止,工作目錄的附件副本都要當場刪掉
+      this.unstageAttachments(cwd);
       if (this.stopped) this.system('已停止。');
       this.setPhase('idle');
     }
+  }
+
+  // 沙箱型 CLI(capabilities.attachmentsNeedCwd)讀不到 userData 下的絕對路徑,
+  // 只好在工作目錄放一份暫存副本。userData 仍是唯一權威來源。
+  stageAttachments(agents, cwd, items = this.attachments, reset = true) {
+    if (reset) this.staged = [];
+    if (!items.length) return;
+    const needsCwd = agents.some((a) => attachmentCapabilities(getAdapter(a.cli)).needCwd);
+    if (!needsCwd) return;
+    const { staged, error } = stageToCwd(this.userDataDir, this.conversationId, cwd, items);
+    this.staged = reset ? staged : [...this.staged, ...staged];
+    if (error) this.system(`附件無法複製到工作目錄:${error}`, { level: 'warn' });
+  }
+
+  unstageAttachments(cwd) {
+    this.staged = [];
+    const r = clearRuntime(cwd, this.conversationId);
+    if (!r.ok) this.system(`無法清除工作目錄的附件暫存(${RUNTIME_DIR}):${r.error}`, { level: 'warn' });
   }
 
   // 階段一:輪流討論直到全員同意或到達回合上限
@@ -391,6 +447,28 @@ class Orchestrator extends EventEmitter {
     return [header, tail].filter(Boolean).join('\n');
   }
 
+  // 這位成員這回合實際拿得到的附件(沙箱 CLI 用工作目錄副本,其餘用 userData 權威路徑)
+  attachmentsFor(agent, adapter) {
+    if (!this.attachments.length) return [];
+    const { needCwd } = attachmentCapabilities(adapter);
+    const byId = new Map(this.staged.map((s) => [s.id, s]));
+    return this.attachments.map((m) => ({
+      ...m,
+      path: needCwd ? (byId.get(m.id)?.cwdPath || null) : absolutePath(this.userDataDir, m),
+    }));
+  }
+
+  // 可續接的成員只在第一次發言時收到完整附件區塊(含內嵌文字),之後靠 session 記憶;
+  // 不可續接的成員每回合都要重送,否則下一輪就完全不知道有附件這回事。
+  attachmentPrompt(agent, adapter, resumable) {
+    if (!this.attachments.length) return '';
+    const seen = this.attachmentsSeen.has(agent.id);
+    if (seen && resumable) return '';
+    this.attachmentsSeen.add(agent.id);
+    const { needCwd } = attachmentCapabilities(adapter);
+    return buildAttachmentPrompt(this.userDataDir, this.attachments, adapter, { staged: needCwd ? this.staged : [] });
+  }
+
   // 收集該成員尚未看到的訊息,組成「[名稱]: 內容」的紀錄
   // 不支援 resume 的成員(自訂 CLI、所有 OpenAI 相容 API)每回合都要重送全部紀錄,
   // 這裡要加上字元上限,否則長討論會直接撞上模型的 context 上限。
@@ -418,9 +496,12 @@ class Orchestrator extends EventEmitter {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running' });
     const transcript = this.unseenTranscript(agent, msg);
-    const resumable = getAdapter(agent.cli)?.supportsResume && this.sessions[agent.id];
+    const adapter = getAdapter(agent.cli);
+    const resumable = adapter?.supportsResume && this.sessions[agent.id];
+    const attachmentBlock = this.attachmentPrompt(agent, adapter, !!resumable);
     const prompt = [
       transcript ? (resumable ? '【新訊息】' : '【目前為止的對話紀錄】') + '\n' + transcript : '',
+      attachmentBlock,
       instruction,
     ].filter(Boolean).join('\n\n');
 
@@ -430,6 +511,8 @@ class Orchestrator extends EventEmitter {
       systemPrompt: this.systemPrompt(agent, { showAgreed: !hideAgreed }),
       sessionId: this.sessions[agent.id] || null,
       cwd: this.config.settings.workDir,
+      // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
+      attachments: attachmentBlock ? this.attachmentsFor(agent, adapter) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
       onSession: (id) => { this.sessions[agent.id] = id; },
       onText: (t) => { text = t; this.updateMessage(msg, { text: t }); },
@@ -577,12 +660,18 @@ function parsePorcelain(stdout) {
 // 執行前後的「檔名集合差集」不足以歸因:本來就是 M 的檔案再被改,前後仍然都是 M。
 // 平行執行下也無法把變更歸給某一位成員。因此只回報執行結束時的工作區狀態,
 // 並標出哪些檔案在執行前就已經是變更狀態,讓總結不會過度宣稱。
+// 附件暫存目錄是本 app 自己放的,不是成員改的檔案,一定要從變更報告排除,
+// 否則使用者上傳的圖會被當成「執行階段產生的變更」。
+const isRuntimePath = (file) => file === RUNTIME_DIR || file.startsWith(`${RUNTIME_DIR}/`);
+
 function describeGitChanges(before, after) {
   if (!after || after.size === 0) return null;
+  const visible = [...after].filter(([file]) => !isRuntimePath(file));
+  if (visible.length === 0) return null;
   const lines = [];
-  for (const [file, status] of after) {
+  for (const [file, status] of visible) {
     // -uall 展開未追蹤目錄後檔案數可能很多(例如工作目錄沒有 .gitignore),不能讓清單灌爆總結提示
-    if (lines.length >= MAX_GIT_FILES) { lines.push(`- (另有 ${after.size - MAX_GIT_FILES} 個變更檔案未列出)`); break; }
+    if (lines.length >= MAX_GIT_FILES) { lines.push(`- (另有 ${visible.length - MAX_GIT_FILES} 個變更檔案未列出)`); break; }
     const pre = before && before.has(file);
     lines.push(`- \`${status || '??'}\` ${file}${pre ? '(執行前就已是變更狀態)' : ''}`);
   }

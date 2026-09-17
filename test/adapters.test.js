@@ -347,6 +347,36 @@ t('Registry:同一範本裝兩次會換 id、檔案管理擋掉壞檔名與壞 J
   assert.strictEqual(reg.get('y'), null);
 });
 
+t('Registry:載入時把舊版明文 apiKey 移到安全儲存，失敗時保留原檔', () => {
+  const dir = path.join(tmp, 'reg-legacy-key');
+  fs.mkdirSync(dir);
+  const legacy = { id: 'legacy', type: 'openai', baseUrl: 'https://api.example.com/v1', apiKey: 'sk-legacy', models: ['m'] };
+  const blank = { id: 'blank', type: 'openai', baseUrl: 'https://api.example.com/v1', apiKey: '', models: ['m'] };
+  fs.writeFileSync(path.join(dir, 'legacy.json'), JSON.stringify(legacy));
+  fs.writeFileSync(path.join(dir, 'blank.json'), JSON.stringify(blank));
+  fs.writeFileSync(path.join(dir, 'broken.json'), '{bad');
+
+  // 安全儲存不可用:檔案原封不動，key 不能不見
+  const failing = new Registry({ userDir: dir, setSecret: () => { throw new Error('系統安全儲存目前不可用'); } });
+  const failedEntry = failing.entries.find((e) => e.file === 'legacy.json');
+  assert.ok(/舊版明文 API key/.test(failedEntry.error));
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'legacy.json'), 'utf8')).apiKey, 'sk-legacy');
+  assert.deepStrictEqual(failing.migrateLegacyApiKey('broken.json'), { migrated: false });
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'broken.json'), 'utf8'), '{bad');
+  // 空白 apiKey 不需要安全儲存，直接移除即可載入
+  assert.ok(failing.get('blank'));
+
+  const stored = {};
+  const reg = new Registry({ userDir: dir, setSecret: (ref, value) => { stored[ref] = value; }, getSecret: (ref) => stored[ref] });
+  assert.strictEqual(stored['adapter:legacy'], 'sk-legacy');
+  const migrated = JSON.parse(fs.readFileSync(path.join(dir, 'legacy.json'), 'utf8'));
+  assert.strictEqual(migrated.apiKey, undefined);
+  assert.strictEqual(migrated.secretRef, 'adapter:legacy');
+  assert.ok(reg.get('legacy'));
+  assert.ok(/JSON 格式錯誤/.test(reg.entries.find((e) => e.file === 'broken.json').error));
+  assert.strictEqual(reg.readFile('broken.json'), '{bad');
+});
+
 t('runTurn:找不到 CLI、外掛丟例外、API 成員不能改檔案', async () => {
   const dir = path.join(tmp, 'reg3');
   fs.mkdirSync(dir);

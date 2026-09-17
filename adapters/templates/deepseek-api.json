@@ -6,8 +6,38 @@
   "baseUrl": "https://api.deepseek.com",
   "apiKeyEnv": "DEEPSEEK_API_KEY",
   "models": [
-    { "id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "efforts": ["low", "high", "max"], "defaultEffort": "high" },
-    { "id": "deepseek-flash", "label": "DeepSeek V4.1 Flash", "efforts": ["low", "high", "max"], "defaultEffort": "high" }
+    {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high"
+    },
+    {
+      "id": "deepseek-flash",
+      "label": "DeepSeek V4.1 Flash",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "defaultEffort": "high"
+    }
   ],
-  "effortBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "{effort}" }
+  "effortBody": {
+    "thinking": {
+      "type": "enabled"
+    },
+    "reasoning_effort": "{effort}"
+  },
+  "capabilities": {
+    "attachments": [
+      "imageInline",
+      "textInline"
+    ],
+    "attachmentsNeedCwd": false
+  }
 }

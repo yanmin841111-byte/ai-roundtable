@@ -10,6 +10,7 @@ module.exports = {
   bin: 'aider',
   supportsResume: false, // true 時需回傳 sessionId,之後 ctx.sessionId 會帶回來
   supportsEdit: true,
+  capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
   efforts: [],
   models: [], // 也可以改寫成 listModels(kit) { return [...] }
 

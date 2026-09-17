@@ -252,7 +252,33 @@
       <div class="modal-head"><span id="ext-editor-title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
       <div class="modal-body">
         <label class="field"><span>檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
-        <textarea id="ext-content" class="code-editor" rows="22" spellcheck="false"></textarea>
+        <div class="ext-editor-tabs" role="tablist" aria-label="擴充編輯模式">
+          <button id="ext-tab-basic" class="active" type="button" role="tab" aria-selected="true">基本設定</button>
+          <button id="ext-tab-advanced" type="button" role="tab" aria-selected="false">進階 JSON</button>
+        </div>
+        <section id="ext-basic" class="ext-basic" role="tabpanel">
+          <div id="ext-basic-unavailable" class="hint" hidden>JavaScript 外掛請使用進階編輯器。</div>
+          <div id="ext-basic-fields" class="ext-basic-fields">
+            <div class="setting-grid">
+              <label class="field"><span>識別碼</span><input id="ext-id" type="text" spellcheck="false" placeholder="my-provider" /></label>
+              <label class="field"><span>顯示名稱</span><input id="ext-label" type="text" placeholder="我的 AI" /></label>
+            </div>
+            <label class="field"><span>連線類型</span><select id="ext-type"><option value="cli">CLI 指令</option><option value="openai">OpenAI 相容 API</option></select></label>
+            <div id="ext-cli-fields">
+              <label class="field"><span>執行檔</span><span class="row"><input id="ext-bin" type="text" spellcheck="false" placeholder="例如 claude 或 /usr/local/bin/my-cli" /><button id="ext-pick-bin" class="ghost small" type="button">選擇…</button></span></label>
+              <label class="field"><span>參數 <small>每行一個</small></span><textarea id="ext-args" rows="4" spellcheck="false" placeholder="--model&#10;{model}"></textarea><small id="ext-args-help" class="hint"></small></label>
+            </div>
+            <div id="ext-api-fields">
+              <label class="field"><span>API URL</span><input id="ext-base-url" type="url" spellcheck="false" placeholder="https://api.example.com/v1" /></label>
+              <label class="field"><span>API key 環境變數 <small>選填</small></span><input id="ext-api-env" type="text" spellcheck="false" placeholder="MY_API_KEY" /></label>
+              <label class="field"><span>API key</span><span class="row"><input id="ext-api-key" type="password" autocomplete="new-password" placeholder="填入後不會寫入擴充 JSON" /><span id="ext-key-status" class="badge">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button">清除</button><button id="ext-key-test" class="ghost small" type="button">測試連線</button></span><small class="hint">請到「設定 → CLI 與擴充」填入,或設定上方的環境變數,不會寫入擴充 JSON</small></label>
+            </div>
+            <label class="field"><span>模型 <small>以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
+          </div>
+        </section>
+        <section id="ext-advanced" role="tabpanel" hidden>
+          <textarea id="ext-content" class="code-editor" rows="22" spellcheck="false"></textarea>
+        </section>
         <div id="ext-error" class="error-text" hidden></div>
         <div id="ext-ok" class="ok-text" hidden></div>
       </div>
