@@ -4,21 +4,24 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 import { SHAPES as USAGE_SHAPES } from '../usage';
 const ATTACHMENT_CAPABILITIES = ['filePath', 'imageInline', 'textInline'];
 
+import type { Model } from '../model-rules';
+import type { AdapterCapabilities } from './types';
+
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
-function normalizeModels(list: any) {
+function normalizeModels(list: unknown): Model[] {
   if (!Array.isArray(list)) return [];
   return list
     .map((m: any) => (typeof m === 'string' ? { id: m } : m))
     .filter((m: any) => m && typeof m.id === 'string' && m.id.trim())
     .map((m: any) => {
-      const efforts = [...new Set((m.efforts || []).map((e: any) => String(e).toLowerCase()).filter(Boolean))];
+      const efforts = [...new Set<string>((m.efforts || []).map((e: any) => String(e).toLowerCase()).filter(Boolean))];
       return {
         id: m.id.trim(),
         label: m.label || m.id.trim(),
         description: m.description || '',
         efforts,
         defaultEffort: efforts.includes(m.defaultEffort) ? m.defaultEffort : '',
-        aliases: [...new Set((m.aliases || []).map((a: any) => String(a).toLowerCase()).filter(Boolean))],
+        aliases: [...new Set<string>((m.aliases || []).map((a: any) => String(a).toLowerCase()).filter(Boolean))],
         // 沒寫 efforts 的模型不限制強度(交給 CLI / API 自己判斷)
         ...(Array.isArray(m.efforts) ? {} : { efforts: [], unrestrictedEffort: true }),
       };
@@ -48,10 +51,10 @@ function validateCommon(spec: any, errors: any) {
   }
 }
 
-function normalizeCapabilities(capabilities: any, fallback: any = []) {
+function normalizeCapabilities(capabilities: any, fallback: string[] = []): AdapterCapabilities {
   const caps = capabilities && typeof capabilities === 'object' ? capabilities : {};
   return {
-    attachments: Array.isArray(caps.attachments) ? [...new Set(caps.attachments)] : [...fallback],
+    attachments: Array.isArray(caps.attachments) ? [...new Set<string>(caps.attachments)] : [...fallback],
     attachmentsNeedCwd: !!caps.attachmentsNeedCwd,
   };
 }

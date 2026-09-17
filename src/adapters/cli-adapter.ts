@@ -8,6 +8,8 @@ import { runProcess, parseJson, truncate, checkCli } from './process';
 import { getPath, render, buildArgs, matches } from './template';
 import { resolveModelId, resolveEffort } from '../model-rules';
 import { normalizeModels, normalizeCapabilities } from './spec';
+import type { AgentConfig } from '../ipc-types';
+import type { Adapter, RunContext, RunResult } from './types';
 
 const TEXT_MODES = ['append', 'replace', 'message'];
 
@@ -31,7 +33,7 @@ function validateCliSpec(spec: any, errors: any) {
   if (spec.env != null && (typeof spec.env !== 'object' || Array.isArray(spec.env))) errors.push('env 必須是物件');
 }
 
-function createCliAdapter(spec: any) {
+function createCliAdapter(spec: any): Adapter {
   const out = spec.output || {};
   const format = out.format || 'text';
   const rules = out.rules || [];
@@ -51,11 +53,11 @@ function createCliAdapter(spec: any) {
     capabilities: normalizeCapabilities(spec.capabilities, ['filePath']),
     listModels: () => ({ models, source: models.length ? 'config' : 'none' }),
     check: () => (spec.versionArgs === false ? Promise.resolve({ ok: true, version: '(略過檢查)' }) : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'])),
-    run: (agent: any, ctx: any) => runCli(spec, { format, rules, models }, agent, ctx),
+    run: (agent, ctx) => runCli(spec, { format, rules, models }, agent, ctx),
   };
 }
 
-async function runCli(spec: any, { format, rules, models }: any, agent: any, ctx: any) {
+async function runCli(spec: any, { format, rules, models }: any, agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
   const out = spec.output || {};
   const input = spec.input || 'stdin';
   const systemMode = spec.systemPrompt || 'prepend';

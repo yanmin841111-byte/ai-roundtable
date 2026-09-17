@@ -4,14 +4,16 @@
 import { runProcess, parseJson, truncate, checkCli } from './process';
 import { listModels, resolveRunOptions } from '../models';
 import { createCursorAdapter } from './cursor';
+import type { AgentConfig } from '../ipc-types';
+import type { Adapter, RunContext, RunResult } from './types';
 
 // 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
-function reportRunNote(ctx: any, run: any) {
+function reportRunNote(ctx: RunContext, run: { note?: string | null }) {
   if (run.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: run.note, status: 'done' });
 }
 
 // ---------- Claude Code ----------
-async function runClaude(agent: any, ctx: any) {
+async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   const run = resolveRunOptions('claude', agent.model, agent.effort);
   if (run.model) args.push('--model', run.model);
@@ -36,8 +38,9 @@ async function runClaude(agent: any, ctx: any) {
       const ev = parseJson(line);
       if (!ev) return;
       if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
-        sessionId = ev.session_id;
-        ctx.onSession && ctx.onSession(sessionId);
+        const id = String(ev.session_id);
+        sessionId = id;
+        ctx.onSession(id);
         return;
       }
       if (ev.type === 'stream_event' && ev.event) {
@@ -97,7 +100,7 @@ function describeClaudeTool(block: any) {
 }
 
 // ---------- Codex CLI ----------
-async function runCodex(agent: any, ctx: any) {
+async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
   const args = ['exec'];
   let prompt = ctx.prompt;
   if (ctx.sessionId) {
@@ -130,8 +133,9 @@ async function runCodex(agent: any, ctx: any) {
       const ev = parseJson(line);
       if (!ev) return;
       if (ev.type === 'thread.started' && ev.thread_id) {
-        sessionId = ev.thread_id;
-        ctx.onSession && ctx.onSession(sessionId);
+        const id = String(ev.thread_id);
+        sessionId = id;
+        ctx.onSession(id);
         return;
       }
       if (ev.type && ev.type.startsWith('item.') && ev.item) {
@@ -168,7 +172,7 @@ async function runCodex(agent: any, ctx: any) {
 
 // ---------- 自訂指令 ----------
 // 指令範本可用 {model}、{effort} 佔位;提示詞從 stdin 送入,stdout 視為純文字回覆。
-async function runCustom(agent: any, ctx: any) {
+async function runCustom(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
   const cmd = (agent.customCommand || '').replace(/\{model\}/g, agent.model || '').replace(/\{effort\}/g, agent.effort || '');
   if (!cmd.trim()) return { text: '', sessionId: null, usage: null, error: '尚未設定自訂指令' };
   let prompt = ctx.prompt;
@@ -188,7 +192,7 @@ async function runCustom(agent: any, ctx: any) {
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-const builtinAdapters = [
+const builtinAdapters: Adapter[] = [
   {
     id: 'claude',
     label: 'Claude Code',

@@ -1,15 +1,5 @@
 // 轉接器登錄中心:內建轉接器 + 使用者擴充資料夾裡的 *.json / *.js。
-//
-// 轉接器介面(內建與擴充都一樣):
-//   id, label, type('builtin' | 'cli' | 'openai' | 'js'), description
-//   bin              指令名稱(沒有就 null)
-//   supportsResume   能否用 sessionId 續接;不能時每回合會送完整對話紀錄
-//   supportsEdit     能否修改檔案 / 執行指令;不能時成員的「允許修改檔案」無效
-//   efforts          手動輸入模型時可選的強度
-//   listModels()     → { models, source, error? }(同步,回傳目前已知的清單)
-//   refreshModels?() → Promise,更新需要非同步取得的模型清單
-//   check?()         → Promise<{ ok, version?, error? }>
-//   run(agent, ctx)  → Promise<{ text, thinking, sessionId, usage, error }>
+// 轉接器介面(內建與擴充都一樣)定義在 ./types.ts。
 
 import fs from 'fs';
 import path from 'path';
@@ -18,6 +8,7 @@ import { validateCommon, normalizeModels, normalizeCapabilities } from './spec';
 import { createCliAdapter, validateCliSpec } from './cli-adapter';
 import { createOpenAIAdapter, validateOpenAISpec } from './openai-adapter';
 import { kit } from './kit';
+import type { Adapter, ModelList, RegisteredAdapter } from './types';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -27,8 +18,8 @@ class Registry {
   fetchImpl: any;
   getSecret: any;
   setSecret: any;
-  adapters: any;
-  entries: any;
+  adapters: Map<string, RegisteredAdapter>;
+  entries: any[];
 
   constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret }: any = {}) {
     this.userDir = userDir;
@@ -43,7 +34,7 @@ class Registry {
 
   // ---------- 載入 ----------
   reload() {
-    this.adapters = new Map(builtinAdapters.map((a: any) => [a.id, { ...a, origin: 'builtin' }]));
+    this.adapters = new Map(builtinAdapters.map((a): [string, RegisteredAdapter] => [a.id, { ...a, origin: 'builtin' }]));
     this.entries = [];
     if (!this.userDir) return this.summary();
     try { fs.mkdirSync(this.userDir, { recursive: true }); } catch {}
@@ -76,9 +67,9 @@ class Registry {
     return this.summary();
   }
 
-  loadFile(full: any) {
-    const errors: any[] = [];
-    let adapter: any;
+  loadFile(full: string): Adapter {
+    const errors: string[] = [];
+    let adapter: Adapter;
     if (full.endsWith('.json')) {
       let spec: any;
       try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (e: any) { throw new Error(`JSON 格式錯誤:${e.message}`); }
@@ -127,24 +118,24 @@ class Registry {
     return { dir: this.userDir, entries: this.entries.map(({ path: _p, ...e }: any) => e), templates: this.templates() };
   }
 
-  get(id: any) { return this.adapters.get(id) || null; }
+  get(id: string): RegisteredAdapter | null { return this.adapters.get(id) || null; }
 
   // 從磁碟重新讀一份獨立的轉接器實例，不動目前登錄的那份。
   // 測試連線要用剛儲存的設定，但不能清掉進行中對話的 session 記憶。
-  loadFresh(id: any) {
+  loadFresh(id: string): Adapter | null {
     const current = this.adapters.get(id);
     if (!current || current.origin !== 'user' || !current.file) return current || null;
     try { return this.loadFile(path.join(this.userDir, current.file)); } catch { return current; }
   }
-  list() { return [...this.adapters.values()]; }
+  list(): RegisteredAdapter[] { return [...this.adapters.values()]; }
 
   // ---------- 給介面用 ----------
   async catalog({ refreshTimeoutMs = 6000 }: any = {}) {
-    const refreshes = this.list().filter((a: any) => a.refreshModels).map((a: any) => Promise.resolve().then(() => a.refreshModels()).catch(() => {}));
+    const refreshes = this.list().map((a) => a.refreshModels).filter((refresh) => !!refresh).map((refresh) => Promise.resolve().then(refresh).catch(() => {}));
     if (refreshes.length) await Promise.race([Promise.all(refreshes), new Promise((r: any) => setTimeout(r, refreshTimeoutMs))]);
     const out: Record<string, any> = {};
     for (const a of this.list()) {
-      let models: any = { models: [], source: 'none' };
+      let models: ModelList = { models: [], source: 'none' };
       try { models = a.listModels ? a.listModels() : models; } catch (e: any) { models = { models: [], source: 'error', error: e.message }; }
       out[a.id] = {
         id: a.id,
@@ -168,7 +159,7 @@ class Registry {
   }
 
   async checkAll() {
-    const results = await Promise.all(this.list().map(async (a: any) => {
+    const results = await Promise.all(this.list().map(async (a) => {
       if (!a.check) return [a.id, null];
       try { return [a.id, await a.check()]; } catch (e: any) { return [a.id, { ok: false, error: e.message }]; }
     }));

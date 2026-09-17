@@ -7,6 +7,7 @@ import { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } fr
 import { renderDeep } from './template';
 import { resolveModelId, resolveEffort } from '../model-rules';
 import { normalizeModels, normalizeCapabilities } from './spec';
+import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
@@ -35,7 +36,7 @@ function missingApiKeyMessage(spec: any) {
     : '缺少 API key:請到「設定 → CLI 與擴充」填入並儲存';
 }
 
-function buildUserContent(prompt: any, attachments: any, capabilities: any) {
+function buildUserContent(prompt: string, attachments: RunAttachment[] | undefined, capabilities: AdapterCapabilities) {
   const modes = capabilities && Array.isArray(capabilities.attachments) ? capabilities.attachments : [];
   if (!modes.includes('imageInline')) return prompt;
   const images: any[] = [];
@@ -49,7 +50,7 @@ function buildUserContent(prompt: any, attachments: any, capabilities: any) {
   return images.length ? [{ type: 'text', text: prompt }, ...images] : prompt;
 }
 
-function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}) {
+function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Adapter {
   const doFetch: any = fetchImpl || ((...a: Parameters<typeof fetch>) => fetch(...a));
   const staticModels = spec.models === 'auto' ? null : normalizeModels(spec.models);
   const sessions = new Map(); // sessionId -> [{ role, content }]

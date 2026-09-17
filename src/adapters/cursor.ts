@@ -14,6 +14,8 @@
 
 import { runProcess, parseJson, truncate, checkCli } from './process';
 import { resolveModelId } from '../model-rules';
+import type { AgentConfig } from '../ipc-types';
+import type { Adapter, RunContext, RunResult } from './types';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const NOT_FOUND = 127;
@@ -77,7 +79,7 @@ function viaShell(bin: string, args: readonly string[]): [string, string[]] {
   return ['/bin/sh', ['-c', 'set -o pipefail; "$0" "$@" | cat', bin, ...args]];
 }
 
-function createCursorAdapter({ bin = 'cursor-agent' }: any = {}) {
+function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): Adapter {
   let fetched: any = { models: null, at: 0, error: null, pending: null };
 
   async function refreshModels(force: any = false) {
@@ -104,7 +106,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: any = {}) {
     return { models: FALLBACK_MODELS, source: 'loading' };
   }
 
-  async function run(agent: any, ctx: any) {
+  async function run(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
     const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--workspace', ctx.cwd];
     if (agent.model) args.push('--model', resolveModelId(listModels().models, agent.model));
     if (agent.effort) ctx.onActivity({ id: 'run-options', kind: 'note', title: `Cursor 的強度寫在模型名稱裡,已略過 ${agent.effort}`, status: 'done' });
@@ -138,8 +140,9 @@ function createCursorAdapter({ bin = 'cursor-agent' }: any = {}) {
         const ev = parseJson(line);
         if (!ev || typeof ev !== 'object') return;
         if (ev.session_id && ev.session_id !== sessionId) {
-          sessionId = ev.session_id;
-          ctx.onSession(sessionId);
+          const id = String(ev.session_id);
+          sessionId = id;
+          ctx.onSession(id);
         }
         if (ev.type === 'thinking') {
           if (ev.subtype === 'delta' && ev.text) {

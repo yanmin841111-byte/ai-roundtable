@@ -15,6 +15,16 @@
 
 const SHAPES = ['anthropic', 'codex', 'openai', 'cursor'];
 
+export interface NormalizedUsage {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheWriteTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  shape: string;
+  raw: unknown;
+}
+
 // 只接受有限的數字;字串數字也收(有些 CLI 會輸出字串)
 function num(value: any) {
   if (value == null || value === '') return null;
@@ -49,14 +59,14 @@ function detectShape(raw: any) {
   return null;
 }
 
-const unknown = (raw: any) => ({
+const unknown = (raw: any): NormalizedUsage => ({
   inputTokens: null, cachedInputTokens: null, cacheWriteTokens: null,
   outputTokens: null, costUsd: null, shape: 'unknown', raw: raw ?? null,
 });
 
-function normalizeUsage(raw: any, shape: any) {
+function normalizeUsage(raw: any, shape?: string | null): NormalizedUsage {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return unknown(raw ?? null);
-  const kind = SHAPES.includes(shape) ? shape : detectShape(raw);
+  const kind = shape && SHAPES.includes(shape) ? shape : detectShape(raw);
   if (!kind) return unknown(raw);
 
   if (kind === 'anthropic') {

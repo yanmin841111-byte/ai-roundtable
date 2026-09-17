@@ -124,7 +124,7 @@ app.whenReady().then(async () => {
   });
   setRegistry(registry);
   // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
-  for (const a of registry.list()) if (a.refreshModels) Promise.resolve().then(() => a.refreshModels()).catch(() => {});
+  for (const { refreshModels } of registry.list()) if (refreshModels) Promise.resolve().then(refreshModels).catch(() => {});
   orchestrator = new Orchestrator(store);
   orchestrator.on('message', (m: IpcEvents['chat:message']) => send('chat:message', m));
   orchestrator.on('state', (s: IpcEvents['chat:state']) => {

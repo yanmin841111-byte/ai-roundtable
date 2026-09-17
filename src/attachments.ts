@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import type { Adapter, AdapterCapabilities } from './adapters/types';
 
 // ---------- 產品拍板的上限 ----------
 const LIMITS = {
@@ -444,9 +445,9 @@ function clearRuntime(workDir: any, conversationId: any = null) {
 // ---------- 提示詞組裝 ----------
 // adapter 的 capabilities 由 Codex 那條線加進 spec/registry;這裡讀不到就依既有欄位推斷,
 // 兩邊可以獨立合併,不必等對方先落地。
-function attachmentCapabilities(adapter: any) {
-  const caps = (adapter && adapter.capabilities) || {};
-  const list = Array.isArray(caps.attachments) ? caps.attachments.filter((c: any) => typeof c === 'string') : null;
+function attachmentCapabilities(adapter: Pick<Adapter, 'capabilities' | 'supportsEdit'> | null | undefined) {
+  const caps: Partial<AdapterCapabilities> = (adapter && adapter.capabilities) || {};
+  const list = Array.isArray(caps.attachments) ? caps.attachments.filter((c) => typeof c === 'string') : null;
   if (list) return { modes: new Set(list), needCwd: !!caps.attachmentsNeedCwd };
   // 退路:能改檔案的多半是本機 CLI,讀得到絕對路徑;其餘只當作能吃純文字
   const fallback = adapter && adapter.supportsEdit ? ['filePath', 'textInline'] : ['textInline'];
