@@ -96,6 +96,8 @@ details.thinking .content { white-space: pre-wrap; color: var(--muted); border-l
 .act.running .dot { background: var(--accent); animation: pulse 1s infinite; }
 .act.done .dot { background: var(--ok); }
 .act.error .dot { background: var(--danger); }
+.act.note .dot { background: var(--warn); }
+.act.note { color: var(--warn); }
 .act pre { margin: 6px 0 2px; white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; max-height: 200px; overflow-y: auto; color: var(--text); }
 .error-text { color: var(--danger); white-space: pre-wrap; font-size: 12.5px; margin-top: 6px; font-family: var(--mono); }
 .usage { font-size: 11px; color: var(--muted); margin-top: 6px; }
@@ -114,3 +116,6 @@ details.thinking .content { white-space: pre-wrap; color: var(--muted); border-l
 .modal-body { padding: 16px 18px 6px; max-height: 70vh; overflow-y: auto; }
 .modal-foot { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--border); }
 input[type=color] { width: 44px; height: 36px; padding: 2px; }
+
+.model-desc { font-size: 12px; color: var(--muted); margin: -4px 0 10px; min-height: 0; }
+.model-desc:empty { display: none; }

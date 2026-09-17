@@ -41,6 +41,8 @@ async function init() {
   $('#modal-save').onclick = saveModal;
   $('#modal-delete').onclick = deleteAgent;
   $('#f-cli').onchange = () => fillCliDependentFields($('#f-cli').value);
+  $('#f-model-select').onchange = onModelSelect;
+  $('#f-model').addEventListener('input', () => refreshModelDependents());
   $('#pick-dir').onclick = async () => { const d = await window.api.pickDir(); if (d) { $('#work-dir').value = d; saveSettings(); } };
   $('#open-dir').onclick = () => window.api.openPath($('#work-dir').value);
   for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent']) $(id).addEventListener('change', saveSettings);
@@ -95,8 +97,10 @@ function saveSettings() {
 }
 
 // ---------- 成員編輯 ----------
-function openModal(id) {
+async function openModal(id) {
   editingId = id;
+  // 每次打開都重抓:CLI 更新模型快取後不用重開 app。主程序有依檔案修改時間快取,重抓很便宜。
+  try { cliTypes = await window.api.cliTypes(); } catch {}
   const a = id ? config.agents.find((x) => x.id === id) : { name: '', cli: 'claude', model: '', effort: '', persona: '', color: randomColor(), canEdit: true, enabled: true, customCommand: '' };
   $('#modal-title').textContent = id ? '編輯成員' : '新增成員';
   $('#f-cli').innerHTML = Object.entries(cliTypes).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('');
@@ -112,20 +116,74 @@ function openModal(id) {
   $('#modal').classList.remove('hidden');
   $('#f-name').focus();
 }
+// ---------- 模型與強度 ----------
+const CUSTOM_MODEL = '__custom__';
+const modelsOf = (cli) => (cliTypes[cli] || {}).models || [];
+const findModel = (cli, name) => ModelRules.findModel(modelsOf(cli), name);
+
 function fillCliDependentFields(cli, model, effort) {
-  const t = cliTypes[cli] || { models: [], efforts: [] };
-  $('#model-list').innerHTML = t.models.map((m) => `<option value="${m}">`).join('');
-  $('#f-model').value = model ?? (t.models[0] || '');
-  const eff = $('#f-effort');
-  eff.innerHTML = '<option value="">(預設)</option>' + t.efforts.map((e) => `<option value="${e}">${e}</option>`).join('');
-  eff.value = effort && t.efforts.includes(effort) ? effort : '';
-  $('#f-custom-wrap').style.display = cli === 'custom' ? '' : 'none';
+  const models = modelsOf(cli);
+  const isCustomCli = cli === 'custom';
+  const sel = $('#f-model-select');
+  sel.innerHTML = '<option value="">(CLI 預設模型)</option>'
+    + models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label !== m.id ? `${m.id}(${m.label})` : m.id)}</option>`).join('')
+    + `<option value="${CUSTOM_MODEL}">其他(手動輸入)…</option>`;
+
+  // model 為 undefined 代表剛切換 CLI:預設選清單第一個。舊設定存的別名(例如 opus)會對應到完整名稱。
+  const raw = model === undefined ? (models[0] ? models[0].id : '') : String(model || '');
+  const known = raw === '' ? null : findModel(cli, raw);
+  const manual = isCustomCli || (raw !== '' && !known);
+  sel.value = manual ? CUSTOM_MODEL : (known ? known.id : '');
+  sel.style.display = isCustomCli ? 'none' : '';
+  $('#f-model').value = manual ? raw : '';
+  $('#f-model').style.display = manual ? '' : 'none';
+  $('#f-custom-wrap').style.display = isCustomCli ? '' : 'none';
+  refreshModelDependents(effort);
 }
+
+function currentModel() {
+  const v = $('#f-model-select').value;
+  return v === CUSTOM_MODEL ? $('#f-model').value.trim() : v;
+}
+
+function onModelSelect() {
+  const manual = $('#f-model-select').value === CUSTOM_MODEL;
+  $('#f-model').style.display = manual ? '' : 'none';
+  if (manual) $('#f-model').focus();
+  refreshModelDependents();
+}
+
+// 依目前選的模型更新說明文字與強度選單。effort 未給時沿用畫面上的選擇。
+function refreshModelDependents(effort) {
+  const cli = $('#f-cli').value;
+  const source = (cliTypes[cli] || {}).modelSource;
+  const info = findModel(cli, currentModel());
+  const notes = [];
+  if (info && info.description) notes.push(info.description);
+  if (source === 'fallback') notes.push('(讀不到 CLI 的模型快取,顯示內建清單;先執行一次該 CLI 通常就會產生)');
+  $('#f-model-desc').textContent = notes.join(' ');
+  fillEfforts(cli, info, effort === undefined ? $('#f-effort').value : effort);
+}
+
+function fillEfforts(cli, info, wanted) {
+  const eff = $('#f-effort');
+  // 認得的模型用它自己的強度清單;手動輸入的模型無從得知,列出該 CLI 所有模型強度的聯集。
+  const efforts = info ? info.efforts : ModelRules.EFFORT_RANK.filter((e) => modelsOf(cli).some((m) => m.efforts.includes(e)));
+  const unsupported = !!info && efforts.length === 0;
+  eff.disabled = unsupported || efforts.length === 0;
+  eff.innerHTML = unsupported
+    ? '<option value="">(此模型不支援強度設定)</option>'
+    : `<option value="">(預設${info && info.defaultEffort ? ':' + info.defaultEffort : ''})</option>` + efforts.map((e) => `<option value="${e}">${e}</option>`).join('');
+  // 換模型時保留原本的強度;新模型不支援就降到最接近的等級,跟實際執行時的規則一致。
+  const resolved = info ? ModelRules.resolveEffort([info], info.id, wanted).effort : wanted;
+  eff.value = resolved && efforts.includes(resolved) ? resolved : '';
+}
+
 function closeModal() { $('#modal').classList.add('hidden'); }
 function saveModal() {
   const name = $('#f-name').value.trim();
   if (!name) { $('#f-name').focus(); return; }
-  const data = { name, cli: $('#f-cli').value, model: $('#f-model').value.trim(), effort: $('#f-effort').value, persona: $('#f-persona').value.trim(), color: $('#f-color').value, canEdit: $('#f-canEdit').checked, enabled: $('#f-enabled').checked, customCommand: $('#f-custom').value.trim() };
+  const data = { name, cli: $('#f-cli').value, model: ModelRules.resolveModelId(modelsOf($('#f-cli').value), currentModel()), effort: $('#f-effort').value, persona: $('#f-persona').value.trim(), color: $('#f-color').value, canEdit: $('#f-canEdit').checked, enabled: $('#f-enabled').checked, customCommand: $('#f-custom').value.trim() };
   if (editingId) Object.assign(config.agents.find((x) => x.id === editingId), data);
   else config.agents.push({ id: crypto.randomUUID(), ...data });
   window.api.saveConfig(config);
@@ -269,7 +327,7 @@ function renderActivities(slot, activities) {
       details.append(summary, pre);
       slot.appendChild(details);
     }
-    details.className = `act ${activity.status || ''}`;
+    details.className = `act ${activity.kind === 'note' ? 'note' : ''} ${activity.status || ''}`;
     setHtmlIfChanged(details.querySelector('summary'), `<span class="dot"></span>${escapeHtml(activity.title || '工具')}`);
     const detail = [activity.detail, activity.result ? '── 結果 ──\n' + activity.result : ''].filter(Boolean).join('\n');
     const pre = details.querySelector('pre');

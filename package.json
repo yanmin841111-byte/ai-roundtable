@@ -3,16 +3,47 @@
   "productName": "AI Roundtable",
   "version": "0.1.0",
   "description": "讓多個 AI CLI(Claude Code、Codex 等)互相討論、分工、交叉審查的桌面應用",
+  "author": "yanmin841111-byte",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yanmin841111-byte/ai-roundtable.git"
+  },
+  "homepage": "https://github.com/yanmin841111-byte/ai-roundtable#readme",
+  "bugs": {
+    "url": "https://github.com/yanmin841111-byte/ai-roundtable/issues"
+  },
+  "keywords": [
+    "ai",
+    "multi-agent",
+    "claude-code",
+    "codex",
+    "electron",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "main": "main.js",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
-    "dist": "electron-builder --mac"
+    "dist": "electron-builder --mac",
+    "test": "node test/models.test.js"
   },
   "build": {
-    "appId": "com.johnnywu.airoundtable",
+    "appId": "io.github.yanmin841111-byte.airoundtable",
     "productName": "AI Roundtable",
-    "files": ["main.js", "preload.js", "src/**", "renderer/**", "node_modules/marked/**"],
-    "mac": { "target": "dmg", "category": "public.app-category.developer-tools" }
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "node_modules/marked/**"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    }
   },
   "dependencies": {
     "marked": "^15.0.0"

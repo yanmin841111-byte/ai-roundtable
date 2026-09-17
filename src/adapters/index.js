@@ -6,6 +6,7 @@
 // callbacks: onText(fullText), onThinking(fullText), onActivity(activity), onSession(id), onProc(child)
 
 const { spawn } = require('child_process');
+const { listModels, resolveRunOptions } = require('../models');
 
 const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_KILL_GRACE_MS = 5000;
@@ -15,22 +16,16 @@ const CLI_TYPES = {
   claude: {
     label: 'Claude Code',
     bin: 'claude',
-    models: ['fable', 'opus', 'sonnet', 'haiku', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     supportsResume: true,
   },
   codex: {
     label: 'Codex CLI',
     bin: 'codex',
-    models: ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'],
-    efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
     supportsResume: true,
   },
   custom: {
     label: '自訂指令',
     bin: null,
-    models: [],
-    efforts: [],
     supportsResume: false,
   },
 };
@@ -133,11 +128,18 @@ function runProcess(bin, args, { cwd, stdin, shell, timeoutMs = DEFAULT_TURN_TIM
   });
 }
 
+// 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
+function reportRunNote(ctx, run) {
+  if (run.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: run.note, status: 'done' });
+}
+
 // ---------- Claude Code ----------
 async function runClaude(agent, ctx) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
-  if (agent.model) args.push('--model', agent.model);
-  if (agent.effort) args.push('--effort', agent.effort);
+  const run = resolveRunOptions('claude', agent.model, agent.effort);
+  if (run.model) args.push('--model', run.model);
+  if (run.effort) args.push('--effort', run.effort);
+  reportRunNote(ctx, run);
   if (ctx.sessionId) args.push('--resume', ctx.sessionId);
   if (ctx.systemPrompt) args.push('--append-system-prompt', ctx.systemPrompt);
   if (agent.canEdit) args.push('--dangerously-skip-permissions');
@@ -229,8 +231,10 @@ async function runCodex(agent, ctx) {
     if (ctx.systemPrompt) prompt = `${ctx.systemPrompt}\n\n---\n\n${prompt}`;
   }
   args.push('--json', '--skip-git-repo-check');
-  if (agent.model) args.push('-m', agent.model);
-  if (agent.effort) args.push('-c', `model_reasoning_effort="${agent.effort}"`);
+  const run = resolveRunOptions('codex', agent.model, agent.effort);
+  if (run.model) args.push('-m', run.model);
+  if (run.effort) args.push('-c', `model_reasoning_effort="${run.effort}"`);
+  reportRunNote(ctx, run);
   if (ctx.sessionId) args.push('-c', `sandbox_mode="${agent.canEdit ? 'workspace-write' : 'read-only'}"`);
   if (agent.canEdit) args.push('-c', 'approval_policy="never"');
 
@@ -338,4 +342,14 @@ function checkCli(bin) {
   });
 }
 
-module.exports = { CLI_TYPES, runTurn, checkCli };
+// 回傳給介面用的 CLI 描述,每個 CLI 附上目前可用的模型清單與來源(cache / fallback / none)。
+function cliCatalog() {
+  const out = {};
+  for (const [key, type] of Object.entries(CLI_TYPES)) {
+    const { models, source } = listModels(key);
+    out[key] = { ...type, models, modelSource: source };
+  }
+  return out;
+}
+
+module.exports = { CLI_TYPES, runTurn, checkCli, cliCatalog };

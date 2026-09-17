@@ -84,7 +84,7 @@
         </div>
         <div class="row gap">
           <label class="field half"><span>AI CLI</span><select id="f-cli"></select></label>
-          <label class="field half"><span>模型 / 版本</span><input id="f-model" type="text" list="model-list" placeholder="例如 opus、gpt-5.5" /><datalist id="model-list"></datalist></label>
+          <label class="field half"><span>模型 / 版本</span><select id="f-model-select"></select><input id="f-model" type="text" placeholder="輸入模型名稱" spellcheck="false" style="margin-top:6px" /></label>
         </div>
         <div class="row gap">
           <label class="field half"><span>強度(推理力度)</span><select id="f-effort"></select></label>
@@ -94,6 +94,7 @@
             <label class="check"><input id="f-enabled" type="checkbox" /> 啟用</label>
           </label>
         </div>
+        <div id="f-model-desc" class="model-desc"></div>
         <label class="field" id="f-custom-wrap">
           <span>自訂指令(提示詞會從 stdin 送入,stdout 當作回覆;可用 {model}、{effort})</span>
           <input id="f-custom" type="text" placeholder="例如:gemini -m {model} -p -" spellcheck="false" />
@@ -112,6 +113,7 @@
   </div>
 
   <script src="../src/shared.js"></script>
+  <script src="../src/model-rules.js"></script>
   <script src="../node_modules/marked/marked.min.js"></script>
   <script src="app.js"></script>
 </body>

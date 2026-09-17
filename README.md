@@ -2,12 +2,36 @@
 
 讓多個 AI CLI(Claude Code、Codex CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
 
+> A desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI, or any custom command) at one table: they debate a task, split the work, execute in parallel, and review each other's output. You watch the whole conversation live and can jump in at any time.
+
+![AI Roundtable 畫面](docs/screenshot.png)
+
+## 特色
+
+- **多個 AI CLI 同桌**:Claude Code、Codex CLI 直接支援,其他 CLI 可用自訂指令接入。
+- **每位成員各自設定**:角色個性、模型、推理強度、是否允許改檔案。
+- **討論 → 分工 → 平行執行 → 交叉審查 → 總結**,全程即時串流顯示,包含工具呼叫與思考過程。
+- **隨時插話**:進行中送出的訊息會在下一位成員發言時帶入。
+- **直接用你現有的 CLI 訂閱**,不需要另外申請 API key。
+
+## 需求
+
+- macOS(其他平台尚未測試)
+- Node.js 20 以上
+- 至少安裝並登入一個 AI CLI:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code):`claude`
+  - [Codex CLI](https://github.com/openai/codex):`codex`
+
 ## 啟動
 
 ```bash
+git clone https://github.com/yanmin841111-byte/ai-roundtable.git
+cd ai-roundtable
 npm install
 npm start
 ```
+
+左下角會顯示偵測到的 CLI 與版本。找不到時請確認指令在登入 shell 的 `PATH` 裡。
 
 打包成 .app / .dmg:
 
@@ -37,20 +61,47 @@ npm run dist
 | 欄位 | 說明 |
 | --- | --- |
 | AI CLI | `Claude Code`(`claude`)、`Codex CLI`(`codex`)或自訂指令 |
-| 模型 / 版本 | Claude:`fable`、`opus`、`sonnet`、`haiku` 或完整名稱;Codex:`gpt-5.5` 等 |
-| 強度 | Claude:low / medium / high / xhigh / max;Codex:minimal / low / medium / high / xhigh |
+| 模型 / 版本 | 自動讀取各 CLI 的本機模型快取,只列正式、未退役的模型;選「其他(手動輸入)」可填任意模型名稱 |
+| 強度 | 選項依模型而定;模型不支援時會自動降到最接近的等級,或略過不送,並在對話中標示 |
 | 角色與個性 | 會放進系統提示,決定成員的立場與說話方式 |
 | 允許修改檔案 | 開啟時 Claude 用 `--dangerously-skip-permissions`、Codex 用 `workspace-write`;關閉時只能讀取 |
 | 自訂指令 | 提示詞從 stdin 送入、stdout 當作回覆,可用 `{model}`、`{effort}` 佔位,例如 `gemini -m {model} -p -` |
 
 主持人在「設定」區選擇,負責分工與總結。
 
+## 模型清單
+
+模型清單邏輯在 `src/models.js`,別名與強度規則在 `src/model-rules.js`(主程序與介面共用)。
+
+- Claude Code:`~/.claude/cache/model-catalog/*.json`,取 `section` 為 `main` 的模型;多個檔案時由新到舊找第一個有效的。
+- Codex:`~/.codex/models_cache.json`,排除 `visibility` 非 `list` 與有 `upgrade`(已退役)的模型。
+- 讀取結果依檔案修改時間快取,檔案沒變不重讀;每次打開成員編輯視窗都會重抓,CLI 更新快取後不用重開 app。
+- 讀不到快取時使用內建清單,編輯視窗會標示。
+
+執行 `npm test` 可跑模型清單的測試。
+
 ## 記憶方式
 
 Claude 以 `--resume <session_id>`、Codex 以 `codex exec resume <thread_id>` 續接,所以後續回合只送「新訊息」,省 token。自訂指令沒有 session,每次都會送完整對話紀錄。
+
+## ⚠️ 安全提醒
+
+「允許修改檔案與執行指令」開啟時,Claude Code 會以 `--dangerously-skip-permissions` 執行,Codex 會以 `workspace-write` 沙箱且不詢問確認執行。AI 可以在工作目錄內建立、修改、刪除檔案並執行指令。
+
+- 工作目錄請使用獨立資料夾,不要指到重要專案或家目錄。
+- 建議工作目錄使用 git,方便檢查與回溯 AI 做的變更。
+- 只想看討論時,關閉該選項或使用「只討論,不執行」模式。
 
 ## 注意
 
 - 兩個 CLI 都用你現有的登入與訂閱額度,多回合討論會消耗較快。建議討論用較便宜的模型與較低強度,執行階段再用高強度。
 - 平行執行時多人改同一個檔案仍可能衝突;分工提示已要求主持人避免重疊,但複雜任務建議工作目錄使用 git 以便回溯。
 - 設定檔位於 `~/Library/Application Support/AI Roundtable/config.json`。
+
+## 貢獻
+
+歡迎開 issue 或送 pull request。修改模型清單邏輯後請跑 `npm test`。
+
+## 授權
+
+[MIT](LICENSE)

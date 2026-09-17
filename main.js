@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { Store } = require('./src/store');
 const { Orchestrator } = require('./src/orchestrator');
-const { CLI_TYPES, checkCli } = require('./src/adapters');
+const { CLI_TYPES, checkCli, cliCatalog } = require('./src/adapters');
 
 // 從 Finder / Dock 啟動時 PATH 很精簡,補上登入 shell 的 PATH 才找得到 claude / codex。
 function fixPath() {
@@ -35,6 +35,8 @@ function createWindow() {
   });
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
   if (process.env.AI_ROUNDTABLE_SHOT) win.webContents.once('did-finish-load', () => setTimeout(async () => {
+    if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
+    await new Promise((r) => setTimeout(r, 500));
     const img = await win.webContents.capturePage();
     require('fs').writeFileSync(process.env.AI_ROUNDTABLE_SHOT, img.toPNG());
     console.log('screenshot saved');
@@ -56,7 +58,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('config:get', () => store.get());
   ipcMain.handle('config:save', (_e, cfg) => store.save(cfg));
-  ipcMain.handle('cli:types', () => CLI_TYPES);
+  ipcMain.handle('cli:types', () => cliCatalog());
   ipcMain.handle('cli:check', async () => {
     const out = {};
     for (const [key, t] of Object.entries(CLI_TYPES)) if (t.bin) out[key] = await checkCli(t.bin);
