@@ -5,6 +5,7 @@ import * as Marker from '../src/shared';
 import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
 import { isPhaseInfo } from '../src/ipc-types';
+import { t, applyStaticText, resolveLocale, setLocale, localeTag, joinNames } from './i18n';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliStatus,
@@ -66,6 +67,7 @@ marked.setOptions({ breaks: true, gfm: true });
 async function init() {
   [config, cliTypes, extSummary] = await Promise.all([window.api.getConfig(), window.api.cliTypes(), window.api.ext.list()]);
   applyAppearance();
+  applyStaticText();
   renderSidebar();
   renderExtensions();
   const snap = await window.api.snapshot();
@@ -99,7 +101,7 @@ async function init() {
   $<HTMLTextAreaElement>('#input').addEventListener('blur', closeMentionMenu);
   $<HTMLButtonElement>('#history-resume').onclick = resumeHistory;
   $<HTMLButtonElement>('#stop-btn').onclick = () => window.api.stop();
-  $<HTMLButtonElement>('#reset-btn').onclick = () => { if (!running || confirm('目前仍在進行中,確定要停止並清空對話?')) window.api.reset(); };
+  $<HTMLButtonElement>('#reset-btn').onclick = () => { if (!running || confirm(t('confirm.reset'))) window.api.reset(); };
   $<HTMLButtonElement>('#export-btn').onclick = exportConversation;
   $<HTMLButtonElement>('#sessions-btn').onclick = () => window.api.openSessions();
   $<HTMLButtonElement>('#settings-btn').onclick = () => openSettings();
@@ -128,7 +130,7 @@ async function init() {
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => window.api.openPath($<HTMLInputElement>('#work-dir').value);
   for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
-  document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"]').forEach((el) => el.addEventListener('change', saveAppearance));
+  document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#ext-add').onclick = openTemplatePicker;
   $<HTMLButtonElement>('#ext-open-dir').onclick = () => window.api.ext.openDir();
   $<HTMLButtonElement>('#ext-reload').onclick = () => reloadExtensions();
@@ -182,7 +184,6 @@ async function init() {
 }
 
 // ---------- 設定視窗 ----------
-const SETTINGS_TITLES: Record<string, string> = { general: '一般', clis: 'CLI 與擴充', appearance: '外觀', data: '資料與紀錄' };
 
 function openSettings(tab = 'general'): void {
   renderSidebar();
@@ -196,7 +197,7 @@ function closeSettings() { $<HTMLDivElement>('#settings').classList.add('hidden'
 function showSettingsTab(tab: string): void {
   document.querySelectorAll<HTMLElement>('.settings-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === tab));
   document.querySelectorAll<HTMLElement>('.settings-page').forEach((el) => { el.hidden = el.dataset.page !== tab; });
-  $('#settings-title').textContent = SETTINGS_TITLES[tab] || '設定';
+  $('#settings-title').textContent = ['general', 'clis', 'appearance', 'data'].includes(tab) ? t(`settings.tab.${tab}`) : t('settings.title');
 }
 
 let savedHintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -229,8 +230,12 @@ function applyAppearance() {
   const s = config.settings;
   const theme = ['light', 'dark', 'system'].includes(s.theme || '') ? s.theme! : 'light';
   const fontSize = [13, 14, 15].includes(Number(s.fontSize)) ? Number(s.fontSize) : 14;
+  const localeSetting = ['system', 'zh-Hant', 'en'].includes(s.uiLocale || '') ? s.uiLocale! : 'system';
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty('--font-size', `${fontSize}px`);
+  setLocale(resolveLocale(localeSetting === 'system' ? null : localeSetting));
+  const localeInput = document.querySelector<HTMLInputElement>(`input[name="ui-locale"][value="${localeSetting}"]`);
+  if (localeInput) localeInput.checked = true;
   const themeInput = document.querySelector<HTMLInputElement>(`input[name="theme"][value="${theme}"]`);
   if (themeInput) themeInput.checked = true;
   const sizeInput = document.querySelector<HTMLInputElement>(`input[name="font-size"][value="${fontSize}"]`);
@@ -240,11 +245,35 @@ function applyAppearance() {
 function saveAppearance() {
   const theme = document.querySelector<HTMLInputElement>('input[name="theme"]:checked');
   const size = document.querySelector<HTMLInputElement>('input[name="font-size"]:checked');
+  const locale = document.querySelector<HTMLInputElement>('input[name="ui-locale"]:checked');
   if (theme) config.settings.theme = theme.value;
   if (size) config.settings.fontSize = Number(size.value);
+  if (locale) config.settings.uiLocale = locale.value as AppConfig['settings']['uiLocale'];
   applyAppearance();
   window.api.saveConfig(config);
   flashSaved();
+  if (locale) relocalize();
+}
+
+// 切換介面語言:靜態文案重填、側欄與時間軸重畫;訊息資料都還在 messageData,直接重新 render
+function relocalize(): void {
+  applyStaticText();
+  renderSidebar();
+  renderExtensions();
+  renderCliSummary();
+  updateComposerHint();
+  renderAttachChips();
+  const composerHint = document.querySelector<HTMLElement>('.composer-drop-hint');
+  if (composerHint) composerHint.textContent = t('composer.dropHint');
+  const attachButton = $<HTMLButtonElement>('#attach-btn');
+  if (attachButton) { attachButton.title = t('composer.attach'); attachButton.setAttribute('aria-label', t('composer.attach')); }
+  const messages = [...messageData.values()];
+  clearTimeline();
+  messages.forEach((m) => renderMessage(m, { animate: false }));
+  setState({ running });
+  if (historyLoaded) renderHistoryList();
+  if (openHistoryId) updateResumeButton();
+  showSettingsTab(document.querySelector<HTMLElement>('.settings-tab.active')?.dataset.tab || 'general');
 }
 
 function clearTimeline() {
@@ -259,7 +288,7 @@ function clearTimeline() {
 function emptyEl() {
   const d = document.createElement('div');
   d.id = 'empty'; d.className = 'empty';
-  d.innerHTML = '<div class="empty-icon">◎</div><div class="empty-title">把任務丟給圓桌</div><div class="empty-sub">成員會輪流討論、達成共識後由主持人分工,各自在工作目錄執行,最後互相審查。</div><div class="empty-steps"><span>① 討論</span><span class="arrow">→</span><span>② 分工執行</span><span class="arrow">→</span><span>③ 交叉審查</span></div>';
+  d.innerHTML = `<div class="empty-icon">◎</div><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
   return d;
 }
 
@@ -285,7 +314,7 @@ async function loadHistory(force = false, { quiet = false }: { quiet?: boolean }
   const refresh = $<HTMLButtonElement>('#history-refresh');
   refresh.disabled = true;
   setHistoryError('');
-  if (!quiet) $<HTMLDivElement>('#history-list').innerHTML = '<div class="history-empty">載入中…</div>';
+  if (!quiet) $<HTMLDivElement>('#history-list').innerHTML = `<div class="history-empty">${escapeHtml(t('history.loading'))}</div>`;
   try {
     const result = await window.api.sessions.list();
     historySessions = Array.isArray(result && result.sessions) ? result.sessions! : [];
@@ -294,7 +323,7 @@ async function loadHistory(force = false, { quiet = false }: { quiet?: boolean }
     if (result && result.error) setHistoryError(result.error);
     renderHistoryList();
   } catch (error) {
-    setHistoryError(`無法讀取歷史紀錄:${cleanIpcError(error)}`);
+    setHistoryError(t('history.loadFailed', { reason: cleanIpcError(error) }));
     $<HTMLDivElement>('#history-list').innerHTML = '';
   } finally {
     refresh.disabled = false;
@@ -307,7 +336,7 @@ function renderHistoryList() {
   if (!historySessions.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
-    empty.textContent = '尚無歷史紀錄';
+    empty.textContent = t('history.empty');
     list.appendChild(empty);
     return;
   }
@@ -320,18 +349,18 @@ function renderHistoryList() {
     main.className = 'history-open';
     const title = document.createElement('span');
     title.className = 'history-title';
-    title.textContent = session.title || '未命名對話';
+    title.textContent = session.title || t('history.untitled');
     if (active) main.setAttribute('aria-current', 'true');
     const meta = document.createElement('span');
     meta.className = 'history-meta';
-    const details = [formatHistoryTime(session.createdAt), `${Number(session.messageCount) || 0} 則`];
-    if (Array.isArray(session.agents) && session.agents.length) details.push(session.agents.join('、'));
+    const details = [formatHistoryTime(session.createdAt), t('history.count', { n: Number(session.messageCount) || 0 })];
+    if (Array.isArray(session.agents) && session.agents.length) details.push(joinNames(session.agents));
     meta.textContent = details.filter(Boolean).join(' · ');
     main.append(title, meta);
     main.onclick = () => openHistory(session);
     const remove = document.createElement('button');
     remove.className = 'history-delete';
-    remove.title = '刪除歷史紀錄';
+    remove.title = t('history.delete');
     remove.textContent = '✕';
     remove.onclick = () => removeHistory(session);
     item.append(main, remove);
@@ -350,12 +379,12 @@ async function openHistory(summary: SessionSummary): Promise<void> {
   historyErrors.delete(summary.id);
   try {
     const result = await window.api.sessions.read(summary.id);
-    if (!result || !result.ok) throw new Error((result && result.error) || '紀錄不存在或無法讀取');
-    if (!result.session) throw new Error('紀錄不存在或無法讀取');
+    if (!result || !result.ok) throw new Error((result && result.error) || t('history.readFailed'));
+    if (!result.session) throw new Error(t('history.readFailed'));
     const session = result.session;
     openHistoryId = summary.id;
-    $('#history-modal-title').textContent = session.title || summary.title || '歷史對話';
-    const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), `${(session.messages || []).length} 則訊息`];
+    $('#history-modal-title').textContent = session.title || summary.title || t('history.title');
+    const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), t('history.messages', { n: (session.messages || []).length })];
     $<HTMLDivElement>('#history-modal-meta').textContent = meta.filter(Boolean).join(' · ');
     renderHistoryPreview(session.messages || []);
     updateResumeButton();
@@ -378,8 +407,8 @@ function renderHistoryPreview(messages: unknown): void {
     card.className = `history-message ${message.kind || 'system'} ${message.level || ''}`;
     const head = document.createElement('div');
     head.className = 'history-message-head';
-    const who = message.kind === 'user' ? '使用者' : message.kind === 'agent' ? (message.agentName || 'AI 成員') : '系統';
-    head.textContent = [who, message.phase, message.model, formatHistoryTime(message.ts)].filter(Boolean).join(' · ');
+    const who = message.kind === 'user' ? t('who.user') : message.kind === 'agent' ? (message.agentName || t('who.agent')) : t('who.system');
+    head.textContent = [who, phaseText(message.phase), message.model, formatHistoryTime(message.ts)].filter(Boolean).join(' · ');
     const body = document.createElement('div');
     body.className = 'body';
     body.innerHTML = md(String(message.text || ''));
@@ -405,16 +434,16 @@ function renderHistoryPreview(messages: unknown): void {
     }
     preview.appendChild(card);
   }
-  if (!list.length) preview.innerHTML = '<div class="history-empty">這筆紀錄沒有訊息</div>';
+  if (!list.length) preview.innerHTML = `<div class="history-empty">${escapeHtml(t('history.noMessages'))}</div>`;
 }
 
 async function removeHistory(session: SessionSummary): Promise<void> {
   const when = formatHistoryTime(session.createdAt);
-  if (!confirm(`確定刪除歷史對話「${session.title || '未命名對話'}」${when ? `\n${when}` : ''}?`)) return;
+  if (!confirm(t('history.confirmDelete', { title: session.title || t('history.untitled'), when: when ? `\n${when}` : '' }))) return;
   historyErrors.delete(session.id);
   try {
     const result = await window.api.sessions.remove(session.id);
-    if (!result || !result.ok) throw new Error((result && result.error) || '刪除失敗');
+    if (!result || !result.ok) throw new Error((result && result.error) || t('history.deleteFailed'));
     historySessions = historySessions.filter((item) => item.id !== session.id);
     if (openHistoryId === session.id) closeHistoryModal();
     renderHistoryList();
@@ -429,12 +458,8 @@ function updateResumeButton() {
   const hint = $('#history-resume-hint');
   const current = !!openHistoryId && openHistoryId === activeSessionId;
   button.disabled = running || current;
-  button.textContent = current ? '目前的對話' : '繼續這段對話';
-  hint.textContent = running
-    ? '目前仍在進行中,停止後才能載入其他對話。'
-    : current
-      ? '這段紀錄就是目前的對話,直接在下方輸入即可。'
-      : '載入後可以直接接著送出訊息,成員會先讀過這段紀錄。';
+  button.textContent = current ? t('history.current') : t('history.resume');
+  hint.textContent = running ? t('history.hintRunning') : current ? t('history.hintCurrent') : t('history.hintResume');
 }
 
 async function resumeHistory() {
@@ -444,7 +469,7 @@ async function resumeHistory() {
   button.disabled = true;
   try {
     const result = await window.api.resume(id);
-    if (!result || !result.ok) throw new Error((result && result.error) || '無法載入這段對話');
+    if (!result || !result.ok) throw new Error((result && result.error) || t('history.resumeFailed'));
     clearTimeline();
     await clearPendingAttachments();
     activeSessionId = result.id;
@@ -456,7 +481,7 @@ async function resumeHistory() {
     $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
     $<HTMLTextAreaElement>('#input').focus();
   } catch (error) {
-    $('#history-resume-hint').textContent = `無法載入:${cleanIpcError(error)}`;
+    $('#history-resume-hint').textContent = t('history.loadError', { reason: cleanIpcError(error) });
     button.disabled = false;
   }
 }
@@ -469,7 +494,7 @@ function closeHistoryModal() {
 
 function formatHistoryTime(value: string | number | undefined): string {
   const date = new Date(value ?? NaN);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-TW', {
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(localeTag(), {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false, timeZoneName: 'short',
@@ -488,18 +513,20 @@ function renderCliSummary() {
   const checked = Object.values(cliTypes).filter((t) => cliStatus[t.id]);
   const broken = extSummary.entries.filter((e) => e.error).length;
   if (!checked.length) {
-    el.innerHTML = '<span class="status-dot"></span><span>檢查 CLI 中…</span>';
+    el.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(t('cli.checking'))}</span>`;
     return;
   }
   const ok = checked.filter((t) => cliStatus[t.id].ok);
   const level = broken || ok.length === 0 ? 'bad' : ok.length < checked.length ? 'warn' : 'ok';
-  const text = `${ok.length}/${checked.length} 個 CLI 可用${broken ? ` · ${broken} 個擴充載入失敗` : ''}`;
+  const text = `${t('cli.summary', { ok: ok.length, total: checked.length })}${broken ? ` · ${t('cli.broken', { n: broken })}` : ''}`;
   el.innerHTML = `<span class="status-dot ${level}"></span><span>${escapeHtml(text)}</span>`;
   el.title = checked.map((t) => `${cliStatus[t.id].ok ? '●' : '○'} ${t.label}:${cliStatus[t.id].ok ? cliStatus[t.id].version : cliStatus[t.id].error}`).join('\n');
 }
 
 // ---------- CLI 與擴充 ----------
-const TYPE_LABEL: Record<string, string> = { builtin: '內建', cli: 'CLI', openai: 'API', js: 'JS 外掛' };
+// 內建的「自訂指令」轉接器 label 由主程序給中文,介面上依語言顯示;其他轉接器的 label 原樣用
+const cliLabel = (type: Partial<CliType> | undefined, fallback: string): string => (type?.id === 'custom' && type.origin === 'builtin' ? t('adapter.custom') : type?.label || fallback);
+const typeLabel = (type: string): string => (['builtin', 'cli', 'openai', 'js'].includes(type) ? t(`type.${type}`) : type);
 
 async function refreshCatalog() {
   [cliTypes, extSummary] = await Promise.all([window.api.cliTypes(), window.api.ext.list()]);
@@ -519,27 +546,27 @@ function renderExtensions() {
   if (!list) return;
   const rows = [];
   // 已載入的轉接器(內建 + 擴充)
-  for (const t of Object.values(cliTypes)) {
-    const st = cliStatus[t.id];
+  for (const type of Object.values(cliTypes)) {
+    const st = cliStatus[type.id];
     const dot = `<span class="status-dot ${!st ? '' : st.ok ? 'ok' : 'bad'}"></span>`;
-    const sub = st ? (st.ok ? st.version : st.error) : t.bin ? '檢查中…' : '不需檢查';
-    const badges = [`<span class="badge">${TYPE_LABEL[t.type] || t.type}</span>`];
-    if (!t.supportsEdit) badges.push('<span class="badge">只能討論</span>');
-    const entry = extSummary.entries.find((e) => e.file === t.file);
-    if (entry && entry.overrides) badges.push('<span class="badge warn">覆寫內建</span>');
-    if (t.modelError) badges.push('<span class="badge warn">模型清單讀取失敗</span>');
-    rows.push({ file: t.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(t.label)}</b>${badges.join('')}</div><div class="ext-sub" title="${escapeHtml(sub || '')}">${escapeHtml(sub || '')}</div>${t.modelError ? `<div class="ext-err">${escapeHtml(t.modelError)}</div>` : ''}</div>` });
+    const sub = st ? (st.ok ? st.version : st.error) : type.bin ? t('ext.checking') : t('ext.noCheck');
+    const badges = [`<span class="badge">${escapeHtml(typeLabel(type.type))}</span>`];
+    if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
+    const entry = extSummary.entries.find((e) => e.file === type.file);
+    if (entry && entry.overrides) badges.push(`<span class="badge warn">${escapeHtml(t('ext.overrides'))}</span>`);
+    if (type.modelError) badges.push(`<span class="badge warn">${escapeHtml(t('ext.modelListFailed'))}</span>`);
+    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub" title="${escapeHtml(sub || '')}">${escapeHtml(sub || '')}</div>${type.modelError ? `<div class="ext-err">${escapeHtml(type.modelError)}</div>` : ''}</div>` });
   }
   // 載入失敗的擴充
   for (const e of extSummary.entries.filter((x) => x.error)) {
-    rows.push({ file: e.file, broken: true, html: `<span class="status-dot bad"></span><div class="ext-main"><div class="ext-title"><b>${escapeHtml(e.file)}</b><span class="badge bad">載入失敗</span></div><div class="ext-err">${escapeHtml(e.error)}</div></div>` });
+    rows.push({ file: e.file, broken: true, html: `<span class="status-dot bad"></span><div class="ext-main"><div class="ext-title"><b>${escapeHtml(e.file)}</b><span class="badge bad">${escapeHtml(t('ext.loadFailed'))}</span></div><div class="ext-err">${escapeHtml(e.error)}</div></div>` });
   }
   list.innerHTML = '';
   for (const r of rows) {
     const el = document.createElement('div');
     el.className = `ext-item${r.file ? ' clickable' : ''}${r.broken ? ' broken' : ''}`;
     el.innerHTML = r.html;
-    if (r.file) { const file = r.file; el.title = `點擊編輯 ${file}`; el.onclick = () => { void openExtEditor(file); }; }
+    if (r.file) { const file = r.file; el.title = t('ext.clickToEdit', { file }); el.onclick = () => { void openExtEditor(file); }; }
     list.appendChild(el);
   }
 }
@@ -562,14 +589,14 @@ function renderExtTemplates() {
   });
 
   if (!templates.length) {
-    box.innerHTML = '<div class="template-empty"><b>沒有符合的範本</b><span>試試清空搜尋,或改選「全部」。</span></div>';
+    box.innerHTML = `<div class="template-empty"><b>${escapeHtml(t('extPicker.noMatch'))}</b><span>${escapeHtml(t('extPicker.noMatchHint'))}</span></div>`;
     return;
   }
 
   const blankTemplates = templates.filter(isBlankTemplate);
   const readyTemplates = templates.filter((template) => !isBlankTemplate(template));
-  appendTemplateGroup(box, '現成範本', readyTemplates);
-  appendTemplateGroup(box, '從空白開始', blankTemplates);
+  appendTemplateGroup(box, t('extPicker.ready'), readyTemplates);
+  appendTemplateGroup(box, t('extPicker.blank'), blankTemplates);
 }
 
 function isBlankTemplate(template: ExtTemplate): boolean {
@@ -585,21 +612,21 @@ function appendTemplateGroup(container: HTMLElement, title: string, templates: E
   heading.textContent = title;
   const list = document.createElement('div');
   list.className = 'template-list';
-  for (const t of templates) {
+  for (const tpl of templates) {
     const el = document.createElement('button');
     el.className = 'template';
-    el.title = t.description;
-    el.innerHTML = `<span class="row"><b>${escapeHtml(t.label)}</b><span class="badge">${TYPE_LABEL[t.type] || t.type}</span></span><span class="hint">${escapeHtml(t.description)}</span><span class="template-action">使用此範本 →</span>`;
+    el.title = tpl.description;
+    el.innerHTML = `<span class="row"><b>${escapeHtml(tpl.label)}</b><span class="badge">${escapeHtml(typeLabel(tpl.type))}</span></span><span class="hint">${escapeHtml(tpl.description)}</span><span class="template-action">${escapeHtml(t('extPicker.use'))}</span>`;
     el.onclick = async () => {
       el.disabled = true;
       try {
-        const { file } = await window.api.ext.install(t.file);
+        const { file } = await window.api.ext.install(tpl.file);
         $<HTMLDivElement>('#ext-picker').classList.add('hidden');
         await refreshCatalog();
         openExtEditor(file);
       } catch (e) {
         el.disabled = false;
-        alert(`新增失敗:${cleanIpcError(e)}`);
+        alert(t('extPicker.installFailed', { reason: cleanIpcError(e) }));
       }
     };
     list.appendChild(el);
@@ -615,7 +642,7 @@ async function openExtEditor(file: string): Promise<void> {
     const migration = typeof result === 'object' && result ? result.migration : '';
     const migrationError = typeof result === 'object' && result ? result.migrationError : '';
     editingExtFile = file;
-    $('#ext-editor-title').textContent = `編輯擴充:${file}`;
+    $('#ext-editor-title').textContent = t('extEditor.titleFile', { file });
     $<HTMLInputElement>('#ext-file').value = file;
     $<HTMLTextAreaElement>('#ext-content').value = content;
     $<HTMLInputElement>('#ext-api-key').value = '';
@@ -632,7 +659,7 @@ async function openExtEditor(file: string): Promise<void> {
     const entry = extSummary.entries.find((e) => e.file === file);
     showExtResult(migrationError || (migration ? null : entry && entry.error), migration || null);
     $<HTMLDivElement>('#ext-editor').classList.remove('hidden');
-  } catch (e) { alert(`無法開啟:${cleanIpcError(e)}`); }
+  } catch (e) { alert(t('extEditor.openFailed', { reason: cleanIpcError(e) })); }
 }
 
 function showExtEditorTab(tab: string): void {
@@ -642,7 +669,7 @@ function showExtEditorTab(tab: string): void {
       editingExtSpec = JSON.parse($<HTMLTextAreaElement>('#ext-content').value);
       fillExtBasic(editingExtSpec);
     } catch (e) {
-      showExtResult(`JSON 格式錯誤:${(e as Error).message}`, null);
+      showExtResult(t('extEditor.jsonError', { reason: (e as Error).message }), null);
       tab = 'advanced';
     }
   }
@@ -668,13 +695,13 @@ function fillExtBasic(spec: ExtSpec | null | undefined): void {
   const simpleArgs = Array.isArray(spec.args) && spec.args.every((arg) => typeof arg === 'string');
   $<HTMLTextAreaElement>('#ext-args').disabled = Array.isArray(spec.args) && !simpleArgs;
   $<HTMLTextAreaElement>('#ext-args').value = simpleArgs ? (spec.args as string[]).join('\n') : '';
-  $('#ext-args-help').textContent = $<HTMLTextAreaElement>('#ext-args').disabled ? '此範本含條件或參數群組，請在「進階 JSON」調整。' : '';
+  $('#ext-args-help').textContent = $<HTMLTextAreaElement>('#ext-args').disabled ? t('extEditor.argsAdvanced') : '';
   $<HTMLInputElement>('#ext-base-url').value = spec.baseUrl || '';
   $<HTMLInputElement>('#ext-api-env').value = spec.apiKeyEnv || '';
   $<HTMLInputElement>('#ext-models').disabled = false;
   $<HTMLInputElement>('#ext-models').dataset.original = JSON.stringify(spec.models == null ? [] : spec.models);
   $<HTMLInputElement>('#ext-models').value = spec.models === 'auto' ? 'auto' : Array.isArray(spec.models) ? spec.models.map((model) => typeof model === 'string' ? model : model.id).filter(Boolean).join(', ') : '';
-  $('#ext-models-help').textContent = Array.isArray(spec.models) && spec.models.some((model) => model && typeof model === 'object') ? '既有模型的名稱與強度設定會保留。' : '';
+  $('#ext-models-help').textContent = Array.isArray(spec.models) && spec.models.some((model) => model && typeof model === 'object') ? t('extEditor.modelsKept') : '';
   updateExtTypeFields();
 }
 
@@ -721,7 +748,7 @@ async function refreshExtensionSecretStatus() {
     const status = await window.api.secrets.status(extensionSecretRef(), editingExtSpec.apiKeyEnv || '');
     const badge = $('#ext-key-status');
     badge.classList.toggle('configured', status.configured);
-    badge.textContent = status.configured ? `已設定 ${status.hint}${status.source === 'environment' ? '(環境變數)' : ''}` : '尚未設定';
+    badge.textContent = status.configured ? `${t('extEditor.keySet', { hint: status.hint })}${status.source === 'environment' ? t('extEditor.keyEnv') : ''}` : t('extEditor.keyUnset');
     $<HTMLButtonElement>('#ext-key-clear').disabled = status.source !== 'safeStorage';
   } catch (e) { showExtResult(cleanIpcError(e), null); }
 }
@@ -743,7 +770,7 @@ async function clearExtensionSecret() {
     $<HTMLInputElement>('#ext-api-key').value = '';
     syncExtBasicToJson();
     await refreshExtensionSecretStatus();
-    showExtResult(null, '✓ 已清除「設定 → CLI 與擴充」裡填入的 API key');
+    showExtResult(null, t('extEditor.keyCleared'));
   } catch (e) { showExtResult(cleanIpcError(e), null); }
 }
 
@@ -753,7 +780,7 @@ async function testExtensionConnection() {
   $<HTMLButtonElement>('#ext-key-test').disabled = true;
   try {
     const result = await window.api.secrets.test(editingExtSpec?.id || '');
-    showExtResult(result.ok ? null : result.error, result.ok ? `✓ ${result.version || '連線成功'}` : null);
+    showExtResult(result.ok ? null : result.error, result.ok ? `✓ ${result.version || t('extEditor.connected')}` : null);
   } catch (e) { showExtResult(cleanIpcError(e), null); }
   finally { $<HTMLButtonElement>('#ext-key-test').disabled = false; }
 }
@@ -783,10 +810,10 @@ async function saveExtension({ quiet = false }: { quiet?: boolean } = {}): Promi
     }
     const { error } = await window.api.ext.write(file, $<HTMLTextAreaElement>('#ext-content').value, editingExtFile);
     editingExtFile = file;
-    $('#ext-editor-title').textContent = `編輯擴充:${file}`;
+    $('#ext-editor-title').textContent = t('extEditor.titleFile', { file });
     await refreshCatalog();
     await refreshExtensionSecretStatus();
-    if (error || !quiet) showExtResult(error, error ? null : '✓ 已儲存並載入。成員編輯視窗的 CLI 選單已更新。');
+    if (error || !quiet) showExtResult(error, error ? null : t('extEditor.saved'));
     return !error;
   } catch (e) {
     showExtResult(cleanIpcError(e), null);
@@ -795,7 +822,7 @@ async function saveExtension({ quiet = false }: { quiet?: boolean } = {}): Promi
 }
 
 async function deleteExtension() {
-  if (!editingExtFile || !confirm(`確定刪除 ${editingExtFile}?使用這個 CLI 的成員會無法發言。`)) return;
+  if (!editingExtFile || !confirm(t('extEditor.confirmDelete', { file: editingExtFile }))) return;
   await window.api.ext.remove(editingExtFile);
   $<HTMLDivElement>('#ext-editor').classList.add('hidden');
   editingExtFile = null;
@@ -819,8 +846,8 @@ function renderSidebar() {
     el.innerHTML = `
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
-        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? '<span class="badge lead">主持人</span>' : ''} ${!cliTypes[a.cli] ? '<span class="badge bad">找不到 CLI</span>' : a.canEdit && cliTypes[a.cli].supportsEdit ? '' : '<span class="badge">唯讀</span>'}</div>
-        <div class="agent-meta">${escapeHtml((cliTypes[a.cli] || {}).label || a.cli)} · ${escapeHtml(a.model || '預設模型')} · ${escapeHtml(a.effort || '預設強度')}</div>
+        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${!cliTypes[a.cli] ? `<span class="badge bad">${escapeHtml(t('agent.cliMissing'))}</span>` : a.canEdit && cliTypes[a.cli].supportsEdit ? '' : `<span class="badge">${escapeHtml(t('agent.readOnly'))}</span>`}</div>
+        <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort || t('agent.defaultEffort'))}</div>
         ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
       </div>`;
     el.onclick = () => openModal(a.id);
@@ -832,8 +859,8 @@ function renderSidebar() {
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
   const workDir = config.settings.workDir || '';
-  $('#workdir-label').textContent = workDir ? shortPath(workDir) : '未設定工作目錄';
-  $<HTMLButtonElement>('#workdir-chip').title = `工作目錄:${workDir || '未設定'}(點擊更換)`;
+  $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
+  $<HTMLButtonElement>('#workdir-chip').title = t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
   const sel = $<HTMLSelectElement>('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
   updateSpeakingHighlight();
@@ -861,13 +888,13 @@ async function openModal(id: string | null): Promise<void> {
   const blank: Omit<AgentConfig, 'id'> = { name: '', cli: 'claude', model: '', effort: '', persona: '', color: randomColor(), canEdit: true, enabled: true, customCommand: '' };
   // id 一定來自 config.agents(側欄與 @ 選單都是從它產生的),find 不會落空。
   const a: Omit<AgentConfig, 'id'> = id ? (config.agents.find((x) => x.id === id) as AgentConfig) : blank;
-  $('#modal-title').textContent = id ? '編輯成員' : '新增成員';
-  const groups: Array<[string, (t: CliType) => boolean]> = [['內建', (t) => t.origin === 'builtin'], ['擴充', (t) => t.origin !== 'builtin']];
+  $('#modal-title').textContent = id ? t('agent.editTitle') : t('agent.addTitle');
+  const groups: Array<[string, (type: CliType) => boolean]> = [[t('agent.groupBuiltin'), (type) => type.origin === 'builtin'], [t('agent.groupExt'), (type) => type.origin !== 'builtin']];
   let cliOptions = groups.map(([name, pick]) => {
-    const opts = Object.values(cliTypes).filter(pick).map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}${t.type !== 'builtin' ? `(${TYPE_LABEL[t.type] || t.type})` : ''}</option>`).join('');
-    return opts ? `<optgroup label="${name}">${opts}</optgroup>` : '';
+    const opts = Object.values(cliTypes).filter(pick).map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(cliLabel(type, type.id))}${type.type !== 'builtin' ? `(${escapeHtml(typeLabel(type.type))})` : ''}</option>`).join('');
+    return opts ? `<optgroup label="${escapeHtml(name)}">${opts}</optgroup>` : '';
   }).join('');
-  if (a.cli && !cliTypes[a.cli]) cliOptions += `<option value="${escapeHtml(a.cli)}">${escapeHtml(a.cli)}(找不到,請重新選擇)</option>`;
+  if (a.cli && !cliTypes[a.cli]) cliOptions += `<option value="${escapeHtml(a.cli)}">${escapeHtml(a.cli)}${escapeHtml(t('agent.cliNotFound'))}</option>`;
   $<HTMLSelectElement>('#f-cli').innerHTML = cliOptions;
   $<HTMLSelectElement>('#f-cli').value = a.cli;
   $<HTMLInputElement>('#f-name').value = a.name;
@@ -890,9 +917,9 @@ function fillCliDependentFields(cli: string, model?: string, effort?: string): v
   const models = modelsOf(cli);
   const isCustomCli = !!(cliTypes[cli] && cliTypes[cli].usesCustomCommand);
   const sel = $<HTMLSelectElement>('#f-model-select');
-  sel.innerHTML = '<option value="">(CLI 預設模型)</option>'
+  sel.innerHTML = `<option value="">${escapeHtml(t('agent.cliDefaultModel'))}</option>`
     + models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label !== m.id ? `${m.id}(${m.label})` : m.id)}</option>`).join('')
-    + `<option value="${CUSTOM_MODEL}">其他(手動輸入)…</option>`;
+    + `<option value="${CUSTOM_MODEL}">${escapeHtml(t('agent.otherModel'))}</option>`;
 
   // model 為 undefined 代表剛切換 CLI:預設選清單第一個。舊設定存的別名(例如 opus)會對應到完整名稱。
   const raw = model === undefined ? (models[0] ? models[0].id : '') : String(model || '');
@@ -909,8 +936,8 @@ function fillCliDependentFields(cli: string, model?: string, effort?: string): v
 
 // 轉接器不支援修改檔案時(例如 API),停用勾選框並說明原因;成員原本的設定保留不動。
 function updateEditCapability(cli: string): void {
-  const t = cliTypes[cli];
-  const supported = !t || t.supportsEdit;
+  const type = cliTypes[cli];
+  const supported = !type || type.supportsEdit;
   const box = $<HTMLInputElement>('#f-canEdit');
   box.disabled = !supported;
   let note = $<HTMLDivElement>('#f-canEdit-note');
@@ -920,7 +947,7 @@ function updateEditCapability(cli: string): void {
     note.className = 'field-note';
     $('#f-canEdit-wrap').after(note);
   }
-  note.textContent = supported ? '' : `${t.label} 不能修改檔案,只能參與討論與審查`;
+  note.textContent = supported ? '' : t('agent.cannotEdit', { label: cliLabel(type, cli) });
   note.hidden = !!supported;
 }
 
@@ -939,37 +966,37 @@ function onModelSelect() {
 // 依目前選的模型更新說明文字與強度選單。effort 未給時沿用畫面上的選擇。
 function refreshModelDependents(effort?: string): void {
   const cli = $<HTMLSelectElement>('#f-cli').value;
-  const t = cliTypes[cli] || {};
-  const source = t.modelSource;
+  const type = cliTypes[cli] || {};
+  const source = type.modelSource;
   const info = findModel(cli, currentModel());
   const notes = [];
   if (info && info.description) notes.push(info.description);
-  if (source === 'fallback') notes.push('(讀不到 CLI 的模型快取,顯示內建清單;先執行一次該 CLI 通常就會產生)');
-  if (source === 'error') notes.push(`(模型清單讀取失敗:${t.modelError || '未知錯誤'};可以選「其他(手動輸入)」)`);
-  if (source === 'loading') notes.push('(模型清單讀取中,稍後重新打開這個視窗)');
-  if (t.description && t.origin !== 'builtin' && !info) notes.push(t.description);
+  if (source === 'fallback') notes.push(t('agent.fallbackNote'));
+  if (source === 'error') notes.push(t('agent.modelErrorNote', { error: type.modelError || t('agent.unknownError') }));
+  if (source === 'loading') notes.push(t('agent.loadingNote'));
+  if (type.description && type.origin !== 'builtin' && !info) notes.push(type.description);
   $<HTMLDivElement>('#f-model-desc').textContent = notes.join(' ');
   fillEfforts(cli, info, effort === undefined ? $<HTMLSelectElement>('#f-effort').value : effort);
 }
 
 function fillEfforts(cli: string, info: Model | null, wanted: string): void {
   const eff = $<HTMLSelectElement>('#f-effort');
-  const t = cliTypes[cli] || {};
+  const type = cliTypes[cli] || {};
   const restricted = !!info && !info.unrestrictedEffort;
   // 認得且有限制的模型用它自己的強度清單;其他情況列出轉接器設定的強度與所有模型強度的聯集。
   let efforts: string[];
   if (restricted) efforts = info!.efforts || [];
   else {
-    const pool = new Set([...(t.efforts || []), ...modelsOf(cli).flatMap((m) => m.efforts || [])]);
+    const pool = new Set([...(type.efforts || []), ...modelsOf(cli).flatMap((m) => m.efforts || [])]);
     efforts = [...ModelRules.EFFORT_RANK.filter((e) => pool.has(e)), ...[...pool].filter((e) => !ModelRules.EFFORT_RANK.includes(e))];
   }
   const unsupported = restricted && efforts.length === 0;
   eff.disabled = efforts.length === 0;
   eff.innerHTML = unsupported
-    ? '<option value="">(此模型不支援強度設定)</option>'
+    ? `<option value="">${escapeHtml(t('agent.effortUnsupported'))}</option>`
     : efforts.length === 0
-      ? '<option value="">(這個 CLI 沒有設定強度選項)</option>'
-      : `<option value="">(預設${info && info.defaultEffort ? ':' + info.defaultEffort : ''})</option>` + efforts.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
+      ? `<option value="">${escapeHtml(t('agent.effortNone'))}</option>`
+      : `<option value="">${escapeHtml(info && info.defaultEffort ? t('agent.effortDefaultOf', { effort: info.defaultEffort }) : t('agent.effortDefault'))}</option>` + efforts.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
   // 換模型時保留原本的強度;新模型不支援就降到最接近的等級,跟實際執行時的規則一致。
   const resolved = restricted ? ModelRules.resolveEffort([info!], info!.id, wanted).effort : wanted;
   eff.value = resolved && efforts.includes(resolved) ? resolved : '';
@@ -987,7 +1014,7 @@ function saveModal() {
   closeModal();
 }
 function deleteAgent() {
-  if (!editingId || !confirm('確定刪除這位成員?')) return;
+  if (!editingId || !confirm(t('agent.confirmDelete'))) return;
   config.agents = config.agents.filter((x) => x.id !== editingId);
   if (config.settings.leadAgentId === editingId) config.settings.leadAgentId = null;
   window.api.saveConfig(config);
@@ -996,7 +1023,6 @@ function deleteAgent() {
 }
 
 // ---------- 對話 ----------
-const STAGE_LABEL: Record<string, string> = { discuss: '① 討論', execute: '② 分工執行', review: '③ 交叉審查', direct: '@ 指定回覆' };
 const ATTACH_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'txt', 'md', 'json', 'csv', 'log', 'pdf']);
 const ATTACH_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
 const pendingAttachments: PendingAttachment[] = [];
@@ -1027,14 +1053,14 @@ async function sendMessage() {
   } catch (error) {
     pendingAttachments.unshift(...toClear);
     renderAttachChips();
-    showAttachError(cleanIpcError(error) || '送出失敗');
+    showAttachError(cleanIpcError(error) || t('composer.sendFailed'));
   }
 }
 
 function setState(s: ChatState): void {
   running = !!s.running;
   const pill = $<HTMLDivElement>('#phase-pill');
-  pill.textContent = running ? phaseText(s.phase) : PHASE_TEXT.idle;
+  pill.textContent = running ? phaseText(s.phase) : t('phase.idle');
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
   $<HTMLButtonElement>('#stop-btn').disabled = !running;
   updateComposerHint();
@@ -1047,11 +1073,11 @@ function enabledAgents() { return (config && config.agents ? config.agents : [])
 
 function updateComposerHint() {
   const mentioned = Marker.findMentions ? Marker.findMentions($<HTMLTextAreaElement>('#input').value, enabledAgents()) : [];
-  const names = mentioned.map((a) => a.name).join('、');
+  const names = joinNames(mentioned.map((a) => a.name));
   let text = '';
-  if (mentioned.length && running) text = `@ 指定:${names} 會在下一次發言時看到;任務結束前沒輪到會補一次回覆`;
-  else if (mentioned.length) text = `@ 指定:只有 ${names} 會回覆,不跑討論流程`;
-  else if (running) text = '進行中,現在送出的訊息會在下一位成員發言時帶入';
+  if (mentioned.length && running) text = t('hint.mentionRunning', { names });
+  else if (mentioned.length) text = t('hint.mentionIdle', { names });
+  else if (running) text = t('hint.running');
   const hint = $('#hint');
   hint.textContent = text;
   hint.title = text;
@@ -1086,7 +1112,7 @@ function renderMentionMenu() {
   menu.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'mention-menu-head';
-  head.textContent = '指定成員';
+  head.textContent = t('composer.mentionMenu');
   menu.appendChild(head);
   mentionMenu.items.forEach((agent, i) => {
     const option = document.createElement('div');
@@ -1094,8 +1120,8 @@ function renderMentionMenu() {
     option.id = `mention-option-${i}`;
     option.setAttribute('role', 'option');
     option.setAttribute('aria-selected', String(i === mentionMenu.index));
-    const t = cliTypes[agent.cli] || {};
-    option.innerHTML = `<div class="avatar" style="background:${escapeHtml(agent.color || '#6c8cff')}">${escapeHtml(initials(agent.name))}</div><div class="mention-option-main"><b>${escapeHtml(agent.name)}</b><span>${escapeHtml([t.label || agent.cli, agent.model].filter(Boolean).join(' · '))}</span></div>`;
+    const type = cliTypes[agent.cli] || {};
+    option.innerHTML = `<div class="avatar" style="background:${escapeHtml(agent.color || '#6c8cff')}">${escapeHtml(initials(agent.name))}</div><div class="mention-option-main"><b>${escapeHtml(agent.name)}</b><span>${escapeHtml([cliLabel(type, agent.cli), agent.model].filter(Boolean).join(' · '))}</span></div>`;
     // mousedown 就選取:click 會先觸發輸入框 blur 把選單關掉
     option.addEventListener('mousedown', (e) => { e.preventDefault(); pickMention(i); });
     option.addEventListener('mousemove', () => { if (mentionMenu.index !== i) { mentionMenu.index = i; renderMentionMenu(); } });
@@ -1232,20 +1258,17 @@ const STAGE_OF_CODE: Record<string, string> = {
   review: 'review', repair: 'review', summary: 'review',
 };
 
-// 顯示文字一律在 renderer 這側組出(第二輪換成 t('phase.*') 即可)。
-const PHASE_TEXT: Record<string, string> = {
-  idle: '閒置', direct: '指定', discuss: '討論', divide: '分工',
-  execute: '執行', review: '交叉審查', repair: '修復', summary: '總結',
-};
+// 顯示文字一律在 renderer 這側依介面語言組出。
+const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'divide', 'execute', 'review', 'repair', 'summary']);
 
 function phaseText(phase: PhaseValue | undefined | null): string {
   if (!phase) return '';
   if (!isPhaseInfo(phase)) return phase; // 舊 session 存的是現成字串,原樣顯示
-  const label = PHASE_TEXT[phase.code] || phase.code;
+  const label = PHASE_CODES.has(phase.code) ? t(`phase.${phase.code}`) : phase.code;
   if (phase.code === 'discuss' && phase.round) {
-    return phase.maxRounds ? `${label} 第 ${phase.round}/${phase.maxRounds} 回合` : `${label} R${phase.round}`;
+    return phase.maxRounds ? t('phase.discussRound', { label, round: phase.round, max: phase.maxRounds }) : t('phase.discussR', { label, round: phase.round });
   }
-  if (phase.code === 'direct' && phase.names && phase.names.length) return `${label} ${phase.names.join('、')}`;
+  if (phase.code === 'direct' && phase.names && phase.names.length) return `${label} ${joinNames(phase.names)}`;
   return label;
 }
 
@@ -1290,14 +1313,14 @@ function insertTimelineMarkers(el: HTMLElement, m: ChatMessage): void {
   if (stage && stage !== inherited) {
     const divider = document.createElement('div');
     divider.className = 'tl-stage';
-    divider.innerHTML = `<span class="tl-stage-label">${STAGE_LABEL[stage] || stage}</span>`;
+    divider.innerHTML = `<span class="tl-stage-label">${escapeHtml(['discuss', 'execute', 'review', 'direct'].includes(stage) ? t(`stage.${stage}`) : stage)}</span>`;
     el.before(divider);
   }
   if (round && String(round) !== (prev && prev.dataset.round || '')) {
     const maxRounds = Number(config && config.settings && config.settings.maxRounds) || 0;
     const divider = document.createElement('div');
     divider.className = 'tl-round';
-    divider.textContent = maxRounds ? `第 ${round} 輪 / ${maxRounds}` : `第 ${round} 輪`;
+    divider.textContent = maxRounds ? t('timeline.round', { round, max: maxRounds }) : t('timeline.roundOnly', { round });
     el.before(divider);
   }
 }
@@ -1321,7 +1344,7 @@ function updateSpeakingHighlight() {
 }
 
 function userHtml(m: ChatMessage): string {
-  return `<div class="avatar" style="background:var(--user-avatar)">我</div><div class="bubble"><div class="body">${md(m.text || '')}</div>${attachmentsMarkup(m.attachments)}</div>`;
+  return `<div class="avatar" style="background:var(--user-avatar)">${escapeHtml(t('msg.me'))}</div><div class="bubble"><div class="body">${md(m.text || '')}</div>${attachmentsMarkup(m.attachments)}</div>`;
 }
 function systemHtml(m: ChatMessage): string {
   return `<div class="bubble"><div class="body">${md(m.text || '')}</div></div>`;
@@ -1345,9 +1368,9 @@ function attachmentChipMarkup(item: AttachmentMeta | PendingAttachment, removabl
     ? `<img class="attach-thumb" alt="" src="${escapeHtml(item.thumbUrl)}">`
     : `<span class="attach-thumb file">${isImage ? '🖼' : '📄'}</span>`;
   const remove = removable
-    ? `<button type="button" class="ghost small icon attach-remove" data-attach-id="${escapeHtml(item.id)}" title="移除附件" aria-label="移除 ${escapeHtml(item.name)}">✕</button>`
+    ? `<button type="button" class="ghost small icon attach-remove" data-attach-id="${escapeHtml(item.id)}" title="${escapeHtml(t('attach.remove'))}" aria-label="${escapeHtml(t('attach.removeNamed', { name: item.name }))}">✕</button>`
     : '';
-  return `<div class="attach-chip" data-attach-id="${escapeHtml(item.id || '')}">${thumb}<span class="attach-meta"><span class="attach-name" title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '未命名')}</span><span class="attach-size">${escapeHtml(formatBytes(item.size))}</span></span>${remove}</div>`;
+  return `<div class="attach-chip" data-attach-id="${escapeHtml(item.id || '')}">${thumb}<span class="attach-meta"><span class="attach-name" title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || t('attach.unnamed'))}</span><span class="attach-size">${escapeHtml(formatBytes(item.size))}</span></span>${remove}</div>`;
 }
 
 function hydrateAttachmentThumbs(root: HTMLElement | null, list: Array<AttachmentMeta | PendingAttachment> | undefined): void {
@@ -1374,12 +1397,12 @@ function hydrateAttachmentThumbs(root: HTMLElement | null, list: Array<Attachmen
 function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   const agreed = Marker.hasMarker(m.text || '', 'AGREED');
   const text = Marker.stripMarker(m.text || '', 'AGREED');
-  const status = m.status === 'running' ? '<span class="spinner" title="產生中"></span>' : '';
+  const status = m.status === 'running' ? `<span class="spinner" title="${escapeHtml(t('msg.generating'))}"></span>` : '';
   const shell = ensureAgentShell(el);
   shell.avatar.style.background = m.color || '#6c8cff';
   setTextIfChanged(shell.avatar, initials(m.agentName));
   shell.bubble.style.setProperty('--c', m.color || '#6c8cff');
-  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml((cliTypes[m.cli || ''] || {}).label || m.cli)}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${agreed ? '<span class="badge agreed">✓ 同意分工</span>' : ''}${status}`);
+  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${status}`);
   renderThinking(shell.thinking, m.thinking || '');
   renderActivities(shell.activities, m.activities || []);
   const body = text ? md(text) : (m.status === 'running' ? '<span class="hint">…</span>' : '');
@@ -1389,7 +1412,7 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   const usage = usageText(m.usage);
   shell.usage.hidden = !usage;
   setTextIfChanged(shell.usage, usage);
-  setTextIfChanged(shell.statusLine, '正在輸出…');
+  setTextIfChanged(shell.statusLine, t('msg.streaming'));
 }
 
 function ensureAgentShell(el: HTMLElement): AgentShell {
@@ -1413,14 +1436,14 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     usage.className = 'usage';
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
-    statusLine.textContent = '正在輸出…';
+    statusLine.textContent = t('msg.streaming');
     bubble.append(head, thinking, activities, body, error, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
-    statusLine.textContent = '正在輸出…';
+    statusLine.textContent = t('msg.streaming');
     el.querySelector<HTMLElement>(':scope > .bubble')!.appendChild(statusLine);
   }
   // 以上分支保證這些節點都存在,querySelector 不會落空。
@@ -1445,7 +1468,7 @@ function renderThinking(slot: HTMLElement, thinking: string): void {
     details = document.createElement('details');
     details.className = 'thinking';
     const summary = document.createElement('summary');
-    summary.textContent = '💭 思考過程';
+    summary.textContent = t('msg.thinking');
     const content = document.createElement('div');
     content.className = 'content';
     details.append(summary, content);
@@ -1470,8 +1493,8 @@ function renderActivities(slot: HTMLElement, activities: Activity[]): void {
       slot.appendChild(details);
     }
     details.className = `act ${activity.kind === 'note' ? 'note' : ''} ${activity.status || ''}`;
-    setHtmlIfChanged(details.querySelector<CachedEl>('summary')!, `<span class="dot"></span>${escapeHtml(activity.title || '工具')}`);
-    const detail = [activity.detail, activity.result ? '── 結果 ──\n' + activity.result : ''].filter(Boolean).join('\n');
+    setHtmlIfChanged(details.querySelector<CachedEl>('summary')!, `<span class="dot"></span>${escapeHtml(activity.title || t('msg.tool'))}`);
+    const detail = [activity.detail, activity.result ? `${t('msg.result')}\n` + activity.result : ''].filter(Boolean).join('\n');
     const pre = details.querySelector<CachedEl & HTMLPreElement>('pre')!;
     pre.hidden = !detail;
     setTextIfChanged(pre, detail);
@@ -1506,7 +1529,7 @@ function rawUsageText(u: UsageInfo | null | undefined): string {
   const fields = raw && typeof raw === 'object'
     ? Object.entries(raw).filter(([key]) => !['shape', 'raw'].includes(key)).map(([key, value]) => `${key}=${rawValue(value)}`)
     : [];
-  return fields.length ? `原始用量：${fields.join(' · ')}` : '原始用量（無欄位）';
+  return fields.length ? t('usage.raw', { fields: fields.join(' · ') }) : t('usage.rawEmpty');
 }
 
 function usageText(u: UsageInfo | null | undefined): string {
@@ -1515,14 +1538,14 @@ function usageText(u: UsageInfo | null | undefined): string {
   const parts = [];
   if (hasNumber(u.inputTokens)) {
     const detail = [];
-    if (hasNumber(u.cachedInputTokens)) detail.push(`其中快取 ${fmt(numeric(u.cachedInputTokens))}`);
-    if (hasNumber(u.cacheWriteTokens)) detail.push(`寫入快取 ${fmt(numeric(u.cacheWriteTokens))}`);
-    parts.push(`輸入 ${fmt(numeric(u.inputTokens))}${detail.length ? `（${detail.join('、')}）` : ''}`);
+    if (hasNumber(u.cachedInputTokens)) detail.push(t('usage.cached', { n: fmt(numeric(u.cachedInputTokens)) }));
+    if (hasNumber(u.cacheWriteTokens)) detail.push(t('usage.cacheWrite', { n: fmt(numeric(u.cacheWriteTokens)) }));
+    parts.push(`${t('usage.input', { n: fmt(numeric(u.inputTokens)) })}${detail.length ? `（${joinNames(detail)}）` : ''}`);
   } else {
-    if (hasNumber(u.cachedInputTokens)) parts.push(`快取輸入 ${fmt(numeric(u.cachedInputTokens))}`);
-    if (hasNumber(u.cacheWriteTokens)) parts.push(`寫入快取 ${fmt(numeric(u.cacheWriteTokens))}`);
+    if (hasNumber(u.cachedInputTokens)) parts.push(t('usage.cachedInput', { n: fmt(numeric(u.cachedInputTokens)) }));
+    if (hasNumber(u.cacheWriteTokens)) parts.push(t('usage.cacheWrite', { n: fmt(numeric(u.cacheWriteTokens)) }));
   }
-  if (hasNumber(u.outputTokens)) parts.push(`輸出 ${fmt(numeric(u.outputTokens))}`);
+  if (hasNumber(u.outputTokens)) parts.push(t('usage.output', { n: fmt(numeric(u.outputTokens)) }));
   if (hasNumber(u.costUsd)) parts.push(`$${numeric(u.costUsd).toFixed(3)}`);
   return parts.join(' · ');
 }
@@ -1555,7 +1578,7 @@ function updateUsageTotal() {
   for (const message of messageData.values()) {
     const usage = message && message.usage;
     if (!usage) continue;
-    const agent = message.agentId || message.agentName || '未知成員';
+    const agent = message.agentId || message.agentName || t('usage.unknownAgent');
     usageTurns++;
     usageAgents.add(agent);
     if (!usage.shape || usage.shape === 'unknown') { unknownTurns++; continue; }
@@ -1564,25 +1587,24 @@ function updateUsageTotal() {
   const compact = [];
   if (metrics.inputTokens.turns) {
     const detail = [];
-    if (metrics.cachedInputTokens.turns) detail.push(`其中快取 ${fmt(metrics.cachedInputTokens.total)}`);
-    if (metrics.cacheWriteTokens.turns) detail.push(`寫入快取 ${fmt(metrics.cacheWriteTokens.total)}`);
-    compact.push(`輸入 ${fmt(metrics.inputTokens.total)}${detail.length ? `（${detail.join('、')}）` : ''}`);
+    if (metrics.cachedInputTokens.turns) detail.push(t('usage.cached', { n: fmt(metrics.cachedInputTokens.total) }));
+    if (metrics.cacheWriteTokens.turns) detail.push(t('usage.cacheWrite', { n: fmt(metrics.cacheWriteTokens.total) }));
+    compact.push(`${t('usage.input', { n: fmt(metrics.inputTokens.total) })}${detail.length ? `（${joinNames(detail)}）` : ''}`);
   } else {
-    if (metrics.cachedInputTokens.turns) compact.push(`快取輸入 ${fmt(metrics.cachedInputTokens.total)}`);
-    if (metrics.cacheWriteTokens.turns) compact.push(`寫入快取 ${fmt(metrics.cacheWriteTokens.total)}`);
+    if (metrics.cachedInputTokens.turns) compact.push(t('usage.cachedInput', { n: fmt(metrics.cachedInputTokens.total) }));
+    if (metrics.cacheWriteTokens.turns) compact.push(t('usage.cacheWrite', { n: fmt(metrics.cacheWriteTokens.total) }));
   }
-  if (metrics.outputTokens.turns) compact.push(`輸出 ${fmt(metrics.outputTokens.total)}`);
-  if (metrics.costUsd.turns) compact.push(`$${metrics.costUsd.total.toFixed(3)}`, `成本涵蓋 ${metrics.costUsd.turns}/${usageTurns} 回合`);
-  if (unknownTurns) compact.push(`${unknownTurns} 則未納入`);
+  if (metrics.outputTokens.turns) compact.push(t('usage.output', { n: fmt(metrics.outputTokens.total) }));
+  if (metrics.costUsd.turns) compact.push(`$${metrics.costUsd.total.toFixed(3)}`, t('usage.costCoverage', { a: metrics.costUsd.turns, b: usageTurns }));
+  if (unknownTurns) compact.push(t('usage.unknownTurns', { n: unknownTurns }));
 
-  const labels: Record<string, string> = { inputTokens: '輸入', cachedInputTokens: '快取輸入', cacheWriteTokens: '寫入快取', outputTokens: '輸出', costUsd: '成本' };
   const details = [];
   for (const [key, metric] of Object.entries(metrics)) {
     if (!metric.turns) continue;
     const total = key === 'costUsd' ? `$${metric.total.toFixed(6)}` : exactNumber(metric.total);
-    details.push(`${labels[key]} ${total}（涵蓋 ${metric.agents.size}/${usageAgents.size} 位成員、${metric.turns}/${usageTurns} 次用量回報）`);
+    details.push(t('usage.detail', { label: t(`usage.label.${key}`), total, a: metric.agents.size, b: usageAgents.size, c: metric.turns, d: usageTurns }));
   }
-  if (unknownTurns) details.push(`${unknownTurns}/${usageTurns} 次未知格式用量未納入總計`);
+  if (unknownTurns) details.push(t('usage.unknownDetail', { a: unknownTurns, b: usageTurns }));
   const el = $<HTMLDivElement>('#usage-total');
   el.hidden = compact.length === 0;
   el.textContent = compact.join(' · ');
@@ -1597,9 +1619,9 @@ async function exportConversation() {
   button.disabled = true;
   try {
     const result = await window.api.exportChat();
-    if (result && result.error) alert(`匯出失敗:${result.error}`);
+    if (result && result.error) alert(t('export.failed', { reason: result.error }));
   } catch (error) {
-    alert(`匯出失敗:${cleanIpcError(error)}`);
+    alert(t('export.failed', { reason: cleanIpcError(error) }));
   } finally {
     exporting = false;
     updateUsageTotal();
@@ -1629,7 +1651,7 @@ function setupComposerAttachments() {
 
   const hint = document.createElement('div');
   hint.className = 'composer-drop-hint';
-  hint.textContent = '放開以附加檔案';
+  hint.textContent = t('composer.dropHint');
   box.prepend(hint);
 
   const chips = document.createElement('div');
@@ -1648,8 +1670,8 @@ function setupComposerAttachments() {
   button.id = 'attach-btn';
   button.type = 'button';
   button.className = 'ghost small icon';
-  button.title = '附加檔案';
-  button.setAttribute('aria-label', '附加檔案');
+  button.title = t('composer.attach');
+  button.setAttribute('aria-label', t('composer.attach'));
   button.textContent = '📎';
   button.onclick = () => pickAttachments();
   bar.insertBefore(button, bar.querySelector<HTMLElement>('.spacer'));
@@ -1745,23 +1767,23 @@ async function addAttachmentFiles(fileList: FileList | null | undefined): Promis
   const errors = [];
   let total = pendingAttachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
   for (const file of files) {
-    const name = file.name || '未命名檔案';
+    const name = file.name || t('attach.unnamedFile');
     const ext = extensionOf(name);
     const size = Number(file.size) || 0;
     if (pendingAttachments.length >= attachLimits.maxFiles) {
-      errors.push(formatAttachError(name, `一次最多 ${attachLimits.maxFiles} 個檔案`));
+      errors.push(formatAttachError(name, t('attach.tooMany', { n: attachLimits.maxFiles })));
       continue;
     }
     if (!ATTACH_EXTS.has(ext)) {
-      errors.push(formatAttachError(name, '不支援此類型,請改傳圖片、文字檔或 PDF'));
+      errors.push(formatAttachError(name, t('attach.unsupported')));
       continue;
     }
     if (size > attachLimits.maxFileBytes) {
-      errors.push(formatAttachError(name, `單檔不能超過 ${formatBytes(attachLimits.maxFileBytes)}`));
+      errors.push(formatAttachError(name, t('attach.tooLarge', { size: formatBytes(attachLimits.maxFileBytes) })));
       continue;
     }
     if (total + size > attachLimits.maxTotalBytes) {
-      errors.push(formatAttachError(name, `這次附件合計不能超過 ${formatBytes(attachLimits.maxTotalBytes)}`));
+      errors.push(formatAttachError(name, t('attach.totalTooLarge', { size: formatBytes(attachLimits.maxTotalBytes) })));
       continue;
     }
     const mismatch = mimeConflictsWithName(name, file.type);
@@ -1783,7 +1805,7 @@ async function addAttachmentFiles(fileList: FileList | null | undefined): Promis
 }
 
 async function fileToAddItem(file: File, api: RendererApi['attachments']): Promise<AttachmentInput> {
-  const name = file.name || '未命名';
+  const name = file.name || t('attach.unnamed');
   const filePath = typeof api.pathForFile === 'function' ? String(api.pathForFile(file) || '') : '';
   if (filePath) return { name, path: filePath };
   const data = await file.arrayBuffer();
@@ -1806,7 +1828,7 @@ async function storeAttachmentStub(file: File): Promise<PendingAttachment> {
 
 function normalizeAttachment(item: Partial<PendingAttachment> & { type?: string } | null | undefined, file?: File): PendingAttachment {
   const src = item || {};
-  const name = src.name || (file && file.name) || '未命名';
+  const name = src.name || (file && file.name) || t('attach.unnamed');
   const mime = src.mime || src.type || (file && file.type) || mimeFromName(name);
   const kind = src.kind || kindFromName(name, mime);
   return {
@@ -1890,11 +1912,12 @@ function formatAttachError(name: string, reason: string): string {
   const file = String(name || '').trim();
   let detail = String(reason || '').trim();
   detail = detail.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-  if (file && (detail.includes(`「${file}」`) || /^無法附加「/.test(detail))) return detail;
-  if (file && detail) return `無法附加「${file}」:${detail.replace(/^[:：,，]\s*/, '')}`;
-  if (file) return `無法附加「${file}」`;
-  if (detail) return /^無法附加/.test(detail) ? detail : `無法附加檔案:${detail}`;
-  return '無法附加檔案:發生未知錯誤';
+  const prefix = t('attach.cannotPrefix');
+  if (file && (detail.includes(`「${file}」`) || detail.includes(`"${file}"`) || detail.startsWith(prefix))) return detail;
+  if (file && detail) return t('attach.cannotReason', { name: file, reason: detail.replace(/^[:：,，]\s*/, '') });
+  if (file) return t('attach.cannot', { name: file });
+  if (detail) return detail.startsWith(prefix) ? detail : t('attach.cannotFile', { reason: detail });
+  return t('attach.unknown');
 }
 
 function mimeConflictsWithName(name: string, mime: string): string {
@@ -1904,11 +1927,11 @@ function mimeConflictsWithName(name: string, mime: string): string {
   if (!ATTACH_EXTS.has(ext)) return '';
   if (ATTACH_IMAGE_EXTS.has(ext)) {
     const expected = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : mimeFromName(name);
-    return type === expected ? '' : `內容不是 ${ext.toUpperCase()} 格式(副檔名與實際內容不符)`;
+    return type === expected ? '' : t('attach.mismatch', { ext: ext.toUpperCase() });
   }
-  if (ext === 'pdf') return type === 'application/pdf' ? '' : '內容不是 PDF 格式(副檔名與實際內容不符)';
+  if (ext === 'pdf') return type === 'application/pdf' ? '' : t('attach.mismatch', { ext: 'PDF' });
   if (type.startsWith('image/') || type === 'application/pdf' || /executable|zip|octet/.test(type)) {
-    return `內容不是 ${ext.toUpperCase()} 格式(副檔名與實際內容不符)`;
+    return t('attach.mismatch', { ext: ext.toUpperCase() });
   }
   return '';
 }
@@ -1960,7 +1983,7 @@ function readFileDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('無法讀取預覽'));
+    reader.onerror = () => reject(reader.error || new Error(t('attach.previewFailed')));
     reader.readAsDataURL(file);
   });
 }
@@ -1972,7 +1995,7 @@ function cssEscape(value: string): string {
 
 // ---------- 小工具 ----------
 function fmt(n: number): string { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
-function exactNumber(n: number): string { return Number(n).toLocaleString('zh-TW', { maximumFractionDigits: 20 }); }
+function exactNumber(n: number): string { return Number(n).toLocaleString(localeTag(), { maximumFractionDigits: 20 }); }
 // 只留最後兩層,例如 /Users/me/projects/app → …/projects/app
 function shortPath(p: string): string {
   const parts = String(p).replace(/\/+$/, '').split('/').filter(Boolean);

@@ -7,24 +7,25 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- 靜態文案以 data-i18n* 標記,由 renderer/i18n.ts 的 applyStaticText 依介面語言填入;這裡的中文只是啟動瞬間的預設值 -->
   <div id="app">
     <aside id="sidebar">
       <div class="drag-region"></div>
       <div class="side-title">
         <span class="logo">◎</span>
-        <div><div class="app-name">AI Roundtable</div><div class="app-sub">多 AI CLI 圓桌會議</div></div>
+        <div><div class="app-name">AI Roundtable</div><div class="app-sub" data-i18n="app.sub">多 AI CLI 圓桌會議</div></div>
       </div>
 
       <div class="side-scroll">
         <div class="side-section">
-          <div class="side-head"><span>成員</span><button id="add-agent" class="ghost small">+ 新增</button></div>
+          <div class="side-head"><span data-i18n="side.members">成員</span><button id="add-agent" class="ghost small" data-i18n="side.add">+ 新增</button></div>
           <div id="agent-list"></div>
         </div>
 
         <div class="side-section history-section">
           <div class="side-head history-head">
-            <button id="history-toggle" class="history-toggle" aria-expanded="false"><span class="history-arrow">▸</span> 歷史對話</button>
-            <button id="history-refresh" class="ghost small icon" title="重新整理" hidden>↻</button>
+            <button id="history-toggle" class="history-toggle" aria-expanded="false"><span class="history-arrow">▸</span> <span data-i18n="side.history">歷史對話</span></button>
+            <button id="history-refresh" class="ghost small icon" data-i18n-title="side.refresh" title="重新整理" hidden>↻</button>
           </div>
           <div id="history-panel" hidden>
             <div id="history-error" class="history-error" hidden></div>
@@ -34,44 +35,44 @@
       </div>
 
       <div class="side-foot">
-        <button id="cli-summary" class="cli-summary" title="查看 CLI 與擴充狀態"></button>
-        <button id="settings-btn" class="ghost small" title="設定(⌘,)">⚙ 設定</button>
+        <button id="cli-summary" class="cli-summary" data-i18n-title="side.cliStatus" title="查看 CLI 與擴充狀態"></button>
+        <button id="settings-btn" class="ghost small" data-i18n="side.settings" data-i18n-title="side.settingsTitle" title="設定(⌘,)">⚙ 設定</button>
       </div>
     </aside>
 
     <main id="main">
       <header id="topbar">
         <div class="drag-region"></div>
-        <div id="phase-pill" class="phase idle">閒置</div>
-        <button id="workdir-chip" class="chip" title="工作目錄:點擊更換"><span class="chip-icon">📁</span><span id="workdir-label"></span></button>
+        <div id="phase-pill" class="phase idle" data-i18n="phase.idle">閒置</div>
+        <button id="workdir-chip" class="chip"><span class="chip-icon">📁</span><span id="workdir-label"></span></button>
         <div id="usage-total" class="usage-total" hidden></div>
         <div class="spacer"></div>
-        <button id="export-btn" class="ghost small" disabled>⇩ 匯出</button>
-        <button id="stop-btn" class="danger small" disabled>■ 停止</button>
-        <button id="reset-btn" class="ghost small">＋ 新對話</button>
+        <button id="export-btn" class="ghost small" data-i18n="topbar.export" disabled>⇩ 匯出</button>
+        <button id="stop-btn" class="danger small" data-i18n="topbar.stop" disabled>■ 停止</button>
+        <button id="reset-btn" class="ghost small" data-i18n="topbar.new">＋ 新對話</button>
       </header>
 
       <section id="timeline">
         <div id="empty" class="empty">
           <div class="empty-icon">◎</div>
-          <div class="empty-title">把任務丟給圓桌</div>
-          <div class="empty-sub">成員會輪流討論、達成共識後由主持人分工,各自在工作目錄執行,最後互相審查。</div>
-          <div class="empty-steps"><span>① 討論</span><span class="arrow">→</span><span>② 分工執行</span><span class="arrow">→</span><span>③ 交叉審查</span></div>
+          <div class="empty-title" data-i18n="empty.title">把任務丟給圓桌</div>
+          <div class="empty-sub" data-i18n="empty.sub">成員會輪流討論、達成共識後由主持人分工,各自在工作目錄執行,最後互相審查。</div>
+          <div class="empty-steps"><span data-i18n="stage.discuss">① 討論</span><span class="arrow">→</span><span data-i18n="stage.execute">② 分工執行</span><span class="arrow">→</span><span data-i18n="stage.review">③ 交叉審查</span></div>
         </div>
       </section>
 
       <footer id="composer">
         <div class="composer-box">
-          <div id="mention-menu" class="mention-menu" role="listbox" aria-label="指定成員" hidden></div>
-          <textarea id="input" rows="3" placeholder="描述任務,或輸入 @ 指定成員處理…(Enter 送出,Shift+Enter 換行)" aria-autocomplete="list" aria-controls="mention-menu"></textarea>
+          <div id="mention-menu" class="mention-menu" role="listbox" data-i18n-aria-label="composer.mentionMenu" aria-label="指定成員" hidden></div>
+          <textarea id="input" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="描述任務,或輸入 @ 指定成員處理…(Enter 送出,Shift+Enter 換行)" aria-autocomplete="list" aria-controls="mention-menu"></textarea>
           <div class="composer-bar">
             <select id="mode">
-              <option value="divide">討論 → 分工執行 → 交叉審查</option>
-              <option value="discuss">只討論,不執行</option>
+              <option value="divide" data-i18n="mode.divide">討論 → 分工執行 → 交叉審查</option>
+              <option value="discuss" data-i18n="mode.discuss">只討論,不執行</option>
             </select>
             <div class="spacer"></div>
             <span id="hint" class="hint"></span>
-            <button id="send-btn" class="primary">送出 ↵</button>
+            <button id="send-btn" class="primary" data-i18n="composer.send">送出 ↵</button>
           </div>
         </div>
       </footer>
@@ -82,53 +83,53 @@
   <div id="settings" class="modal hidden">
     <div class="modal-card settings-card">
       <nav class="settings-nav">
-        <div class="settings-nav-title">設定</div>
-        <button class="settings-tab active" data-tab="general">一般</button>
-        <button class="settings-tab" data-tab="clis">CLI 與擴充</button>
-        <button class="settings-tab" data-tab="appearance">外觀</button>
-        <button class="settings-tab" data-tab="data">資料與紀錄</button>
+        <div class="settings-nav-title" data-i18n="settings.title">設定</div>
+        <button class="settings-tab active" data-tab="general" data-i18n="settings.tab.general">一般</button>
+        <button class="settings-tab" data-tab="clis" data-i18n="settings.tab.clis">CLI 與擴充</button>
+        <button class="settings-tab" data-tab="appearance" data-i18n="settings.tab.appearance">外觀</button>
+        <button class="settings-tab" data-tab="data" data-i18n="settings.tab.data">資料與紀錄</button>
       </nav>
       <div class="settings-main">
         <div class="settings-head">
           <span id="settings-title">一般</span>
-          <span id="settings-saved" class="saved-hint" hidden>✓ 已儲存</span>
+          <span id="settings-saved" class="saved-hint" data-i18n="settings.saved" hidden>✓ 已儲存</span>
           <div class="spacer"></div>
-          <button id="settings-close" class="ghost small icon" title="關閉(Esc)">✕</button>
+          <button id="settings-close" class="ghost small icon" data-i18n-title="settings.close" title="關閉(Esc)">✕</button>
         </div>
         <div class="settings-body">
           <section class="settings-page" data-page="general">
             <div class="setting">
-              <div class="setting-label"><b>工作目錄</b><span>成員讀寫檔案與執行指令的位置</span></div>
+              <div class="setting-label"><b data-i18n="settings.workDir">工作目錄</b><span data-i18n="settings.workDirDesc">成員讀寫檔案與執行指令的位置</span></div>
               <div class="row">
                 <input id="work-dir" type="text" spellcheck="false" />
-                <button id="pick-dir" class="ghost small" title="選擇資料夾">選擇…</button>
-                <button id="open-dir" class="ghost small" title="在 Finder 開啟">↗</button>
+                <button id="pick-dir" class="ghost small" data-i18n="settings.pickDir" data-i18n-title="settings.pickDirTitle" title="選擇資料夾">選擇…</button>
+                <button id="open-dir" class="ghost small" data-i18n-title="settings.openDirTitle" title="在 Finder 開啟">↗</button>
               </div>
             </div>
             <div class="setting">
-              <div class="setting-label"><b>主持人</b><span>負責分工與總結</span></div>
+              <div class="setting-label"><b data-i18n="settings.lead">主持人</b><span data-i18n="settings.leadDesc">負責分工與總結</span></div>
               <select id="lead-agent"></select>
             </div>
             <div class="setting-grid">
               <div class="setting">
-                <div class="setting-label"><b>最大討論回合</b><span>達上限仍未共識時直接進入分工</span></div>
+                <div class="setting-label"><b data-i18n="settings.maxRounds">最大討論回合</b><span data-i18n="settings.maxRoundsDesc">達上限仍未共識時直接進入分工</span></div>
                 <input id="max-rounds" type="number" min="1" max="10" />
               </div>
               <div class="setting">
-                <div class="setting-label"><b>回覆語言</b><span>寫進每位成員的系統提示</span></div>
+                <div class="setting-label"><b data-i18n="settings.language">回覆語言</b><span data-i18n="settings.languageDesc">寫進每位成員的系統提示</span></div>
                 <input id="language" type="text" />
               </div>
             </div>
             <div class="setting-grid">
               <div class="setting">
-                <div class="setting-label"><b>預設流程</b><span>與輸入框旁的選單同步</span></div>
+                <div class="setting-label"><b data-i18n="settings.defaultMode">預設流程</b><span data-i18n="settings.defaultModeDesc">與輸入框旁的選單同步</span></div>
                 <select id="default-mode">
-                  <option value="divide">討論 → 分工執行 → 交叉審查</option>
-                  <option value="discuss">只討論,不執行</option>
+                  <option value="divide" data-i18n="mode.divide">討論 → 分工執行 → 交叉審查</option>
+                  <option value="discuss" data-i18n="mode.discuss">只討論,不執行</option>
                 </select>
               </div>
               <div class="setting">
-                <div class="setting-label"><b>對話紀錄上限(字元)</b><span>不支援續接的成員每回合重送紀錄的長度上限</span></div>
+                <div class="setting-label"><b data-i18n="settings.maxTranscript">對話紀錄上限(字元)</b><span data-i18n="settings.maxTranscriptDesc">不支援續接的成員每回合重送紀錄的長度上限</span></div>
                 <input id="max-transcript" type="number" min="0" step="10000" />
               </div>
             </div>
@@ -136,42 +137,50 @@
 
           <section class="settings-page" data-page="clis" hidden>
             <div class="page-actions">
-              <span class="hint">內建 Claude Code、Codex CLI、Cursor CLI;其他 AI 可用擴充接入。點擊擴充即可編輯。</span>
+              <span class="hint" data-i18n="settings.clisHint">內建 Claude Code、Codex CLI、Cursor CLI;其他 AI 可用擴充接入。點擊擴充即可編輯。</span>
               <div class="spacer"></div>
-              <button id="ext-add" class="primary small" title="從範本新增 CLI 或 API">+ 新增</button>
-              <button id="ext-reload" class="ghost small" title="重新載入擴充並重新檢查">↻ 重新載入</button>
+              <button id="ext-add" class="primary small" data-i18n="settings.extAdd" data-i18n-title="settings.extAddTitle" title="從範本新增 CLI 或 API">+ 新增</button>
+              <button id="ext-reload" class="ghost small" data-i18n="settings.extReload" data-i18n-title="settings.extReloadTitle" title="重新載入擴充並重新檢查">↻ 重新載入</button>
             </div>
             <div id="ext-list" class="ext-list"></div>
-            <button id="ext-docs" class="link small">擴充撰寫說明 ↗</button>
+            <button id="ext-docs" class="link small" data-i18n="settings.extDocs">擴充撰寫說明 ↗</button>
           </section>
 
           <section class="settings-page" data-page="appearance" hidden>
             <div class="setting">
-              <div class="setting-label"><b>主題</b></div>
-              <div class="theme-options" role="radiogroup">
-                <label class="theme-option"><input type="radio" name="theme" value="light" /><span class="theme-swatch light"><i></i><i></i></span><span>淺色</span></label>
-                <label class="theme-option"><input type="radio" name="theme" value="dark" /><span class="theme-swatch dark"><i></i><i></i></span><span>深色</span></label>
-                <label class="theme-option"><input type="radio" name="theme" value="system" /><span class="theme-swatch system"><i></i><i></i></span><span>跟隨系統</span></label>
+              <div class="setting-label"><b data-i18n="settings.uiLocale">介面語言</b><span data-i18n="settings.uiLocaleDesc">成員的回覆語言由「一般 → 回覆語言」決定</span></div>
+              <div class="segmented" role="radiogroup">
+                <label><input type="radio" name="ui-locale" value="system" /><span data-i18n="locale.system">跟隨系統</span></label>
+                <label><input type="radio" name="ui-locale" value="zh-Hant" /><span data-i18n="locale.zh-Hant">繁體中文</span></label>
+                <label><input type="radio" name="ui-locale" value="en" /><span data-i18n="locale.en">English</span></label>
               </div>
             </div>
             <div class="setting">
-              <div class="setting-label"><b>文字大小</b></div>
+              <div class="setting-label"><b data-i18n="settings.theme">主題</b></div>
+              <div class="theme-options" role="radiogroup">
+                <label class="theme-option"><input type="radio" name="theme" value="light" /><span class="theme-swatch light"><i></i><i></i></span><span data-i18n="theme.light">淺色</span></label>
+                <label class="theme-option"><input type="radio" name="theme" value="dark" /><span class="theme-swatch dark"><i></i><i></i></span><span data-i18n="theme.dark">深色</span></label>
+                <label class="theme-option"><input type="radio" name="theme" value="system" /><span class="theme-swatch system"><i></i><i></i></span><span data-i18n="theme.system">跟隨系統</span></label>
+              </div>
+            </div>
+            <div class="setting">
+              <div class="setting-label"><b data-i18n="settings.fontSize">文字大小</b></div>
               <div class="segmented" role="radiogroup">
-                <label><input type="radio" name="font-size" value="13" /><span>小</span></label>
-                <label><input type="radio" name="font-size" value="14" /><span>標準</span></label>
-                <label><input type="radio" name="font-size" value="15" /><span>大</span></label>
+                <label><input type="radio" name="font-size" value="13" /><span data-i18n="fontSize.small">小</span></label>
+                <label><input type="radio" name="font-size" value="14" /><span data-i18n="fontSize.default">標準</span></label>
+                <label><input type="radio" name="font-size" value="15" /><span data-i18n="fontSize.large">大</span></label>
               </div>
             </div>
           </section>
 
           <section class="settings-page" data-page="data" hidden>
             <div class="setting row-setting">
-              <div class="setting-label"><b>對話紀錄</b><span>每次任務結束自動保存成 JSON,可在左側「歷史對話」檢視或繼續討論</span></div>
-              <button id="sessions-btn" class="ghost small">📁 開啟資料夾</button>
+              <div class="setting-label"><b data-i18n="settings.sessions">對話紀錄</b><span data-i18n="settings.sessionsDesc">每次任務結束自動保存成 JSON,可在左側「歷史對話」檢視或繼續討論</span></div>
+              <button id="sessions-btn" class="ghost small" data-i18n="settings.openFolder">📁 開啟資料夾</button>
             </div>
             <div class="setting row-setting">
-              <div class="setting-label"><b>擴充資料夾</b><span>放自訂 CLI / API 設定檔(.json / .js)</span></div>
-              <button id="ext-open-dir" class="ghost small">📁 開啟資料夾</button>
+              <div class="setting-label"><b data-i18n="settings.extDir">擴充資料夾</b><span data-i18n="settings.extDirDesc">放自訂 CLI / API 設定檔(.json / .js)</span></div>
+              <button id="ext-open-dir" class="ghost small" data-i18n="settings.openFolder">📁 開啟資料夾</button>
             </div>
           </section>
         </div>
@@ -182,13 +191,13 @@
   <!-- 歷史對話預覽;可載入成目前對話繼續討論 -->
   <div id="history-modal" class="modal hidden">
     <div class="modal-card wide history-modal-card">
-      <div class="modal-head"><span id="history-modal-title">歷史對話</span><button id="history-modal-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="history-modal-title" data-i18n="history.title">歷史對話</span><button id="history-modal-close" class="ghost small">✕</button></div>
       <div id="history-modal-meta" class="history-modal-meta"></div>
       <div id="history-preview" class="modal-body history-preview"></div>
       <div class="modal-foot">
-        <span id="history-resume-hint" class="hint">載入後可以直接接著送出訊息,成員會先讀過這段紀錄。</span>
+        <span id="history-resume-hint" class="hint" data-i18n="history.hintResume">載入後可以直接接著送出訊息,成員會先讀過這段紀錄。</span>
         <div class="spacer"></div>
-        <button id="history-resume" class="primary small">繼續這段對話</button>
+        <button id="history-resume" class="primary small" data-i18n="history.resume">繼續這段對話</button>
       </div>
     </div>
   </div>
@@ -196,38 +205,38 @@
   <!-- 成員編輯視窗 -->
   <div id="modal" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-head"><span id="modal-title">編輯成員</span><button id="modal-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="modal-title" data-i18n="agent.editTitle">編輯成員</span><button id="modal-close" class="ghost small">✕</button></div>
       <div class="modal-body">
         <div class="row gap">
-          <label class="field grow"><span>名稱</span><input id="f-name" type="text" /></label>
-          <label class="field"><span>顏色</span><input id="f-color" type="color" /></label>
+          <label class="field grow"><span data-i18n="agent.name">名稱</span><input id="f-name" type="text" /></label>
+          <label class="field"><span data-i18n="agent.color">顏色</span><input id="f-color" type="color" /></label>
         </div>
         <div class="row gap">
-          <label class="field half"><span>AI CLI</span><select id="f-cli"></select></label>
-          <label class="field half"><span>模型 / 版本</span><select id="f-model-select"></select><input id="f-model" type="text" placeholder="輸入模型名稱" spellcheck="false" style="margin-top:6px" /></label>
+          <label class="field half"><span data-i18n="agent.cli">AI CLI</span><select id="f-cli"></select></label>
+          <label class="field half"><span data-i18n="agent.model">模型 / 版本</span><select id="f-model-select"></select><input id="f-model" type="text" data-i18n-placeholder="agent.modelPlaceholder" placeholder="輸入模型名稱" spellcheck="false" style="margin-top:6px" /></label>
         </div>
         <div class="row gap">
-          <label class="field half"><span>強度(推理力度)</span><select id="f-effort"></select></label>
+          <label class="field half"><span data-i18n="agent.effort">強度(推理力度)</span><select id="f-effort"></select></label>
           <label class="field half checks">
             <span>&nbsp;</span>
-            <label class="check" id="f-canEdit-wrap"><input id="f-canEdit" type="checkbox" /> 允許修改檔案與執行指令</label>
-            <label class="check"><input id="f-enabled" type="checkbox" /> 啟用</label>
+            <label class="check" id="f-canEdit-wrap"><input id="f-canEdit" type="checkbox" /> <span data-i18n="agent.canEdit">允許修改檔案與執行指令</span></label>
+            <label class="check"><input id="f-enabled" type="checkbox" /> <span data-i18n="agent.enabled">啟用</span></label>
           </label>
         </div>
         <div id="f-model-desc" class="model-desc"></div>
         <label class="field" id="f-custom-wrap">
-          <span>自訂指令(提示詞會從 stdin 送入,stdout 當作回覆;可用 {model}、{effort})</span>
-          <input id="f-custom" type="text" placeholder="例如:gemini -m {model} -p -" spellcheck="false" />
+          <span data-i18n="agent.custom">自訂指令(提示詞會從 stdin 送入,stdout 當作回覆;可用 {model}、{effort})</span>
+          <input id="f-custom" type="text" data-i18n-placeholder="agent.customPlaceholder" placeholder="例如:gemini -m {model} -p -" spellcheck="false" />
         </label>
         <label class="field">
-          <span>角色與個性</span>
-          <textarea id="f-persona" rows="4" placeholder="例如:嚴謹的資深架構師,重視正確性與可維護性…"></textarea>
+          <span data-i18n="agent.persona">角色與個性</span>
+          <textarea id="f-persona" rows="4" data-i18n-placeholder="agent.personaPlaceholder" placeholder="例如:嚴謹的資深架構師,重視正確性與可維護性…"></textarea>
         </label>
       </div>
       <div class="modal-foot">
-        <button id="modal-delete" class="danger small">刪除成員</button>
+        <button id="modal-delete" class="danger small" data-i18n="agent.delete">刪除成員</button>
         <div class="spacer"></div>
-        <button id="modal-save" class="primary">儲存</button>
+        <button id="modal-save" class="primary" data-i18n="agent.save">儲存</button>
       </div>
     </div>
   </div>
@@ -235,16 +244,16 @@
   <!-- 擴充範本選擇 -->
   <div id="ext-picker" class="modal hidden">
     <div class="modal-card wide">
-      <div class="modal-head"><span>新增 CLI / API</span><button id="ext-picker-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span data-i18n="extPicker.title">新增 CLI / API</span><button id="ext-picker-close" class="ghost small">✕</button></div>
       <div class="modal-body">
-        <div class="hint" style="margin-bottom:10px">點選範本即可複製到擴充資料夾並打開編輯器。</div>
+        <div class="hint" style="margin-bottom:10px" data-i18n="extPicker.hint">點選範本即可複製到擴充資料夾並打開編輯器。</div>
         <div class="template-toolbar">
-          <div class="template-filters" role="radiogroup" aria-label="範本類型">
+          <div class="template-filters" role="radiogroup" data-i18n-aria-label="extPicker.filters" aria-label="範本類型">
             <button type="button" role="radio" data-filter="cli" aria-checked="false" tabindex="-1">CLI</button>
             <button type="button" role="radio" data-filter="api" aria-checked="false" tabindex="-1">API</button>
-            <button type="button" role="radio" class="active" data-filter="all" aria-checked="true">全部</button>
+            <button type="button" role="radio" class="active" data-filter="all" aria-checked="true" data-i18n="extPicker.all">全部</button>
           </div>
-          <input id="ext-search" type="search" placeholder="搜尋名稱或說明" aria-label="搜尋範本">
+          <input id="ext-search" type="search" data-i18n-placeholder="extPicker.search" placeholder="搜尋名稱或說明" data-i18n-aria-label="extPicker.searchLabel" aria-label="搜尋範本">
         </div>
         <div id="ext-templates" class="template-sections"></div>
       </div>
@@ -254,31 +263,31 @@
   <!-- 擴充編輯器 -->
   <div id="ext-editor" class="modal hidden">
     <div class="modal-card wide">
-      <div class="modal-head"><span id="ext-editor-title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="ext-editor-title" data-i18n="extEditor.title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
       <div class="modal-body">
-        <label class="field"><span>檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
-        <div class="ext-editor-tabs" role="tablist" aria-label="擴充編輯模式">
-          <button id="ext-tab-basic" class="active" type="button" role="tab" aria-selected="true">基本設定</button>
-          <button id="ext-tab-advanced" type="button" role="tab" aria-selected="false">進階 JSON</button>
+        <label class="field"><span data-i18n="extEditor.file">檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
+        <div class="ext-editor-tabs" role="tablist" data-i18n-aria-label="extEditor.tabs" aria-label="擴充編輯模式">
+          <button id="ext-tab-basic" class="active" type="button" role="tab" aria-selected="true" data-i18n="extEditor.basic">基本設定</button>
+          <button id="ext-tab-advanced" type="button" role="tab" aria-selected="false" data-i18n="extEditor.advanced">進階 JSON</button>
         </div>
         <section id="ext-basic" class="ext-basic" role="tabpanel">
-          <div id="ext-basic-unavailable" class="hint" hidden>JavaScript 外掛請使用進階編輯器。</div>
+          <div id="ext-basic-unavailable" class="hint" data-i18n="extEditor.jsOnly" hidden>JavaScript 外掛請使用進階編輯器。</div>
           <div id="ext-basic-fields" class="ext-basic-fields">
             <div class="setting-grid">
-              <label class="field"><span>識別碼</span><input id="ext-id" type="text" spellcheck="false" placeholder="my-provider" /></label>
-              <label class="field"><span>顯示名稱</span><input id="ext-label" type="text" placeholder="我的 AI" /></label>
+              <label class="field"><span data-i18n="extEditor.id">識別碼</span><input id="ext-id" type="text" spellcheck="false" placeholder="my-provider" /></label>
+              <label class="field"><span data-i18n="extEditor.label">顯示名稱</span><input id="ext-label" type="text" data-i18n-placeholder="extEditor.labelPlaceholder" placeholder="我的 AI" /></label>
             </div>
-            <label class="field"><span>連線類型</span><select id="ext-type"><option value="cli">CLI 指令</option><option value="openai">OpenAI 相容 API</option></select></label>
+            <label class="field"><span data-i18n="extEditor.type">連線類型</span><select id="ext-type"><option value="cli" data-i18n="extEditor.typeCli">CLI 指令</option><option value="openai" data-i18n="extEditor.typeApi">OpenAI 相容 API</option></select></label>
             <div id="ext-cli-fields">
-              <label class="field"><span>執行檔</span><span class="row"><input id="ext-bin" type="text" spellcheck="false" placeholder="例如 claude 或 /usr/local/bin/my-cli" /><button id="ext-pick-bin" class="ghost small" type="button">選擇…</button></span></label>
-              <label class="field"><span>參數 <small>每行一個</small></span><textarea id="ext-args" rows="4" spellcheck="false" placeholder="--model&#10;{model}"></textarea><small id="ext-args-help" class="hint"></small></label>
+              <label class="field"><span data-i18n="extEditor.bin">執行檔</span><span class="row"><input id="ext-bin" type="text" spellcheck="false" data-i18n-placeholder="extEditor.binPlaceholder" placeholder="例如 claude 或 /usr/local/bin/my-cli" /><button id="ext-pick-bin" class="ghost small" type="button" data-i18n="extEditor.pick">選擇…</button></span></label>
+              <label class="field"><span><span data-i18n="extEditor.args">參數</span> <small data-i18n="extEditor.perLine">每行一個</small></span><textarea id="ext-args" rows="4" spellcheck="false" placeholder="--model&#10;{model}"></textarea><small id="ext-args-help" class="hint"></small></label>
             </div>
             <div id="ext-api-fields">
-              <label class="field"><span>API URL</span><input id="ext-base-url" type="url" spellcheck="false" placeholder="https://api.example.com/v1" /></label>
-              <label class="field"><span>API key 環境變數 <small>選填</small></span><input id="ext-api-env" type="text" spellcheck="false" placeholder="MY_API_KEY" /></label>
-              <label class="field"><span>API key</span><span class="row"><input id="ext-api-key" type="password" autocomplete="new-password" placeholder="填入後不會寫入擴充 JSON" /><span id="ext-key-status" class="badge">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button">清除</button><button id="ext-key-test" class="ghost small" type="button">測試連線</button></span><small class="hint">請到「設定 → CLI 與擴充」填入,或設定上方的環境變數,不會寫入擴充 JSON</small></label>
+              <label class="field"><span data-i18n="extEditor.baseUrl">API URL</span><input id="ext-base-url" type="url" spellcheck="false" placeholder="https://api.example.com/v1" /></label>
+              <label class="field"><span><span data-i18n="extEditor.apiEnv">API key 環境變數</span> <small data-i18n="extEditor.optional">選填</small></span><input id="ext-api-env" type="text" spellcheck="false" placeholder="MY_API_KEY" /></label>
+              <label class="field"><span data-i18n="extEditor.apiKey">API key</span><span class="row"><input id="ext-api-key" type="password" autocomplete="new-password" data-i18n-placeholder="extEditor.apiKeyPlaceholder" placeholder="填入後不會寫入擴充 JSON" /><span id="ext-key-status" class="badge" data-i18n="extEditor.keyUnset">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button" data-i18n="extEditor.keyClear">清除</button><button id="ext-key-test" class="ghost small" type="button" data-i18n="extEditor.keyTest">測試連線</button></span><small class="hint" data-i18n="extEditor.keyHint">請到「設定 → CLI 與擴充」填入,或設定上方的環境變數,不會寫入擴充 JSON</small></label>
             </div>
-            <label class="field"><span>模型 <small>以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
+            <label class="field"><span><span data-i18n="extEditor.models">模型</span> <small data-i18n="extEditor.modelsHint">以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
           </div>
         </section>
         <section id="ext-advanced" role="tabpanel" hidden>
@@ -288,10 +297,10 @@
         <div id="ext-ok" class="ok-text" hidden></div>
       </div>
       <div class="modal-foot">
-        <button id="ext-delete" class="danger small">刪除擴充</button>
+        <button id="ext-delete" class="danger small" data-i18n="extEditor.delete">刪除擴充</button>
         <div class="spacer"></div>
-        <button id="ext-editor-docs" class="ghost small">欄位說明 ↗</button>
-        <button id="ext-save" class="primary">儲存並載入</button>
+        <button id="ext-editor-docs" class="ghost small" data-i18n="extEditor.fields">欄位說明 ↗</button>
+        <button id="ext-save" class="primary" data-i18n="extEditor.save">儲存並載入</button>
       </div>
     </div>
   </div>

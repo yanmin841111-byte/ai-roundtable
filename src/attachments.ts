@@ -14,6 +14,8 @@ import path from 'path';
 import crypto from 'crypto';
 import type { Adapter, AdapterCapabilities } from './adapters/types';
 import type { AttachmentMeta } from './ipc-types';
+import { tx } from './text';
+import type { TextLocale } from './text';
 
 // renderer 或紀錄檔傳來的附件 metadata 不可信:欄位可能缺漏或型別不對,使用前一律逐項檢查
 type UntrustedMeta = Partial<AttachmentMeta> | null | undefined;
@@ -487,13 +489,13 @@ function attachmentCapabilities(adapter: Pick<Adapter, 'capabilities' | 'support
   return { modes: new Set(fallback), needCwd: false };
 }
 
-function readTextForInline(userDataDir: string, meta: AttachmentMeta, maxChars = TEXT_INLINE_MAX_CHARS) {
+function readTextForInline(userDataDir: string, meta: AttachmentMeta, maxChars: number, locale: TextLocale) {
   const abs = absolutePath(userDataDir, meta);
   if (!abs) return null;
   try {
     const text = fs.readFileSync(abs, 'utf8');
     return text.length > maxChars
-      ? `${text.slice(0, maxChars)}\n…(檔案過長或已達附件總量上限,已截斷;完整內容見原始檔案)…`
+      ? `${text.slice(0, maxChars)}${tx(locale, 'attach.truncated')}`
       : text;
   } catch {
     return null;
@@ -509,7 +511,7 @@ function buildAttachmentPrompt(
   userDataDir: string,
   attachments: AttachmentMeta[],
   adapter: Pick<Adapter, 'capabilities' | 'supportsEdit'> | null | undefined,
-  { staged = [] }: { staged?: StagedAttachment[] } = {},
+  { staged = [], locale = 'zh-Hant' }: { staged?: StagedAttachment[]; locale?: TextLocale } = {},
 ) {
   const list = Array.isArray(attachments) ? attachments : [];
   if (list.length === 0) return '';
@@ -525,24 +527,24 @@ function buildAttachmentPrompt(
     // needCwd 代表 adapter 明確讀不到 userData;暫存失敗時不可假裝絕對路徑可用。
     const abs = needCwd ? cwdPaths.get(meta.id) : absolutePath(userDataDir, meta);
     if (modes.has('filePath') && abs) {
-      lines.push(`- ${label}\n  路徑:${abs}`);
+      lines.push(tx(locale, 'attach.path', { label, path: abs }));
       continue;
     }
     if (meta.kind === 'image' && modes.has('imageInline')) {
-      lines.push(`- ${label}(影像已隨訊息附上)`);
+      lines.push(tx(locale, 'attach.imageInline', { label }));
       continue;
     }
     if (meta.kind === 'text' && modes.has('textInline')) {
       const allowance = Math.min(TEXT_INLINE_MAX_CHARS, inlineRemaining);
-      const text = allowance > 0 ? readTextForInline(userDataDir, meta, allowance) : null;
+      const text = allowance > 0 ? readTextForInline(userDataDir, meta, allowance, locale) : null;
       if (text != null) {
-        lines.push(`- ${label}(內容如下)`);
+        lines.push(tx(locale, 'attach.textInline', { label }));
         inlines.push(`--- ${meta.name} ---\n${text}`);
         inlineRemaining = Math.max(0, inlineRemaining - Math.min(text.length, allowance));
         continue;
       }
       if (allowance === 0) {
-        lines.push(`- ${label}(已達文字附件總內嵌上限,內容省略)`);
+        lines.push(tx(locale, 'attach.inlineCap', { label }));
         continue;
       }
     }
@@ -550,10 +552,10 @@ function buildAttachmentPrompt(
     unreadable.push(meta.name);
   }
 
-  const parts = [`【附件】使用者提供了 ${list.length} 個附件:`, lines.join('\n')];
+  const parts = [tx(locale, 'attach.header', { n: list.length }), lines.join('\n')];
   if (inlines.length) parts.push(inlines.join('\n\n'));
   if (unreadable.length) {
-    parts.push(`注意:你無法讀取 ${unreadable.join('、')} 的內容,請不要憑檔名臆測,必要時請在回覆中說明。`);
+    parts.push(tx(locale, 'attach.unreadable', { names: unreadable.join(locale === 'en' ? ', ' : '、') }));
   }
   return parts.join('\n\n');
 }

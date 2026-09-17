@@ -10,6 +10,7 @@ import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSess
 import * as attachments from './src/attachments';
 import { SecretStore } from './src/secrets';
 import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn } from './src/ipc-types';
+import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -48,6 +49,8 @@ let sessionFileId: string | null = null;
 let pending: AttachmentMeta[] = [];
 
 const userData = () => app.getPath('userData');
+// 主程序產生的少數使用者可見文字跟著介面語言
+const text = (key: string, params: Record<string, string | number> = {}) => tx(resolveTextLocale(store.get().settings.uiLocale), key, params);
 // 對話框附在主視窗上;視窗還沒建立(或已關閉)時退回無父視窗的版本
 const showOpenDialog = (options: Electron.OpenDialogOptions) =>
   mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options);
@@ -113,6 +116,7 @@ function stopOrchestrator() { if (orchestrator) orchestrator.stop(); }
 
 app.whenReady().then(async () => {
   importShellEnv();
+  setSystemLocale(app.getLocale());
   store = new Store(app.getPath('userData'));
   secrets = new SecretStore(app.getPath('userData'), safeStorage);
   // 擴充資料夾可用 AI_ROUNDTABLE_ADAPTERS_DIR 覆寫(方便開發外掛)
@@ -184,8 +188,8 @@ app.whenReady().then(async () => {
   handle('secrets:clear', ({ ref }) => secrets.clear(ref));
   handle('secrets:test', async ({ adapterId }) => {
     const adapter = registry.loadFresh(adapterId);
-    if (!adapter) return { ok: false, error: '找不到此 API 擴充，請先儲存設定' };
-    if (typeof adapter.testConnection !== 'function') return { ok: false, error: '此擴充不支援 API 連線測試' };
+    if (!adapter) return { ok: false, error: text('main.extNotFound') };
+    if (typeof adapter.testConnection !== 'function') return { ok: false, error: text('main.extNoTest') };
     return adapter.testConnection();
   });
   handle('shell:openPath', (p) => shell.openPath(p));
@@ -208,7 +212,7 @@ app.whenReady().then(async () => {
     const r = await showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: '可用附件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'txt', 'md', 'json', 'csv', 'log'] },
+        { name: text('main.attachFilter'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'txt', 'md', 'json', 'csv', 'log'] },
       ],
     });
     if (r.canceled || !r.filePaths.length) return { attachments: pending, errors: [], canceled: true, limits: attachments.LIMITS };
@@ -249,16 +253,16 @@ app.whenReady().then(async () => {
   });
   handle('chat:export', async () => {
     const messages = orchestrator.snapshot().messages;
-    if (!messages.length) return { ok: false, error: '目前沒有可匯出的對話' };
+    if (!messages.length) return { ok: false, error: text('main.nothingToExport') };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const result = await showSaveDialog({
-      title: '匯出本次對話',
+      title: text('main.exportTitle'),
       defaultPath: `ai-roundtable-${stamp}.md`,
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     });
     if (result.canceled || !result.filePath) return { ok: false, canceled: true };
     try {
-      await fs.promises.writeFile(result.filePath, messagesToMarkdown(messages), 'utf8');
+      await fs.promises.writeFile(result.filePath, messagesToMarkdown(messages, resolveTextLocale(store.get().settings.uiLocale)), 'utf8');
       return { ok: true, file: result.filePath };
     } catch (error: any) {
       return { ok: false, error: error.message };
@@ -278,7 +282,7 @@ app.whenReady().then(async () => {
   });
   // 載入歷史對話繼續討論:之後的任務會寫回同一份紀錄
   handle('chat:resume', (id) => {
-    if (orchestrator.snapshot().running) return { ok: false, error: '目前仍在進行中,請先停止再載入歷史對話' };
+    if (orchestrator.snapshot().running) return { ok: false, error: text('main.stillRunning') };
     const result = readSession(userData(), id);
     if (!result.ok) return result;
     activeTaskStart = null;

@@ -124,6 +124,8 @@ export interface AppSettings {
   maxTranscriptChars: number;
   theme?: string;
   fontSize?: number;
+  // 介面語言:'system' 跟隨作業系統;沒設定時視同 system
+  uiLocale?: 'system' | 'zh-Hant' | 'en';
 }
 
 export interface AppConfig {
@@ -242,6 +244,8 @@ export interface ChatMessage {
   cli?: string;
   model?: string;
   phase?: PhaseValue;
+  // 系統訊息的結構標記(例如 'plan' = 分工結果),讓程式不必比對文案
+  tag?: string;
   color?: string;
   group?: string;
   directed?: boolean;

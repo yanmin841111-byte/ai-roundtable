@@ -3,6 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { deleteConversation } from './attachments';
 import type { ChatMessage, OkResult, PhaseValue, SessionReadResult, SessionSummary } from './ipc-types';
+import { tx } from './text';
+import type { TextLocale } from './text';
 
 type WriteSessionResult = { ok: true; file: string; id: string } | { ok: false; file: null; error: string };
 
@@ -264,20 +266,21 @@ function listConversationIds(userDataDir: string): string[] {
   return [...ids];
 }
 
-function formatTime(ts: string | number | undefined) {
-  if (ts == null) return '時間不明';
+function formatTime(ts: string | number | undefined, locale: TextLocale) {
+  const unknown = tx(locale, 'export.timeUnknown');
+  if (ts == null) return unknown;
   const date = new Date(ts);
-  return Number.isNaN(date.getTime()) ? '時間不明' : date.toLocaleString('zh-TW', {
+  return Number.isNaN(date.getTime()) ? unknown : date.toLocaleString(locale === 'en' ? 'en-US' : 'zh-TW', {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false, timeZoneName: 'short',
   });
 }
 
-function messageTitle(message: ChatMessage) {
-  if (message.kind === 'user') return '使用者';
-  if (message.kind === 'agent') return message.agentName || 'AI 成員';
-  return message.level === 'error' ? '系統錯誤' : message.level === 'warn' ? '系統警告' : '系統';
+function messageTitle(message: ChatMessage, locale: TextLocale) {
+  if (message.kind === 'user') return tx(locale, 'export.user');
+  if (message.kind === 'agent') return message.agentName || tx(locale, 'export.agent');
+  return tx(locale, message.level === 'error' ? 'export.systemError' : message.level === 'warn' ? 'export.systemWarn' : 'export.system');
 }
 
 function hasNumber(value: unknown) { return value != null && Number.isFinite(Number(value)); }
@@ -288,58 +291,55 @@ function rawValue(value: unknown) {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function usageMarkdown(usage: any): string {
+function usageMarkdown(usage: any, locale: TextLocale = 'zh-Hant'): string {
   if (!usage || typeof usage !== 'object') return '';
   if (!usage.shape || usage.shape === 'unknown') {
     const raw = usage.raw && typeof usage.raw === 'object' ? usage.raw : usage;
     const fields = Object.entries(raw)
       .filter(([key]) => !['shape', 'raw'].includes(key))
       .map(([key, value]) => `${key}: ${rawValue(value)}`);
-    return `> 原始用量：${fields.length ? fields.join(' · ') : '無欄位'}`;
+    return tx(locale, 'export.rawUsage', { fields: fields.length ? fields.join(' · ') : tx(locale, 'export.noFields') });
   }
   const fields: string[] = [];
   if (hasNumber(usage.inputTokens)) {
     const detail: string[] = [];
-    if (hasNumber(usage.cachedInputTokens)) detail.push(`其中快取 ${usage.cachedInputTokens}`);
-    if (hasNumber(usage.cacheWriteTokens)) detail.push(`寫入快取 ${usage.cacheWriteTokens}`);
-    fields.push(`輸入: ${usage.inputTokens}${detail.length ? `（${detail.join('、')}）` : ''}`);
+    if (hasNumber(usage.cachedInputTokens)) detail.push(tx(locale, 'export.cached', { n: usage.cachedInputTokens }));
+    if (hasNumber(usage.cacheWriteTokens)) detail.push(tx(locale, 'export.cacheWrite', { n: usage.cacheWriteTokens }));
+    fields.push(`${tx(locale, 'export.input', { n: usage.inputTokens })}${detail.length ? (locale === 'en' ? ` (${detail.join(', ')})` : `（${detail.join('、')}）`) : ''}`);
   } else {
-    if (hasNumber(usage.cachedInputTokens)) fields.push(`快取輸入: ${usage.cachedInputTokens}`);
-    if (hasNumber(usage.cacheWriteTokens)) fields.push(`寫入快取: ${usage.cacheWriteTokens}`);
+    if (hasNumber(usage.cachedInputTokens)) fields.push(tx(locale, 'export.cachedInput', { n: usage.cachedInputTokens }));
+    if (hasNumber(usage.cacheWriteTokens)) fields.push(tx(locale, 'export.cacheWrite', { n: usage.cacheWriteTokens }));
   }
-  if (hasNumber(usage.outputTokens)) fields.push(`輸出: ${usage.outputTokens}`);
-  if (hasNumber(usage.costUsd)) fields.push(`成本: $${Number(usage.costUsd).toFixed(3)}`);
-  return fields.length ? `> 用量：${fields.join(' · ')}` : '';
+  if (hasNumber(usage.outputTokens)) fields.push(tx(locale, 'export.output', { n: usage.outputTokens }));
+  if (hasNumber(usage.costUsd)) fields.push(tx(locale, 'export.cost', { n: Number(usage.costUsd).toFixed(3) }));
+  return fields.length ? tx(locale, 'export.usage', { fields: fields.join(' · ') }) : '';
 }
 
 // 匯出用的 phase 文字。phase 現在是 { code, round, maxRounds } 結構,
-// 舊紀錄則是純字串,兩種都要能印。匯出檔不隨 uiLocale 變動,固定用中文。
-const PHASE_TEXT: Record<string, string> = {
-  idle: '閒置', direct: '指定', discuss: '討論', divide: '分工',
-  execute: '執行', review: '審查', repair: '修復', summary: '總結',
-};
+// 舊紀錄則是純字串,兩種都要能印。
+const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'divide', 'execute', 'review', 'repair', 'summary']);
 
-function phaseToText(phase: PhaseValue | null | undefined): string {
+function phaseToText(phase: PhaseValue | null | undefined, locale: TextLocale): string {
   if (!phase) return '';
   if (typeof phase === 'string') return phase; // 舊 session
-  const label = PHASE_TEXT[phase.code] || phase.code || '';
+  const label = PHASE_CODES.has(phase.code) ? tx(locale, `phase.${phase.code}`) : phase.code || '';
   return phase.round ? `${label} R${phase.round}` : label;
 }
 
-function messagesToMarkdown(messages: readonly ChatMessage[]) {
-  const sections = ['# AI Roundtable 對話'];
+function messagesToMarkdown(messages: readonly ChatMessage[], locale: TextLocale = 'zh-Hant') {
+  const sections = [tx(locale, 'export.title')];
   for (const message of asList(messages)) {
-    const meta = [phaseToText(message.phase), message.model, formatTime(message.ts)].filter(Boolean).join(' · ');
-    sections.push(`## ${messageTitle(message)}${meta ? ` · ${meta}` : ''}`);
-    const usage = usageMarkdown(message.usage);
+    const meta = [phaseToText(message.phase, locale), message.model, formatTime(message.ts, locale)].filter(Boolean).join(' · ');
+    sections.push(`## ${messageTitle(message, locale)}${meta ? ` · ${meta}` : ''}`);
+    const usage = usageMarkdown(message.usage, locale);
     if (usage) sections.push(usage);
     if (Array.isArray(message.attachments) && message.attachments.length) {
-      sections.push(`> 附件：${message.attachments.map((a) => `${a.name}（${a.mime}）`).join('、')}`);
+      sections.push(tx(locale, 'export.attachments', { list: message.attachments.map((a) => (locale === 'en' ? `${a.name} (${a.mime})` : `${a.name}（${a.mime}）`)).join(locale === 'en' ? ', ' : '、') }));
     }
     if (message.text) sections.push(String(message.text));
-    if (message.error) sections.push(`> 錯誤：${String(message.error).replace(/\n/g, '\n> ')}`);
+    if (message.error) sections.push(tx(locale, 'export.error', { text: String(message.error).replace(/\n/g, '\n> ') }));
     const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
-    if (!message.text && !message.error && !hasAttachments) sections.push('_(無文字內容)_');
+    if (!message.text && !message.error && !hasAttachments) sections.push(tx(locale, 'export.empty'));
   }
   return `${sections.join('\n\n')}\n`;
 }

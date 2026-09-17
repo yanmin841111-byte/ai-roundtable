@@ -140,7 +140,7 @@ function makeOrc(cli: any, maxTranscriptChars: any) {
     { id: 'me', name: '我', cli, enabled: true },
     { id: 'other', name: '別人', cli, enabled: true },
   ];
-  const store = { get: () => ({ agents, settings: { maxTranscriptChars, language: '繁體中文', workDir: '/tmp' } }) };
+  const store = { get: () => ({ agents, settings: { maxTranscriptChars, language: '繁體中文', workDir: '/tmp', uiLocale: 'zh-Hant' } }) };
   const orc = new O.Orchestrator(store);
   orc.messages = [
     { kind: 'user', text: big('任務內容', 300), status: 'done' },
@@ -304,7 +304,7 @@ function fakeOrc(names: any) {
       },
     }),
   });
-  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: require('os').tmpdir(), maxRounds: 1, mode: 'discuss' };
+  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: require('os').tmpdir(), maxRounds: 1, mode: 'discuss', uiLocale: 'zh-Hant' };
   const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: require('os').tmpdir() });
   const idle = () => new Promise((resolve: any) => {
     const check = (s: any) => { if (!s.running && s.phase && s.phase.code === 'idle') { orc.off('state', check); resolve(); } };

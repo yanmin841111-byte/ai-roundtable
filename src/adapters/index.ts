@@ -5,6 +5,8 @@ import { Registry } from './registry';
 import { normalizeUsage } from '../usage';
 import type { AgentConfig } from '../ipc-types';
 import type { RunContext, TurnCallbacks, TurnResult } from './types';
+import { tx } from '../text';
+import type { TextLocale } from '../text';
 
 let registry = new Registry();
 
@@ -18,14 +20,14 @@ function effectiveCanEdit(agent: Pick<AgentConfig, 'cli' | 'canEdit'>) {
   return !!(agent.canEdit && adapter && adapter.supportsEdit);
 }
 
-type TurnInput = Omit<RunContext, keyof TurnCallbacks> & Partial<TurnCallbacks>;
+type TurnInput = Omit<RunContext, keyof TurnCallbacks> & Partial<TurnCallbacks> & { locale?: TextLocale };
 
 async function runTurn(agent: AgentConfig, input: TurnInput): Promise<TurnResult> {
   const noop = () => {};
   const ctx: RunContext = { onText: noop, onThinking: noop, onActivity: noop, onSession: noop, onProc: noop, ...input };
   const adapter = registry.get(agent.cli);
   if (!adapter) {
-    return { text: '', thinking: '', sessionId: null, usage: null, error: `找不到 CLI「${agent.cli}」:對應的擴充可能已刪除或載入失敗,請到「設定 → CLI 與擴充」檢查` };
+    return { text: '', thinking: '', sessionId: null, usage: null, error: tx(input.locale || 'zh-Hant', 'adapter.missing', { cli: agent.cli }) };
   }
   try {
     const result = await adapter.run({ ...agent, canEdit: effectiveCanEdit(agent) }, ctx);
@@ -40,7 +42,7 @@ async function runTurn(agent: AgentConfig, input: TurnInput): Promise<TurnResult
       error: r.error || null,
     };
   } catch (e) {
-    return { text: '', thinking: '', sessionId: null, usage: null, error: `${adapter.label} 執行失敗:${e instanceof Error ? e.message : String(e)}` };
+    return { text: '', thinking: '', sessionId: null, usage: null, error: tx(input.locale || 'zh-Hant', 'adapter.failed', { label: adapter.label, message: e instanceof Error ? e.message : String(e) }) };
   }
 }
 

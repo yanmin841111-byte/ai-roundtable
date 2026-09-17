@@ -13,5 +13,5 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["app.ts", "api.d.ts", "../src/shared.ts", "../src/model-rules.ts"]
+  "include": ["app.ts", "i18n.ts", "api.d.ts", "../src/shared.ts", "../src/model-rules.ts"]
 }
