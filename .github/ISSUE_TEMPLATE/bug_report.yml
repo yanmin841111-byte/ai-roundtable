@@ -1,0 +1,37 @@
+name: 問題回報
+description: 回報錯誤或非預期的行為
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全性問題請不要在這裡回報,改依 SECURITY.md 私下回報。貼上紀錄前請先刪掉 API key、token 與私人內容。
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼
+      description: 實際結果與預期結果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. 成員設定為…
+        2. 送出…
+        3. 看到…
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 環境
+      placeholder: macOS 26.1、Node.js 22、Claude Code 2.x、Codex CLI 0.x
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 錯誤訊息或截圖
+      render: text

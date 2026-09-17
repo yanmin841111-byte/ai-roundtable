@@ -1,0 +1,30 @@
+name: 擴充範本
+description: 請求或回報某個 CLI / API 的擴充範本
+labels: [adapter]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: CLI 或 API 名稱
+      placeholder: 例如 Qwen Code CLI
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: 官方文件連結
+      description: 非互動模式、輸出格式或 API 端點的說明
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 類型
+      options:
+        - 請求新的範本
+        - 現有範本無法使用
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 細節
+      description: 範本無法使用時,請附上版本、錯誤訊息,以及你修改後可以運作的設定(先刪掉 API key)
