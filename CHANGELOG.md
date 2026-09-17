@@ -1,3 +1,5 @@
+**繁體中文** | [English](CHANGELOG.en.md)
+
 # 變更紀錄
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/),版本號遵循 [語意化版本](https://semver.org/lang/zh-TW/)。

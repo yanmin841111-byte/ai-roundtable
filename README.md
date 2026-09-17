@@ -1,3 +1,5 @@
+**繁體中文** | [English](README.en.md)
+
 # AI Roundtable
 
 讓多個 AI CLI(Claude Code、Codex CLI、Cursor CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
@@ -162,7 +164,7 @@ CLI 的 session 不會寫進歷史紀錄。載入歷史對話繼續討論時,每
 | `src/models.ts`、`src/model-rules.ts`、`src/usage.ts` | 模型清單、強度規則、用量正規化 |
 | `adapters/templates/` | 「+ 新增」裡的擴充範本 |
 | `docs/` | 擴充撰寫說明與介面文案規格 |
-| `test/` | `npm test` 執行的測試 |
+| `test/` | `npm test` 執行的測試;`test/e2e/` 是端對端測試 |
 | `dist/` | `npm run build` 的輸出,app 實際載入的是這裡(不進版控) |
 
 ## 貢獻

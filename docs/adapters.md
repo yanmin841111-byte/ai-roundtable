@@ -1,3 +1,5 @@
+**繁體中文** | [English](adapters.en.md)
+
 # 擴充 CLI 與 API
 
 AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以用擴充接進來,不需要改原始碼:

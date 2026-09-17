@@ -1,3 +1,5 @@
+**繁體中文** | [English](SECURITY.en.md)
+
 # 安全性政策
 
 ## 支援的版本

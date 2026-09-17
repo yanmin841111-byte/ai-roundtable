@@ -1,3 +1,5 @@
+**繁體中文** | [English](CONTRIBUTING.en.md)
+
 # 參與貢獻
 
 感謝你願意幫忙改進 AI Roundtable。回報問題、補擴充範本、修文件、送程式碼都很歡迎。
@@ -46,7 +48,7 @@ npm test
 1. 從 `main` 開新分支,一個 PR 只處理一件事。
 2. 行為有改動就補測試,送出前跑 `npm run typecheck` 與 `npm test`,全部通過才送;動到流程或介面時再跑 `npm run e2e`。
 3. 介面有改動時附上截圖,淺色與深色主題都檢查一次。
-4. 使用者看得到的功能或設定有變,一併更新 `README.md`、`docs/` 與 `CHANGELOG.md` 的「未發布」段落。
+4. 使用者看得到的功能或設定有變,一併更新 `README.md`、`docs/` 與 `CHANGELOG.md` 的「未發布」段落,以及對應的英文版(`*.en.md`)。
 5. PR 說明寫清楚改了什麼、為什麼、怎麼驗證。
 
 Commit 訊息用英文祈使句開頭,第一行簡短說明做了什麼,例如 `Add Cursor CLI adapter`。
