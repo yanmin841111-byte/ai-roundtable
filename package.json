@@ -34,7 +34,7 @@
     "smoke:dist": "node -e \"const s=require('./dist/src/shared');const r=require('./dist/src/model-rules');require('./dist/src/orchestrator');if(!s.hasMarker||!r.resolveModelId)throw new Error('dist CommonJS exports incomplete');console.log('dist smoke passed')\"",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p renderer/tsconfig.json",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
-    "dist": "npm run build && electron-builder --mac",
+    "dist": "npm run build && electron-builder --mac --publish never",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "e2e": "npm run build && node --import tsx test/e2e/run.ts"
   },
