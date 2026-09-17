@@ -1,0 +1,23 @@
+{
+  "name": "ai-roundtable",
+  "productName": "AI Roundtable",
+  "version": "0.1.0",
+  "description": "讓多個 AI CLI(Claude Code、Codex 等)互相討論、分工、交叉審查的桌面應用",
+  "main": "main.js",
+  "scripts": {
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.johnnywu.airoundtable",
+    "productName": "AI Roundtable",
+    "files": ["main.js", "preload.js", "src/**", "renderer/**", "node_modules/marked/**"],
+    "mac": { "target": "dmg", "category": "public.app-category.developer-tools" }
+  },
+  "dependencies": {
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
