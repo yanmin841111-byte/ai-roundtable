@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld('api', {
   openSessions: () => ipcRenderer.invoke('chat:openSessions'),
   stop: () => ipcRenderer.invoke('chat:stop'),
   reset: () => ipcRenderer.invoke('chat:reset'),
+  sessions: {
+    list: () => ipcRenderer.invoke('session:list'),
+    read: (id) => ipcRenderer.invoke('session:read', id),
+    remove: (id) => ipcRenderer.invoke('session:delete', id),
+  },
   ext: {
     list: () => ipcRenderer.invoke('ext:list'),
     reload: () => ipcRenderer.invoke('ext:reload'),

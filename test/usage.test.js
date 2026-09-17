@@ -178,8 +178,21 @@ t('混合來源:null 不被當成 0,unknown 不計入', () => {
   assert.deepStrictEqual(sum('costUsd'), { total: 0.113749, reported: 1 });
 });
 
-t('SHAPES 只包含三種內建慣例,unknown 不在其中', () => {
-  assert.deepStrictEqual(SHAPES, ['anthropic', 'codex', 'openai']);
+// 真實樣本,取自 cursor-agent -p --output-format stream-json 的 result 事件(續接回合)
+t('cursor:inputTokens 不含快取,三項相加才是完整輸入', () => {
+  const raw = { inputTokens: 166, outputTokens: 193, cacheReadTokens: 15584, cacheWriteTokens: 0 };
+  assert.strictEqual(detectShape(raw), 'cursor');
+  const u = normalizeUsage(raw);
+  assert.strictEqual(u.inputTokens, 15750);
+  assert.strictEqual(u.cachedInputTokens, 15584);
+  assert.strictEqual(u.cacheWriteTokens, 0, '有回報的 0 要保留為 0');
+  assert.strictEqual(u.outputTokens, 193);
+  assert.strictEqual(u.costUsd, null);
+  assert.strictEqual(u.shape, 'cursor');
+});
+
+t('SHAPES 只包含內建慣例,unknown 不在其中', () => {
+  assert.deepStrictEqual(SHAPES, ['anthropic', 'codex', 'openai', 'cursor']);
   assert.ok(!SHAPES.includes('unknown'), 'unknown 是判讀失敗的結果,不是可宣告的值');
 });
 

@@ -25,7 +25,7 @@ async function runTurn(agent, ctx) {
   ctx = { onText: noop, onThinking: noop, onActivity: noop, onSession: noop, onProc: noop, ...ctx };
   const adapter = registry.get(agent.cli);
   if (!adapter) {
-    return { text: '', thinking: '', sessionId: null, usage: null, error: `找不到 CLI「${agent.cli}」:對應的擴充可能已刪除或載入失敗,請到左側「CLI 擴充」檢查` };
+    return { text: '', thinking: '', sessionId: null, usage: null, error: `找不到 CLI「${agent.cli}」:對應的擴充可能已刪除或載入失敗,請到「設定 → CLI 與擴充」檢查` };
   }
   try {
     const result = await adapter.run({ ...agent, canEdit: effectiveCanEdit(agent) }, ctx);

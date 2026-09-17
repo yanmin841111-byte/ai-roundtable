@@ -1,6 +1,6 @@
 # 擴充 CLI 與 API
 
-AI Roundtable 內建 Claude Code 與 Codex CLI。其他 AI 可以用擴充接進來,不需要改原始碼:
+AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以用擴充接進來,不需要改原始碼:
 
 | 類型 | 適合 | 能修改檔案 | 檔案 |
 | --- | --- | --- | --- |
@@ -10,12 +10,12 @@ AI Roundtable 內建 Claude Code 與 Codex CLI。其他 AI 可以用擴充接進
 
 ## 快速開始
 
-1. 左側「CLI 與擴充」按「+ 新增」,選一個範本。
+1. 左下角「⚙ 設定」→「CLI 與擴充」按「+ 新增」,選一個範本。
 2. 範本會複製到你的擴充資料夾並打開編輯器,改好後按「儲存並載入」。
-3. 設定有錯時,編輯器與側欄會直接顯示原因。
+3. 設定有錯時,編輯器與設定頁會直接顯示原因。
 4. 到成員設定的「AI CLI」選單選擇新的擴充。
 
-擴充資料夾位於 `~/Library/Application Support/AI Roundtable/adapters/`,按側欄的 📁 可以直接打開。也可以直接在資料夾裡新增或修改檔案,再按 ↻ 重新載入。
+擴充資料夾位於 `~/Library/Application Support/AI Roundtable/adapters/`,在「設定 → 資料與紀錄」可以直接打開。也可以直接在資料夾裡新增或修改檔案,再到「設定 → CLI 與擴充」按 ↻ 重新載入。
 
 開發時可以用環境變數 `AI_ROUNDTABLE_ADAPTERS_DIR` 指定其他資料夾。
 
@@ -69,6 +69,7 @@ AI Roundtable 內建 Claude Code 與 Codex CLI。其他 AI 可以用擴充接進
 | --- | --- | --- | --- | --- |
 | `anthropic` | Claude Code | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` |
 | `codex` | Codex CLI | `input_tokens`(本來就含快取) | `cached_input_tokens` | 不回報(`null`) |
+| `cursor` | Cursor CLI | `inputTokens` + `cacheReadTokens` + `cacheWriteTokens` | `cacheReadTokens` | `cacheWriteTokens` |
 | `openai` | OpenAI 相容 API | `prompt_tokens`(本來就含快取) | `prompt_tokens_details.cached_tokens` | 不回報(`null`) |
 
 Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input_tokens + cache_read_input_tokens` 會在寫入快取的回合嚴重少報 —— 實測一筆真實資料是 38058 對 28099,少了 26%。
@@ -82,8 +83,9 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 1. 有 `cache_read_input_tokens` 或 `cache_creation_input_tokens` → `anthropic`
 2. 有 `prompt_tokens` 或 `completion_tokens` → `openai`
 3. 有 `cached_input_tokens` → `codex`
-4. 只有 `input_tokens` 與 `output_tokens`、完全沒有任何快取欄位 → `codex`(此時快取為零,「含快取」與「不含快取」兩種解讀會收斂到同一個數字,所以這不是猜測)
-5. 都不符合 → `unknown`
+4. 有 `cacheReadTokens` 或 `cacheWriteTokens` → `cursor`
+5. 只有 `input_tokens` 與 `output_tokens`、完全沒有任何快取欄位 → `codex`(此時快取為零,「含快取」與「不含快取」兩種解讀會收斂到同一個數字,所以這不是猜測)
+6. 都不符合 → `unknown`
 
 `unknown` 的紀錄會保留 `raw` 並在介面與匯出中逐項顯示原始欄位,但**不會納入跨來源總計**,總計會標明有幾則未納入。錯誤推定比不加總更危險,所以認不得就不猜。
 

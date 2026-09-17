@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const { Store } = require('./src/store');
 const { Orchestrator } = require('./src/orchestrator');
 const { Registry, setRegistry } = require('./src/adapters');
-const { writeSession, messagesToMarkdown } = require('./src/session-log');
+const { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession } = require('./src/session-log');
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -54,7 +54,7 @@ function createWindow() {
     minHeight: 600,
     title: 'AI Roundtable',
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0f1117',
+    backgroundColor: '#f7f7f4',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
@@ -81,6 +81,8 @@ app.whenReady().then(async () => {
     templatesDir: path.join(__dirname, 'adapters', 'templates'),
   });
   setRegistry(registry);
+  // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
+  for (const a of registry.list()) if (a.refreshModels) Promise.resolve().then(() => a.refreshModels()).catch(() => {});
   orchestrator = new Orchestrator(store);
   orchestrator.on('message', (m) => send('chat:message', m));
   orchestrator.on('state', (s) => {
@@ -148,6 +150,9 @@ app.whenReady().then(async () => {
     require('fs').mkdirSync(dir, { recursive: true });
     return shell.openPath(dir);
   });
+  ipcMain.handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50 }));
+  ipcMain.handle('session:read', (_e, id) => readSession(app.getPath('userData'), id));
+  ipcMain.handle('session:delete', (_e, id) => deleteSession(app.getPath('userData'), id));
   ipcMain.handle('chat:stop', () => orchestrator.stop());
   ipcMain.handle('chat:reset', () => orchestrator.reset());
 

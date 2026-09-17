@@ -14,7 +14,7 @@
 // 最重要的規則:沒有回報的欄位一律是 null,絕不能寫成 0。
 // 「這個來源沒給這個數字」和「這個數字確定是零」在加總時意義完全不同。
 
-const SHAPES = ['anthropic', 'codex', 'openai'];
+const SHAPES = ['anthropic', 'codex', 'openai', 'cursor'];
 
 // 只接受有限的數字;字串數字也收(有些 CLI 會輸出字串)
 function num(value) {
@@ -43,6 +43,7 @@ function detectShape(raw) {
   if (has(raw, 'cache_read_input_tokens') || has(raw, 'cache_creation_input_tokens')) return 'anthropic';
   if (has(raw, 'prompt_tokens') || has(raw, 'completion_tokens')) return 'openai';
   if (has(raw, 'cached_input_tokens')) return 'codex';
+  if (has(raw, 'cacheReadTokens') || has(raw, 'cacheWriteTokens')) return 'cursor';
   // 只有 input/output 而完全沒有任何快取欄位:此時「含快取」與「不含快取」兩種
   // 解讀會收斂到同一個數字(快取為零),所以歸到 codex 慣例是安全的,不是猜測。
   if (has(raw, 'input_tokens') && has(raw, 'output_tokens')) return 'codex';
@@ -85,6 +86,19 @@ function normalizeUsage(raw, shape) {
       cachedInputTokens: num(raw.cached_input_tokens),
       cacheWriteTokens: null, // 不回報,不是 0
       outputTokens: num(raw.output_tokens),
+      costUsd: null,
+      shape: kind,
+      raw,
+    };
+  }
+  if (kind === 'cursor') {
+    // Cursor CLI 的 inputTokens 不含快取:實測續接回合 inputTokens=166、cacheReadTokens=15584,
+    // 若 inputTokens 是總量就不可能小於快取命中量。與 Anthropic 相同,三項相加才是完整輸入。
+    return {
+      inputTokens: addParts(raw.inputTokens, raw.cacheReadTokens, raw.cacheWriteTokens),
+      cachedInputTokens: num(raw.cacheReadTokens),
+      cacheWriteTokens: num(raw.cacheWriteTokens),
+      outputTokens: num(raw.outputTokens),
       costUsd: null,
       shape: kind,
       raw,
