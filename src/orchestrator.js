@@ -3,6 +3,7 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
 const { hasMarker, stripMarker } = require('./shared');
 
@@ -10,6 +11,9 @@ const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
 const MARK = (t) => `[${t}]`;
 const EMIT_INTERVAL = 70; // 串流更新合併發送的間隔(ms),避免每個 token 都走一次 IPC
+const SEP = '\n\n';            // 對話紀錄各則之間的分隔
+const TRUNCATE_RESERVE = 200;   // 截斷時為省略提示預留的字元空間
+const MAX_GIT_FILES = 200;      // 總結提示裡最多列出的變更檔案數
 
 class Orchestrator extends EventEmitter {
   constructor(store) {
@@ -114,13 +118,15 @@ class Orchestrator extends EventEmitter {
         if (!agreed) this.system(`已達最大討論回合(${this.config.settings.maxRounds}),直接進入分工。`);
         const plan = await this.assignPhase(agents, task);
         if (this.stopped || !plan) return;
+        const gitBefore = await gitStatus(cwd);
         const { reports, failed } = await this.executePhase(agents, plan);
         if (this.stopped) return;
-        const reviews = await this.reviewPhase(reports);
+        const gitChanges = describeGitChanges(gitBefore, await gitStatus(cwd));
+        const reviews = await this.reviewPhase(agents, reports);
         if (this.stopped) return;
         const fix = await this.fixPhase(reviews);
         if (this.stopped) return;
-        await this.summaryPhase(task, 'divide', { failed, ...fix });
+        await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
       } else {
         if (!agreed) this.system(`已達最大討論回合(${this.config.settings.maxRounds}),由主持人總結。`);
         await this.summaryPhase(task, 'discuss', {});
@@ -236,15 +242,17 @@ class Orchestrator extends EventEmitter {
     return { reports, failed };
   }
 
-  // 階段四:交叉審查(每位成員審查下一位的成果;配對只在成功的成果之間建立)
-  async reviewPhase(reports) {
-    if (reports.length < 2) {
-      if (reports.length === 1) this.system('只有一份可用的執行成果,略過交叉審查。', { level: 'warn' });
+  // 階段四:交叉審查
+  // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
+  // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
+  async reviewPhase(agents, reports) {
+    const pairs = pickReviewPairs(agents, reports);
+    if (pairs.length === 0) {
+      if (reports.length >= 1) this.system('找不到可以擔任審查者的其他成員(整場只有一名啟用成員),略過交叉審查。', { level: 'warn' });
       return [];
     }
     this.setPhase('交叉審查');
-    const jobs = reports.map((r, i) => {
-      const target = reports[(i + 1) % reports.length];
+    const jobs = pairs.map(({ reviewer, target }) => {
       const prompt = [
         `【交叉審查】請檢查「${target.agent.name}」剛完成的工作。請實際打開相關檔案確認,不要只看回報。`,
         '指出:明確的錯誤、與討論結論不一致之處、可以改進的地方。請簡潔。',
@@ -254,8 +262,8 @@ class Orchestrator extends EventEmitter {
         '',
         `他的回報:\n${target.report}`,
       ].join('\n');
-      return this.turn(r.agent, prompt, { phase: '審查', hideAgreed: true })
-        .then(({ text, error }) => ({ reviewer: r.agent, target, text, error }));
+      return this.turn(reviewer, prompt, { phase: '審查', hideAgreed: true })
+        .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
   }
@@ -325,7 +333,7 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段六:主持人總結
-  async summaryPhase(task, mode, { failed = [], unresolved = [], reviewFailed = [], fixFailed = [] } = {}) {
+  async summaryPhase(task, mode, { failed = [], unresolved = [], reviewFailed = [], fixFailed = [], gitChanges = null } = {}) {
     this.setPhase('總結');
     const notes = [];
     if (failed.length) {
@@ -339,6 +347,9 @@ class Orchestrator extends EventEmitter {
     }
     if (unresolved.length) {
       notes.push(`以下成員沒有修改檔案的權限,審查意見尚未處理,請在總結中列出並說明需要使用者做什麼:\n${unresolved.map((u) => `- ${u.agent.name}:\n${u.notes.join('\n')}`).join('\n\n')}`);
+    }
+    if (gitChanges) {
+      notes.push(`執行結束時,工作目錄的 git 變更如下。這是**當下的工作區狀態**,可能包含本次任務開始前就已存在的變更,請據實轉述、不要宣稱這些變更全部由本次任務產生:\n${gitChanges}`);
     }
     const prompt = [
       mode === 'divide'
@@ -381,18 +392,24 @@ class Orchestrator extends EventEmitter {
   }
 
   // 收集該成員尚未看到的訊息,組成「[名稱]: 內容」的紀錄
+  // 不支援 resume 的成員(自訂 CLI、所有 OpenAI 相容 API)每回合都要重送全部紀錄,
+  // 這裡要加上字元上限,否則長討論會直接撞上模型的 context 上限。
   unseenTranscript(agent, current) {
     const seen = this.lastSeen[agent.id];
-    const from = getAdapter(agent.cli)?.supportsResume ? (seen == null ? (this.taskStartIndex || 0) : seen) : 0;
-    const lines = [];
+    const resumable = !!getAdapter(agent.cli)?.supportsResume;
+    const from = resumable ? (seen == null ? (this.taskStartIndex || 0) : seen) : 0;
+    const entries = [];
     for (let i = from; i < this.messages.length; i++) {
       const m = this.messages[i];
       if (m === current || m.status === 'running') continue;
-      if (m.kind === 'user') lines.push(`[使用者]:\n${m.text}`);
-      else if (m.kind === 'agent' && m.agentId !== agent.id && m.text) lines.push(`[${m.agentName}]:\n${m.text}`);
-      else if (m.kind === 'system' && m.level !== 'error' && m.text.startsWith('**分工結果**')) lines.push(`[系統]:\n${m.text}`);
+      // 任務敘述與分工結果是後面每一句話的前提,截斷時一定要保留
+      if (m.kind === 'user') entries.push({ text: `[使用者]:\n${m.text}`, pinned: i === this.taskStartIndex });
+      else if (m.kind === 'agent' && m.agentId !== agent.id && m.text) entries.push({ text: `[${m.agentName}]:\n${m.text}` });
+      else if (m.kind === 'system' && m.level !== 'error' && m.text.startsWith('**分工結果**')) entries.push({ text: `[系統]:\n${m.text}`, pinned: true });
     }
-    return lines.join('\n\n');
+    if (entries.length === 0) return '';
+    if (resumable) return entries.map((e) => e.text).join(SEP); // 只送新訊息,量本來就小
+    return truncateTranscript(entries, Number(this.config.settings.maxTranscriptChars) || 0);
   }
 
   // ---------- 執行一次發言 ----------
@@ -436,6 +453,140 @@ class Orchestrator extends EventEmitter {
     }, true); // 回合結束一定要 flush,不能讓最後一次更新卡在節流裡
     return { text, error };
   }
+}
+
+// ---------- 對話紀錄截斷 ----------
+const omitNotice = (n) => `…(已省略中間 ${n} 則訊息)…`;
+const CLIP_NOTICE = '\n…(此則訊息過長,已截斷)…';
+
+// 單則訊息本身就超過預算時就地裁尾,避免一則訊息吃掉整個額度
+function clipEntry(text, max) {
+  if (text.length <= max) return text;
+  if (max <= CLIP_NOTICE.length) return CLIP_NOTICE.slice(0, Math.max(0, max));
+  return text.slice(0, max - CLIP_NOTICE.length) + CLIP_NOTICE;
+}
+
+// 把對話紀錄壓到 limit 字元以內。
+// pinned(任務敘述、分工結果)與最新一則一定保留,其餘從新到舊盡量保留;
+// 被裁掉的位置就地插入「已省略中間 N 則訊息」,不做靜默裁切。
+// limit <= 0 視為不限制。
+function truncateTranscript(entries, limit) {
+  const texts = entries.map((e) => e.text);
+  const full = texts.join(SEP);
+  if (!Number.isFinite(limit) || limit <= 0 || full.length <= limit) return full;
+
+  const budget = Math.max(0, limit - TRUNCATE_RESERVE);
+  const last = entries.length - 1;
+  // 最新一則等同釘選:成員至少要看得到上一位說了什麼
+  const items = entries.map((e, i) => ({ pinned: !!e.pinned || i === last, text: e.text }));
+  const cost = (t) => t.length + SEP.length;
+
+  // 第一步:決定保留哪些。釘選的必留,其餘從最新往回補,遇到放不下的就停,
+  // 保留一段連續的最近紀錄而不是零散幾則。
+  const keep = new Array(items.length).fill(false);
+  let used = 0;
+  for (let i = 0; i < items.length; i++) if (items[i].pinned) { keep[i] = true; used += cost(items[i].text); }
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (keep[i]) continue;
+    if (used + cost(items[i].text) > budget) break;
+    keep[i] = true;
+    used += cost(items[i].text);
+  }
+
+  // 第二步:必留的部分本身就超過預算時(例如任務敘述與分工結果都很長),
+  // 在所有保留項目之間做 max-min 公平分配再各自裁尾。
+  // 不能讓排在前面的項目吃光額度,否則最後的整體裁切會把最新一則整個擠掉。
+  const kept = items.map((_, i) => i).filter((i) => keep[i]);
+  const allowance = allocateBudget(kept.map((i) => cost(items[i].text)), budget);
+  const shown = new Map();
+  kept.forEach((i, k) => shown.set(i, clipEntry(items[i].text, Math.max(0, allowance[k] - SEP.length))));
+
+  const out = [];
+  let dropped = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (!keep[i]) { dropped++; continue; }
+    if (dropped) { out.push(omitNotice(dropped)); dropped = 0; }
+    out.push(shown.get(i));
+  }
+  if (dropped) out.push(omitNotice(dropped));
+
+  const text = out.join(SEP);
+  return text.length <= limit ? text : text.slice(0, limit); // 最後保險:絕不超過上限
+}
+
+// max-min 公平分配:需求小的先拿滿,省下來的額度再平分給還不夠的,
+// 所以沒有任何一項會被歸零,總和也不會超過 budget。
+function allocateBudget(costs, budget) {
+  const out = new Array(costs.length).fill(0);
+  const order = costs.map((_, i) => i).sort((a, b) => costs[a] - costs[b]);
+  let remaining = budget;
+  let left = costs.length;
+  for (const i of order) {
+    const take = Math.min(costs[i], Math.floor(remaining / left));
+    out[i] = take;
+    remaining -= take;
+    left--;
+  }
+  return out;
+}
+
+// ---------- 審查配對 ----------
+// 兩份以上成果:每人審查下一位(環狀)。
+// 只有一份:從其他啟用成員裡挑一位(優先有執行成果的),讓單人執行也有品質關卡。
+// 整場只剩一名啟用成員時回空陣列,由呼叫端提示並略過。
+function pickReviewPairs(agents, reports) {
+  if (!Array.isArray(reports) || reports.length === 0) return [];
+  if (reports.length >= 2) {
+    return reports.map((r, i) => ({ reviewer: r.agent, target: reports[(i + 1) % reports.length] }));
+  }
+  const target = reports[0];
+  const executed = new Set(reports.map((r) => r.agent.id));
+  const candidates = (agents || []).filter((a) => a && a.id !== target.agent.id);
+  const reviewer = candidates.find((a) => executed.has(a.id)) || candidates[0];
+  return reviewer ? [{ reviewer, target }] : [];
+}
+
+// ---------- git 變更 ----------
+// 讀工作目錄的 git 變更;不是 git repo、找不到 git、逾時都安靜回 null,絕不影響主流程。
+function gitStatus(cwd) {
+  return new Promise((resolve) => {
+    try {
+      // --untracked-files=all:預設的 normal 模式會把整個未追蹤目錄收合成「?? dir/」,拿不到檔案清單
+      execFile('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+        resolve(err ? null : parsePorcelain(stdout));
+      });
+    } catch { resolve(null); }
+  });
+}
+
+// 「XY path」→ Map(path → status);rename 的「old -> new」取新路徑
+function parsePorcelain(stdout) {
+  const out = new Map();
+  for (const line of String(stdout || '').split('\n')) {
+    if (line.length < 4) continue;
+    const status = line.slice(0, 2).trim();
+    let file = line.slice(3).trim();
+    const arrow = file.indexOf(' -> ');
+    if (arrow >= 0) file = file.slice(arrow + 4).trim();
+    file = file.replace(/^"(.*)"$/, '$1');
+    if (file) out.set(file, status);
+  }
+  return out;
+}
+
+// 執行前後的「檔名集合差集」不足以歸因:本來就是 M 的檔案再被改,前後仍然都是 M。
+// 平行執行下也無法把變更歸給某一位成員。因此只回報執行結束時的工作區狀態,
+// 並標出哪些檔案在執行前就已經是變更狀態,讓總結不會過度宣稱。
+function describeGitChanges(before, after) {
+  if (!after || after.size === 0) return null;
+  const lines = [];
+  for (const [file, status] of after) {
+    // -uall 展開未追蹤目錄後檔案數可能很多(例如工作目錄沒有 .gitignore),不能讓清單灌爆總結提示
+    if (lines.length >= MAX_GIT_FILES) { lines.push(`- (另有 ${after.size - MAX_GIT_FILES} 個變更檔案未列出)`); break; }
+    const pre = before && before.has(file);
+    lines.push(`- \`${status || '??'}\` ${file}${pre ? '(執行前就已是變更狀態)' : ''}`);
+  }
+  return lines.join('\n');
 }
 
 // ---------- JSON 解析 ----------
@@ -501,4 +652,4 @@ function resolveAgent(token, codes, agents) {
   }) || null;
 }
 
-module.exports = { Orchestrator };
+module.exports = { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, extractJson, resolveAgent };

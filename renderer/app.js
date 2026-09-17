@@ -7,7 +7,9 @@ let extSummary = { entries: [], templates: [] };
 let editingExtFile = null;
 let editingId = null;
 const msgEls = new Map();
+const messageData = new Map();
 let running = false;
+let exporting = false;
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -34,12 +36,20 @@ async function init() {
 
   window.api.onMessage(renderMessage);
   window.api.onState(setState);
-  window.api.onReset(() => { msgEls.clear(); $('#timeline').innerHTML = ''; $('#timeline').appendChild($('#empty') || emptyEl()); $('#empty').style.display = ''; });
+  window.api.onReset(() => {
+    msgEls.clear();
+    messageData.clear();
+    $('#timeline').innerHTML = '';
+    $('#timeline').appendChild(emptyEl());
+    updateUsageTotal();
+  });
 
   $('#send-btn').onclick = sendMessage;
   $('#input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); } });
   $('#stop-btn').onclick = () => window.api.stop();
   $('#reset-btn').onclick = () => { if (!running || confirm('目前仍在進行中,確定要停止並清空對話?')) window.api.reset(); };
+  $('#export-btn').onclick = exportConversation;
+  $('#sessions-btn').onclick = () => window.api.openSessions();
   $('#add-agent').onclick = () => openModal(null);
   $('#modal-close').onclick = closeModal;
   $('#modal-save').onclick = saveModal;
@@ -382,6 +392,8 @@ function setState(s) {
 }
 
 function renderMessage(m) {
+  messageData.set(m.id, m);
+  updateUsageTotal();
   const tl = $('#timeline');
   const empty = $('#empty');
   if (empty) empty.style.display = 'none';
@@ -518,13 +530,109 @@ function hasSelectionInside(el) {
   const sel = window.getSelection && window.getSelection();
   return !!(sel && !sel.isCollapsed && el.contains(sel.anchorNode) && el.contains(sel.focusNode));
 }
+function rawValue(value) {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (value == null || typeof value !== 'object') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function rawUsageText(u) {
+  const raw = u && u.raw && typeof u.raw === 'object' ? u.raw : u;
+  const fields = raw && typeof raw === 'object'
+    ? Object.entries(raw).filter(([key]) => !['shape', 'raw'].includes(key)).map(([key, value]) => `${key}=${rawValue(value)}`)
+    : [];
+  return fields.length ? `原始用量：${fields.join(' · ')}` : '原始用量（無欄位）';
+}
+
 function usageText(u) {
   if (!u) return '';
+  if (!u.shape || u.shape === 'unknown') return rawUsageText(u);
   const parts = [];
-  if (u.input_tokens != null) parts.push(`輸入 ${fmt(u.input_tokens + (u.cache_read_input_tokens || u.cached_input_tokens || 0))}`);
-  if (u.output_tokens != null) parts.push(`輸出 ${fmt(u.output_tokens)}`);
-  if (u.total_cost_usd != null) parts.push(`$${u.total_cost_usd.toFixed(3)}`);
+  if (hasNumber(u.inputTokens)) {
+    const detail = [];
+    if (hasNumber(u.cachedInputTokens)) detail.push(`其中快取 ${fmt(numeric(u.cachedInputTokens))}`);
+    if (hasNumber(u.cacheWriteTokens)) detail.push(`寫入快取 ${fmt(numeric(u.cacheWriteTokens))}`);
+    parts.push(`輸入 ${fmt(numeric(u.inputTokens))}${detail.length ? `（${detail.join('、')}）` : ''}`);
+  } else {
+    if (hasNumber(u.cachedInputTokens)) parts.push(`快取輸入 ${fmt(numeric(u.cachedInputTokens))}`);
+    if (hasNumber(u.cacheWriteTokens)) parts.push(`寫入快取 ${fmt(numeric(u.cacheWriteTokens))}`);
+  }
+  if (hasNumber(u.outputTokens)) parts.push(`輸出 ${fmt(numeric(u.outputTokens))}`);
+  if (hasNumber(u.costUsd)) parts.push(`$${numeric(u.costUsd).toFixed(3)}`);
   return parts.join(' · ');
+}
+
+function numeric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+function hasNumber(value) { return value != null && Number.isFinite(Number(value)); }
+
+function emptyMetric() { return { total: 0, turns: 0, agents: new Set() }; }
+function addMetric(metric, value, agent) {
+  if (!hasNumber(value)) return;
+  metric.total += numeric(value);
+  metric.turns++;
+  metric.agents.add(agent);
+}
+
+function updateUsageTotal() {
+  const metrics = {
+    inputTokens: emptyMetric(),
+    cachedInputTokens: emptyMetric(),
+    cacheWriteTokens: emptyMetric(),
+    outputTokens: emptyMetric(),
+    costUsd: emptyMetric(),
+  };
+  const usageAgents = new Set();
+  let usageTurns = 0;
+  let unknownTurns = 0;
+  for (const message of messageData.values()) {
+    const usage = message && message.usage;
+    if (!usage) continue;
+    const agent = message.agentId || message.agentName || '未知成員';
+    usageTurns++;
+    usageAgents.add(agent);
+    if (!usage.shape || usage.shape === 'unknown') { unknownTurns++; continue; }
+    for (const key of Object.keys(metrics)) addMetric(metrics[key], usage[key], agent);
+  }
+  const compact = [];
+  if (metrics.inputTokens.turns) compact.push(`輸入 ${fmt(metrics.inputTokens.total)}`);
+  if (metrics.cachedInputTokens.turns) compact.push(`其中快取 ${fmt(metrics.cachedInputTokens.total)}`);
+  if (metrics.cacheWriteTokens.turns) compact.push(`寫入快取 ${fmt(metrics.cacheWriteTokens.total)}`);
+  if (metrics.outputTokens.turns) compact.push(`輸出 ${fmt(metrics.outputTokens.total)}`);
+  if (metrics.costUsd.turns) compact.push(`$${metrics.costUsd.total.toFixed(3)}`, `成本 ${metrics.costUsd.turns}/${usageTurns}`);
+  if (unknownTurns) compact.push(`${unknownTurns} 則未納入`);
+
+  const labels = { inputTokens: '輸入', cachedInputTokens: '快取輸入', cacheWriteTokens: '寫入快取', outputTokens: '輸出', costUsd: '成本' };
+  const details = [];
+  for (const [key, metric] of Object.entries(metrics)) {
+    if (!metric.turns) continue;
+    const total = key === 'costUsd' ? `$${metric.total.toFixed(3)}` : fmt(metric.total);
+    details.push(`${labels[key]} ${total}（涵蓋 ${metric.agents.size}/${usageAgents.size} 位成員、${metric.turns}/${usageTurns} 次用量回報）`);
+  }
+  if (unknownTurns) details.push(`${unknownTurns}/${usageTurns} 次未知格式用量未納入總計`);
+  const el = $('#usage-total');
+  el.hidden = compact.length === 0;
+  el.textContent = compact.join(' · ');
+  el.title = details.join('\n');
+  $('#export-btn').disabled = exporting || messageData.size === 0;
+}
+
+async function exportConversation() {
+  const button = $('#export-btn');
+  if (exporting) return;
+  exporting = true;
+  button.disabled = true;
+  try {
+    const result = await window.api.exportChat();
+    if (result && result.error) alert(`匯出失敗:${result.error}`);
+  } catch (error) {
+    alert(`匯出失敗:${cleanIpcError(error)}`);
+  } finally {
+    exporting = false;
+    updateUsageTotal();
+  }
 }
 
 // ---------- 小工具 ----------

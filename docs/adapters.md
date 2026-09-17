@@ -30,6 +30,7 @@ AI Roundtable 內建 Claude Code 與 Codex CLI。其他 AI 可以用擴充接進
 | `models` | 否 | 模型清單,見下方;`openai` 類型可以寫 `"auto"` |
 | `efforts` | 否 | 手動輸入模型、或模型沒限制強度時可選的強度 |
 | `timeoutMs` | 否 | 單回合逾時,預設 10 分鐘 |
+| `usageShape` | 否 | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷 |
 
 ### 模型清單
 
@@ -45,6 +46,46 @@ AI Roundtable 內建 Claude Code 與 Codex CLI。其他 AI 可以用擴充接進
 - 有寫 `efforts` 的模型,選到不支援的強度時會自動降到最接近的等級,並在對話中標示。
 - `efforts` 寫空陣列代表不支援強度,不會傳強度參數。
 - 沒寫 `efforts` 代表不限制,照使用者選的送出。
+
+## 用量正規化
+
+各家 CLI / API 回報的用量欄位名稱與語意都不一樣,`src/usage.js` 會在 `runTurn` 出口統一成同一種形狀,介面與匯出才能安全地跨成員加總:
+
+| 正規化欄位 | 意義 |
+| --- | --- |
+| `inputTokens` | **含快取命中與快取寫入的完整輸入總量** |
+| `cachedInputTokens` | 其中命中快取的部分(`inputTokens` 的子集) |
+| `cacheWriteTokens` | 其中寫入快取的部分(`inputTokens` 的子集,與 `cachedInputTokens` 互斥) |
+| `outputTokens` | 輸出 |
+| `costUsd` | 金額,只有部分來源會回報 |
+| `shape` | 實際採用的慣例,或 `unknown` |
+| `raw` | 原始物件,永遠原樣保留 |
+
+**沒有回報的欄位是 `null`,不是 `0`。**「這個來源沒給這個數字」和「這個數字確定是零」在加總時意義完全不同,消費端只會加總實際有值的紀錄,並顯示每一欄涵蓋了幾位成員、幾個回合。
+
+### 各慣例的欄位對應
+
+| `usageShape` | 來源 | `inputTokens` | `cachedInputTokens` | `cacheWriteTokens` |
+| --- | --- | --- | --- | --- |
+| `anthropic` | Claude Code | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+| `codex` | Codex CLI | `input_tokens`(本來就含快取) | `cached_input_tokens` | 不回報(`null`) |
+| `openai` | OpenAI 相容 API | `prompt_tokens`(本來就含快取) | `prompt_tokens_details.cached_tokens` | 不回報(`null`) |
+
+Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input_tokens + cache_read_input_tokens` 會在寫入快取的回合嚴重少報 —— 實測一筆真實資料是 38058 對 28099,少了 26%。
+
+`total_cost_usd` 目前只有 Claude Code 會回報。已實測確認它是**單次 invocation 的成本**而非 session 累計(同一 session 跑兩回合,第二回合 `--resume` 的金額 0.020398 小於第一回合的 0.113749;若是累計就不可能遞減),所以逐則相加是正確的。
+
+### 沒填 `usageShape` 時
+
+依欄位特徵自動判斷,只在簽名沒有歧義時才下結論:
+
+1. 有 `cache_read_input_tokens` 或 `cache_creation_input_tokens` → `anthropic`
+2. 有 `prompt_tokens` 或 `completion_tokens` → `openai`
+3. 有 `cached_input_tokens` → `codex`
+4. 只有 `input_tokens` 與 `output_tokens`、完全沒有任何快取欄位 → `codex`(此時快取為零,「含快取」與「不含快取」兩種解讀會收斂到同一個數字,所以這不是猜測)
+5. 都不符合 → `unknown`
+
+`unknown` 的紀錄會保留 `raw` 並在介面與匯出中逐項顯示原始欄位,但**不會納入跨來源總計**,總計會標明有幾則未納入。錯誤推定比不加總更危險,所以認不得就不猜。
 
 ## CLI 類型
 

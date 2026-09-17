@@ -2,6 +2,7 @@
 // 擴充規格的共用檢查與正規化。
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+const { SHAPES: USAGE_SHAPES } = require('../usage');
 
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
 function normalizeModels(list) {
@@ -31,6 +32,7 @@ function validateCommon(spec, errors) {
   if (spec.models != null && spec.models !== 'auto' && !Array.isArray(spec.models)) errors.push('models 必須是陣列或 "auto"');
   if (spec.efforts != null && !Array.isArray(spec.efforts)) errors.push('efforts 必須是陣列');
   if (spec.timeoutMs != null && !(Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0)) errors.push('timeoutMs 必須是正數');
+  if (spec.usageShape != null && !USAGE_SHAPES.includes(spec.usageShape)) errors.push(`usageShape 必須是 ${USAGE_SHAPES.join('、')};不填則依欄位特徵自動判斷`);
 }
 
 module.exports = { ID_PATTERN, normalizeModels, validateCommon };

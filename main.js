@@ -6,6 +6,7 @@ const { execSync } = require('child_process');
 const { Store } = require('./src/store');
 const { Orchestrator } = require('./src/orchestrator');
 const { Registry, setRegistry } = require('./src/adapters');
+const { writeSession, messagesToMarkdown } = require('./src/session-log');
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -34,6 +35,16 @@ let win;
 let store;
 let orchestrator;
 let registry;
+let activeTaskStart = null;
+let wasRunning = false;
+
+function persistTask(start) {
+  // runTask 的 rejection handler 可能會在 idle 事件後補上一則錯誤訊息。
+  setImmediate(() => {
+    const messages = orchestrator.snapshot().messages.slice(start);
+    if (messages.length) writeSession(app.getPath('userData'), messages);
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -72,8 +83,16 @@ app.whenReady().then(async () => {
   setRegistry(registry);
   orchestrator = new Orchestrator(store);
   orchestrator.on('message', (m) => send('chat:message', m));
-  orchestrator.on('state', (s) => send('chat:state', s));
-  orchestrator.on('reset', () => send('chat:reset'));
+  orchestrator.on('state', (s) => {
+    send('chat:state', s);
+    if (wasRunning && !s.running && activeTaskStart != null) {
+      const start = activeTaskStart;
+      activeTaskStart = null;
+      persistTask(start);
+    }
+    wasRunning = !!s.running;
+  });
+  orchestrator.on('reset', () => { activeTaskStart = null; send('chat:reset'); });
 
   ipcMain.handle('config:get', () => store.get());
   ipcMain.handle('config:save', (_e, cfg) => store.save(cfg));
@@ -95,7 +114,40 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
   ipcMain.handle('chat:snapshot', () => orchestrator.snapshot());
-  ipcMain.handle('chat:send', (_e, { text, mode }) => orchestrator.userMessage(text, mode));
+  ipcMain.handle('chat:send', async (_e, { text, mode }) => {
+    const snap = orchestrator.snapshot();
+    if (!snap.running) activeTaskStart = snap.messages.length;
+    const message = await orchestrator.userMessage(text, mode);
+    // 沒有可用成員、工作目錄無法建立等前置失敗不會進入 running 狀態。
+    if (!orchestrator.snapshot().running && activeTaskStart != null) {
+      const start = activeTaskStart;
+      activeTaskStart = null;
+      persistTask(start);
+    }
+    return message;
+  });
+  ipcMain.handle('chat:export', async () => {
+    const messages = orchestrator.snapshot().messages;
+    if (!messages.length) return { ok: false, error: '目前沒有可匯出的對話' };
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const result = await dialog.showSaveDialog(win, {
+      title: '匯出本次對話',
+      defaultPath: `ai-roundtable-${stamp}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    try {
+      await require('fs').promises.writeFile(result.filePath, messagesToMarkdown(messages), 'utf8');
+      return { ok: true, file: result.filePath };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle('chat:openSessions', () => {
+    const dir = path.join(app.getPath('userData'), 'sessions');
+    require('fs').mkdirSync(dir, { recursive: true });
+    return shell.openPath(dir);
+  });
   ipcMain.handle('chat:stop', () => orchestrator.stop());
   ipcMain.handle('chat:reset', () => orchestrator.reset());
 

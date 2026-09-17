@@ -77,6 +77,7 @@ function createOpenAIAdapter(spec, { fetchImpl } = {}) {
     supportsResume: spec.history !== false,
     supportsEdit: false,
     efforts: spec.efforts || [],
+    usageShape: 'openai', // OpenAI 相容端點:prompt_tokens 已含快取,cached 在 prompt_tokens_details
     listModels: () => {
       if (staticModels) return { models: staticModels, source: 'config' };
       return { models: fetched.models, source: fetched.error ? 'error' : fetched.at ? 'api' : 'loading', error: fetched.error };

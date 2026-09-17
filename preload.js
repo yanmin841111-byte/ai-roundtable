@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('api', {
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   snapshot: () => ipcRenderer.invoke('chat:snapshot'),
   send: (text, mode) => ipcRenderer.invoke('chat:send', { text, mode }),
+  exportChat: () => ipcRenderer.invoke('chat:export'),
+  openSessions: () => ipcRenderer.invoke('chat:openSessions'),
   stop: () => ipcRenderer.invoke('chat:stop'),
   reset: () => ipcRenderer.invoke('chat:reset'),
   ext: {

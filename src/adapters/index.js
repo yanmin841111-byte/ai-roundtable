@@ -6,6 +6,7 @@
 //        onText(fullText), onThinking(fullText), onActivity(activity), onSession(id), onProc(handle) }
 
 const { Registry } = require('./registry');
+const { normalizeUsage } = require('../usage');
 
 let registry = new Registry();
 
@@ -28,7 +29,10 @@ async function runTurn(agent, ctx) {
   }
   try {
     const result = await adapter.run({ ...agent, canEdit: effectiveCanEdit(agent) }, ctx);
-    return { text: '', thinking: '', sessionId: null, usage: null, error: null, ...(result || {}) };
+    const merged = { text: '', thinking: '', sessionId: null, usage: null, error: null, ...(result || {}) };
+    // 所有 usage 都在這個出口正規化,上層(orchestrator、介面、匯出)只會看到同一種形狀
+    merged.usage = merged.usage ? normalizeUsage(merged.usage, adapter.usageShape) : null;
+    return merged;
   } catch (e) {
     return { text: '', thinking: '', sessionId: null, usage: null, error: `${adapter.label} 執行失敗:${e.message}` };
   }

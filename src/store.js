@@ -38,6 +38,8 @@ function defaultConfig() {
       mode: 'divide',
       leadAgentId: null,
       language: '繁體中文',
+      // 不支援 resume 的成員每回合都要重送對話紀錄,超過這個字元數就截斷中段,避免撞上 context 上限
+      maxTranscriptChars: 60000,
     },
   };
 }

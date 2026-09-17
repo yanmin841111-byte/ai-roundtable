@@ -199,6 +199,7 @@ const builtinAdapters = [
     efforts: CLAUDE_EFFORTS,
     listModels: () => listModels('claude'),
     check: () => checkCli('claude'),
+    usageShape: 'anthropic',
     run: runClaude,
   },
   {
@@ -211,6 +212,7 @@ const builtinAdapters = [
     efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     listModels: () => listModels('codex'),
     check: () => checkCli('codex'),
+    usageShape: 'codex',
     run: runCodex,
   },
   {
@@ -220,7 +222,7 @@ const builtinAdapters = [
     bin: null,
     supportsResume: false,
     supportsEdit: true,
-    usesCustomCommand: true,
+    usesCustomCommand: true, // 不宣告 usageShape:自訂指令的 usage 語意未知,交給特徵辨識
     efforts: [],
     listModels: () => ({ models: [], source: 'none' }),
     run: runCustom,

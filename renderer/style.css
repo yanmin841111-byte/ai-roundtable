@@ -56,6 +56,7 @@ textarea { resize: vertical; }
 #topbar .drag-region { position: absolute; left: 320px; right: 0; top: 0; }
 .phase { font-size: 12px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
 .phase.busy { border-color: var(--accent); color: var(--accent); animation: pulse 1.6s infinite; }
+.usage-total { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(48vw, 720px); }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
 
 #timeline { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }

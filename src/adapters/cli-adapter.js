@@ -48,6 +48,7 @@ function createCliAdapter(spec) {
     supportsResume: spec.supportsResume != null ? !!spec.supportsResume : hasSessionRule,
     supportsEdit: spec.supportsEdit != null ? !!spec.supportsEdit : true,
     efforts: spec.efforts || [],
+    usageShape: spec.usageShape || null, // 沒填就交給 usage.js 依欄位特徵判斷
     listModels: () => ({ models, source: models.length ? 'config' : 'none' }),
     check: () => (spec.versionArgs === false ? Promise.resolve({ ok: true, version: '(略過檢查)' }) : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'])),
     run: (agent, ctx) => runCli(spec, { format, rules, models }, agent, ctx),
