@@ -32,7 +32,7 @@ First release.
 - IPC type definitions are shared by the main process and the interface.
 - GitHub Actions CI runs type checks, tests, the build and the end-to-end run (`npm run e2e`, a full flow with fake members) on every push and pull request.
 - The built-in Claude Code and Codex CLI adapters have tests that replay recorded stream-json events.
-- `npm run dist` writes an unsigned dmg to `release/`; pushing a `v*` tag builds it and attaches it to a GitHub Release.
+- `npm run dist` writes Apple Silicon and Intel dmgs to `release/` (ad-hoc signed, not notarized); pushing a `v*` tag builds them and attaches them to a GitHub Release.
 
 ### Security
 

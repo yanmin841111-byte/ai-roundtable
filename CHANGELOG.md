@@ -32,7 +32,7 @@
 - 主程序與介面共用 IPC 型別定義。
 - 新增 GitHub Actions CI,每次 push 與 pull request 都跑型別檢查、測試、建置與端對端測試(`npm run e2e`,用假成員跑完整流程)。
 - 內建 Claude Code / Codex CLI 轉接器有了重播 stream-json 事件的測試。
-- `npm run dist` 產生未簽章的 dmg 到 `release/`;推送 `v*` 標籤會自動建置並附到 GitHub Release。
+- `npm run dist` 產生 Apple Silicon 與 Intel 兩個 dmg 到 `release/`(ad-hoc 簽章、未公證);推送 `v*` 標籤會自動建置並附到 GitHub Release。
 
 ### 安全
 
