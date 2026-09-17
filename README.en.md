@@ -48,7 +48,7 @@ To package a .dmg:
 npm run dist
 ```
 
-The output is `release/AI Roundtable-<version>-arm64.dmg` (Apple Silicon) and `-x64.dmg` (Intel). You can also download them from [Releases](https://github.com/yanmin841111-byte/ai-roundtable/releases). There is no Apple developer certificate, so the app is only ad-hoc signed and not notarized; the first time, macOS says the developer cannot be verified. Right-click the app in Finder → Open, or click "Open Anyway" under System Settings → Privacy & Security.
+The output is `release/AI Roundtable-<version>-arm64.dmg` (Apple Silicon) and `-x64.dmg` (Intel). You can also download them from [Releases](https://github.com/yanmin841111-byte/ai-roundtable/releases). There is no Apple developer certificate, so the app is only ad-hoc signed and not notarized; the first time, macOS says the developer cannot be verified. Click Done, then open System Settings → Privacy & Security, click "Open Anyway" at the bottom and confirm (on macOS 14 and earlier, right-click the app in Finder → Open also works). After that it opens normally.
 
 ## How a task runs
 

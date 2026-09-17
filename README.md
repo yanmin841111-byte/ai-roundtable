@@ -48,7 +48,7 @@ npm start
 npm run dist
 ```
 
-輸出在 `release/AI Roundtable-<版本>-arm64.dmg`(Apple Silicon)與 `-x64.dmg`(Intel),也可以直接到 [Releases](https://github.com/yanmin841111-byte/ai-roundtable/releases) 下載。沒有 Apple 開發者憑證,app 只有 ad-hoc 簽章、未經公證,第一次開啟 macOS 會說「無法驗證開發者」:請在 Finder 對 app 按右鍵 → 打開,或到「系統設定 → 隱私權與安全性」按「強制打開」。
+輸出在 `release/AI Roundtable-<版本>-arm64.dmg`(Apple Silicon)與 `-x64.dmg`(Intel),也可以直接到 [Releases](https://github.com/yanmin841111-byte/ai-roundtable/releases) 下載。沒有 Apple 開發者憑證,app 只有 ad-hoc 簽章、未經公證,第一次開啟 macOS 會說「無法驗證開發者」:按「完成」後到「系統設定 → 隱私權與安全性」,在下方按「強制打開」再確認一次即可(macOS 14 以前也可以在 Finder 對 app 按右鍵 → 打開)。之後就能正常開啟。
 
 ## 流程
 
