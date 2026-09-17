@@ -15,7 +15,7 @@
 
 const SHAPES = ['anthropic', 'codex', 'openai', 'cursor'];
 
-export interface NormalizedUsage {
+export type NormalizedUsage = {
   inputTokens: number | null;
   cachedInputTokens: number | null;
   cacheWriteTokens: number | null;
@@ -23,7 +23,7 @@ export interface NormalizedUsage {
   costUsd: number | null;
   shape: string;
   raw: unknown;
-}
+};
 
 // 只接受有限的數字;字串數字也收(有些 CLI 會輸出字串)
 function num(value: any) {

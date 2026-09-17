@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import type { AppConfig } from './ipc-types';
 
-function defaultConfig() {
+function defaultConfig(): AppConfig {
   return {
     agents: [
       {
@@ -44,16 +45,16 @@ function defaultConfig() {
 }
 
 class Store {
-  userDataDir: any;
-  file: any;
-  config: any;
+  userDataDir: string;
+  file: string;
+  config: AppConfig;
 
-  constructor(userDataDir: any) {
+  constructor(userDataDir: string) {
     this.userDataDir = userDataDir;
     this.file = path.join(userDataDir, 'config.json');
     this.config = this.load();
   }
-  load() {
+  load(): AppConfig {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       const def = defaultConfig();
@@ -62,13 +63,13 @@ class Store {
       return defaultConfig();
     }
   }
-  save(config: any) {
+  save(config: AppConfig): AppConfig {
     this.config = config;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(config, null, 2));
     return this.config;
   }
-  get() { return this.config; }
+  get(): AppConfig { return this.config; }
 }
 
 export { Store, defaultConfig };

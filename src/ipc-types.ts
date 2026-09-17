@@ -197,7 +197,7 @@ export interface UsageInfo {
   cacheWriteTokens?: number | null;
   outputTokens?: number | null;
   costUsd?: number | null;
-  raw?: Record<string, unknown>;
+  raw?: unknown;
   [key: string]: unknown;
 }
 
@@ -245,7 +245,7 @@ export interface ChatMessage {
   color?: string;
   group?: string;
   directed?: boolean;
-  error?: string;
+  error?: string | null;
   thinking?: string;
   activities?: Activity[];
   attachments?: AttachmentMeta[];

@@ -13,8 +13,8 @@ jobs:
     # app 目前只支援 macOS,測試環境跟著一致
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
