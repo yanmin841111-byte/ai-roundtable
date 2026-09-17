@@ -32,6 +32,15 @@ const fakeSafeStorage = {
   fakeSafeStorage.available = true;
   assert.throws(() => store.set('../bad', 'secret'), /secretRef/);
 
+  // secretRef 恰好是 Object.prototype 上的名稱時,沒存過就是未設定,存了也要能正常讀寫
+  for (const ref of ['toString', 'constructor', 'valueOf']) {
+    assert.deepStrictEqual(store.status(ref), { configured: false, source: null, hint: '' });
+    assert.strictEqual(store.get(ref), '');
+  }
+  store.set('toString', 'sk-proto-5678');
+  assert.strictEqual(new SecretStore(dir, fakeSafeStorage).get('toString'), 'sk-proto-5678');
+  store.clear('toString');
+
   const errors: any[] = [];
   validateCommon({ id: 'x', capabilities: { attachments: ['filePath', 'bad'], attachmentsNeedCwd: 'yes' } }, errors);
   assert.ok(errors.some((e: any) => e.includes('只接受')));
