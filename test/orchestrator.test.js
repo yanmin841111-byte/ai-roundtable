@@ -160,11 +160,27 @@ t('不支援 resume 的成員會套用上限並保留首尾', () => {
   assert.ok(out.includes(OMIT) || out.includes(CLIP));
 });
 
-t('支援 resume 的成員不套用截斷(只送新訊息,量本來就小)', () => {
+t('支援 resume 且發言過的成員不套用截斷(只送新訊息,量本來就小)', () => {
   const { orc, me } = makeOrc('claude', 1500);
+  orc.lastSeen.me = 0;
   const out = orc.unseenTranscript(me, null);
   assert.ok(out.length > 1500, `實際 ${out.length}`);
   assert.ok(!out.includes(OMIT));
+});
+
+t('支援 resume 但第一次發言的成員(例如剛載入歷史對話)從頭看起並套用上限', () => {
+  const { orc, me } = makeOrc('claude', 1500);
+  orc.taskStartIndex = 2; // 新任務在後面,前面是歷史紀錄
+  const out = orc.unseenTranscript(me, null);
+  assert.ok(out.length <= 1500, `實際 ${out.length}`);
+  assert.ok(out.includes('任務內容'), '歷史紀錄的開頭要帶到');
+  assert.ok(out.includes('最後一句'));
+});
+
+t('@ 指定的使用者訊息在紀錄裡標出對象', () => {
+  const { orc, me } = makeOrc('custom', 0);
+  orc.messages = [{ kind: 'user', text: '幫我看', status: 'done', mentions: [{ id: 'other', name: '別人' }] }];
+  assert.ok(orc.unseenTranscript(me, null).startsWith('[使用者 → @別人]:'));
 });
 
 t('沒有未讀訊息時回傳空字串', () => {
@@ -225,4 +241,146 @@ t('resolveAgent 先比代號再比名稱', () => {
   assert.strictEqual(O.resolveAgent('不存在的人', codes, [a, b]), null);
 });
 
+// ---------- @ 指定 ----------
+
+const { findMentions } = require('../src/shared');
+
+t('findMentions:長名稱優先、全形＠、英數字邊界、中文名稱可直接接內容', () => {
+  const list = [ag('1', 'Claude'), ag('2', 'Codex'), ag('3', 'Code'), ag('4', '克勞德')];
+  const names = (text) => findMentions(text, list).map((a) => a.name);
+  assert.deepStrictEqual(names('@Codex 幫我'), ['Codex']);
+  assert.deepStrictEqual(names('＠claude 和 @Code 一起看'), ['Claude', 'Code']);
+  assert.deepStrictEqual(names('@克勞德幫我看 @Codex2'), ['克勞德']);
+  assert.deepStrictEqual(names('寄信到 a@b.com'), []);
+  assert.deepStrictEqual(names('@Code 先,@Claude 後,@Code 重複'), ['Code', 'Claude']);
+});
+
+// ---------- 載入歷史對話 ----------
+
+t('loadConversation:還原訊息、未完成的標成中斷、清掉 session 記憶', () => {
+  const { orc } = makeOrc('custom', 0);
+  orc.sessions = { me: 's1' };
+  orc.lastSeen = { me: 3 };
+  const snap = orc.loadConversation({
+    conversationId: 'conv-1',
+    messages: [
+      { kind: 'user', text: '舊任務' },
+      { kind: 'agent', agentId: 'other', text: '寫到一半', status: 'running' },
+      null,
+      { kind: 'weird', text: 42 },
+    ],
+  });
+  assert.strictEqual(snap.conversationId, 'conv-1');
+  assert.strictEqual(snap.messages.length, 3);
+  assert.ok(snap.messages.every((m) => typeof m.id === 'string' && Array.isArray(m.activities)));
+  assert.strictEqual(snap.messages[1].status, 'error');
+  assert.ok(snap.messages[1].error);
+  assert.strictEqual(snap.messages[2].kind, 'system');
+  assert.strictEqual(snap.messages[2].text, '42');
+  assert.deepStrictEqual(orc.sessions, {});
+  assert.deepStrictEqual(orc.lastSeen, {});
+
+  assert.notStrictEqual(orc.loadConversation({ conversationId: '../x', messages: [] }).conversationId, '../x');
+  orc.running = true;
+  assert.throws(() => orc.loadConversation({ messages: [] }), /進行中/);
+});
+
 console.log(`\n${n} 項測試全部通過`);
+
+// ---------- 需要跑回合的整合測試(假轉接器) ----------
+
+const adapters = require('../src/adapters');
+
+function fakeOrc(names) {
+  const agents = names.map((name, i) => ({ id: `a${i}`, name, cli: 'fake', enabled: true, canEdit: false }));
+  const calls = [];
+  adapters.setRegistry({
+    get: () => ({
+      id: 'fake', supportsResume: false, supportsEdit: false,
+      run: async (agent, ctx) => {
+        calls.push({ name: agent.name, prompt: ctx.prompt, cwd: ctx.cwd });
+        await new Promise((r) => setTimeout(r, 5));
+        return { text: `${agent.name} 回覆` };
+      },
+    }),
+  });
+  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: require('os').tmpdir(), maxRounds: 1, mode: 'discuss' };
+  const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: require('os').tmpdir() });
+  const idle = () => new Promise((resolve) => {
+    const check = (s) => { if (!s.running && s.phase === 'idle') { orc.off('state', check); resolve(); } };
+    orc.on('state', check);
+  });
+  return { orc, agents, calls, settings, idle };
+}
+
+(async () => {
+  let m = 0;
+  const at = async (name, fn) => { await fn(); m++; console.log('ok -', name); };
+
+  await at('@ 指定一位成員時只有他回覆,不跑討論流程', async () => {
+    const { orc, calls, idle } = fakeOrc(['甲', '乙', '丙']);
+    const done = idle();
+    await orc.userMessage('@乙 幫我寫測試', 'divide');
+    await done;
+    assert.deepStrictEqual(calls.map((c) => c.name), ['乙']);
+    assert.ok(calls[0].prompt.includes('[使用者 → @乙]:'));
+    assert.ok(calls[0].prompt.includes('【指定回覆】'));
+    const user = orc.messages[0];
+    assert.deepStrictEqual(user.mentions, [{ id: 'a1', name: '乙' }]);
+    assert.strictEqual(user.directed, true);
+    const replies = orc.messages.filter((x) => x.kind === 'agent');
+    assert.strictEqual(replies.length, 1);
+    assert.strictEqual(replies[0].phase, '指定');
+    assert.strictEqual(replies[0].group, undefined, '單人回覆不需要並排');
+  });
+
+  await at('@ 指定多位成員時平行回覆,訊息屬於同一個並排群組', async () => {
+    const { orc, calls, idle } = fakeOrc(['甲', '乙', '丙']);
+    const done = idle();
+    await orc.userMessage('@甲 @丙 各自檢查一次', 'divide');
+    await done;
+    assert.deepStrictEqual(calls.map((c) => c.name).sort(), ['丙', '甲']);
+    const replies = orc.messages.filter((x) => x.kind === 'agent');
+    assert.strictEqual(replies.length, 2);
+    assert.ok(replies[0].group && replies[0].group === replies[1].group);
+  });
+
+  await at('進行中 @ 指定的成員若任務結束前都沒發言,會補一次指定回覆', async () => {
+    const { orc, calls, idle } = fakeOrc(['甲', '乙']);
+    orc.running = true;
+    orc.taskCwd = '/tmp';
+    await orc.userMessage('@乙 等等順便看這個', 'discuss');
+    assert.strictEqual(orc.directedQueue.length, 1);
+    orc.running = false;
+    orc.messages.push({ kind: 'agent', agentId: 'a0', agentName: '甲', text: '甲 回覆', status: 'done' });
+    await orc.answerDirectedQueue();
+    assert.deepStrictEqual(calls.map((c) => c.name), ['乙']);
+
+    // 對方之後已經發言過就不再補
+    calls.length = 0;
+    await orc.userMessage('@甲 還有這個', 'discuss').catch(() => {});
+    await idle();
+    calls.length = 0;
+    orc.directedQueue.push({ msg: orc.messages[0], agentIds: ['a1'] });
+    await orc.answerDirectedQueue();
+    assert.deepStrictEqual(calls, []);
+  });
+
+  await at('執行中途改工作目錄時,追加附件與回合仍使用任務開始時的目錄', async () => {
+    const { orc, settings, calls } = fakeOrc(['甲']);
+    const staged = [];
+    orc.stageAttachments = (_agents, cwd) => staged.push(cwd);
+    orc.running = true;
+    orc.taskCwd = '/task-start-dir';
+    settings.workDir = '/changed-later';
+    await orc.userMessage('補一張圖', 'discuss', [{ id: 'x', name: 'a.png', kind: 'image' }]);
+    assert.deepStrictEqual(staged, ['/task-start-dir']);
+    await orc.turn(orc.agents[0], '說話');
+    assert.strictEqual(calls[0].cwd, '/task-start-dir');
+  });
+
+  console.log(`${m} 項整合測試全部通過`);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

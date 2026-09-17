@@ -40,6 +40,8 @@ let registry;
 let secrets;
 let activeTaskStart = null;
 let wasRunning = false;
+// 目前對話寫入的紀錄檔;同一段對話每次任務結束都覆寫這一份,新對話時清空
+let sessionFileId = null;
 // 已經落地、但還沒隨訊息送出的附件(對應介面上的 chip)。
 // 上限由這裡把關,不信任 renderer 傳來的數字。
 let pending = [];
@@ -56,13 +58,15 @@ function resetPending() {
   pending = [];
 }
 
-function persistTask(start) {
+function persistTask() {
   // runTask 的 rejection handler 可能會在 idle 事件後補上一則錯誤訊息。
   setImmediate(() => {
     const snap = orchestrator.snapshot();
-    const messages = snap.messages.slice(start);
+    if (!snap.messages.length) return;
     // conversationId 要寫進紀錄,刪這份對話時才知道要清哪個附件目錄
-    if (messages.length) writeSession(userData(), messages, { conversationId: snap.conversationId });
+    const result = writeSession(userData(), snap.messages, { conversationId: snap.conversationId, id: sessionFileId });
+    if (result.ok) sessionFileId = result.id;
+    send('session:saved', { id: sessionFileId });
   });
 }
 
@@ -111,13 +115,12 @@ app.whenReady().then(async () => {
   orchestrator.on('state', (s) => {
     send('chat:state', s);
     if (wasRunning && !s.running && activeTaskStart != null) {
-      const start = activeTaskStart;
       activeTaskStart = null;
-      persistTask(start);
+      persistTask();
     }
     wasRunning = !!s.running;
   });
-  orchestrator.on('reset', () => { activeTaskStart = null; resetPending(); send('chat:reset'); });
+  orchestrator.on('reset', () => { activeTaskStart = null; sessionFileId = null; resetPending(); send('chat:reset'); });
 
   // 啟動清理:
   //   1. 上次被強制關閉時可能在使用者的工作目錄留下 .roundtable-runtime,一定要清掉
@@ -165,14 +168,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('secrets:status', (_e, { ref, envName }) => secrets.status(ref, envName));
   ipcMain.handle('secrets:clear', (_e, { ref }) => secrets.clear(ref));
   ipcMain.handle('secrets:test', async (_e, { adapterId }) => {
-    registry.reload();
-    const adapter = registry.get(adapterId);
+    const adapter = registry.loadFresh(adapterId);
     if (!adapter) return { ok: false, error: '找不到此 API 擴充，請先儲存設定' };
     if (typeof adapter.testConnection !== 'function') return { ok: false, error: '此擴充不支援 API 連線測試' };
     return adapter.testConnection();
   });
   ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
-  ipcMain.handle('chat:snapshot', () => orchestrator.snapshot());
+  ipcMain.handle('chat:snapshot', () => ({ ...orchestrator.snapshot(), sessionId: sessionFileId }));
   // ---------- 附件 ----------
   // 權威儲存在 userData/attachments/<conversationId>/,不寫進使用者的工作目錄。
   const addFiles = (items) => {
@@ -224,9 +226,8 @@ app.whenReady().then(async () => {
     pending = [];
     // 沒有可用成員、工作目錄無法建立等前置失敗不會進入 running 狀態。
     if (!orchestrator.snapshot().running && activeTaskStart != null) {
-      const start = activeTaskStart;
       activeTaskStart = null;
-      persistTask(start);
+      persistTask();
     }
     return message;
   });
@@ -254,7 +255,22 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50 }));
   ipcMain.handle('session:read', (_e, id) => readSession(app.getPath('userData'), id));
-  ipcMain.handle('session:delete', (_e, id) => deleteSession(app.getPath('userData'), id));
+  ipcMain.handle('session:delete', (_e, id) => {
+    const result = deleteSession(app.getPath('userData'), id);
+    if (result.ok && id === sessionFileId) sessionFileId = null;
+    return result;
+  });
+  // 載入歷史對話繼續討論:之後的任務會寫回同一份紀錄
+  ipcMain.handle('chat:resume', (_e, id) => {
+    if (orchestrator.snapshot().running) return { ok: false, error: '目前仍在進行中,請先停止再載入歷史對話' };
+    const result = readSession(userData(), id);
+    if (!result.ok) return result;
+    activeTaskStart = null;
+    resetPending(); // 未送出的附件屬於舊對話的目錄,不能帶過去
+    const snapshot = orchestrator.loadConversation(result.session);
+    sessionFileId = id;
+    return { ok: true, id, snapshot };
+  });
   ipcMain.handle('chat:stop', () => orchestrator.stop());
   ipcMain.handle('chat:reset', () => orchestrator.reset());
 

@@ -53,10 +53,72 @@ const fakeSafeStorage = {
       return { ok: true, text: async () => '', json: async () => ({ data: [] }) };
     },
   });
-  assert.deepStrictEqual(adapter.capabilities.attachments, ['imageInline', 'textInline']);
+  assert.deepStrictEqual(adapter.capabilities.attachments, ['textInline']);
   assert.strictEqual((await adapter.testConnection()).ok, true);
   assert.strictEqual(seen[0], 'Bearer stored-key');
   delete process.env.SECRET_FALLBACK;
+
+  // secrets.json 損壞:原檔改名備份,下一次 set 不會把舊 key 一起蓋掉
+  const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-roundtable-secrets-corrupt-'));
+  fs.writeFileSync(path.join(corruptDir, 'secrets.json'), '{ 壞掉');
+  const corrupt = new SecretStore(corruptDir, fakeSafeStorage);
+  assert.ok(corrupt.backupFile && fs.readFileSync(corrupt.backupFile, 'utf8') === '{ 壞掉');
+  corrupt.set('adapter:new', 'sk-new-key-0000');
+  assert.strictEqual(new SecretStore(corruptDir, fakeSafeStorage).get('adapter:new'), 'sk-new-key-0000');
+  fs.rmSync(corruptDir, { recursive: true, force: true });
+
+  // 端點拒收圖片時略過圖片改用純文字重送,記憶裡只留最近一則的影像
+  const imagePath = path.join(dir, 'pic.png');
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const bodies = [];
+  const notes = [];
+  const visionless = createOpenAIAdapter({
+    id: 'nov', baseUrl: 'https://example.com/v1', models: ['m'], stream: false, capabilities: { attachments: ['imageInline', 'textInline'] },
+  }, {
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      const last = body.messages[body.messages.length - 1];
+      if (Array.isArray(last.content)) return { ok: false, status: 400, text: async () => '{"error":{"message":"image_url is not supported"}}' };
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '好' } }] }) };
+    },
+  });
+  const ctx = (sessionId) => ({
+    prompt: '看圖', sessionId, attachments: [{ kind: 'image', mime: 'image/png', path: imagePath }],
+    onProc: () => {}, onText: () => {}, onThinking: () => {}, onActivity: (a) => notes.push(a), onSession: () => {},
+  });
+  const first = await visionless.run({ model: 'm' }, ctx(null));
+  assert.strictEqual(first.error, null);
+  assert.strictEqual(first.text, '好');
+  assert.strictEqual(bodies.length, 2, '被拒後重送一次');
+  assert.strictEqual(typeof bodies[1].messages.at(-1).content, 'string');
+  assert.ok(notes.some((n) => n.id === 'image-fallback'));
+
+  const { compactHistoryImages } = require('../src/adapters/openai-adapter');
+  const img = (t) => [{ type: 'text', text: t }, { type: 'image_url', image_url: { url: 'data:x' } }];
+  const compacted = compactHistoryImages([{ role: 'user', content: img('舊') }, { role: 'assistant', content: 'a' }, { role: 'user', content: img('新') }]);
+  assert.ok(typeof compacted[0].content === 'string' && compacted[0].content.includes('舊') && compacted[0].content.includes('1 張圖片'));
+  assert.ok(Array.isArray(compacted[2].content), '最近一則帶圖訊息保留影像');
+
+  // 測試連線用獨立實例,不重建 registry(進行中 API 成員的對話記憶不能被清掉)
+  const { Registry } = require('../src/adapters/registry');
+  const extDir = path.join(dir, 'ext');
+  fs.mkdirSync(extDir);
+  fs.writeFileSync(path.join(extDir, 'api.json'), JSON.stringify({ id: 'api', type: 'openai', baseUrl: 'https://a.example/v1', models: ['m'] }));
+  fs.writeFileSync(path.join(extDir, 'plug.js'), "module.exports = { id: 'plug', supportsEdit: true, run: async () => ({ text: '' }) };");
+  const reg = new Registry({ userDir: extDir });
+  const registered = reg.get('api');
+  fs.writeFileSync(path.join(extDir, 'api.json'), JSON.stringify({ id: 'api', type: 'openai', baseUrl: 'https://b.example/v1', models: ['m'] }));
+  const fresh = reg.loadFresh('api');
+  assert.notStrictEqual(fresh, registered);
+  assert.strictEqual(reg.get('api'), registered, '登錄中的實例不變');
+  assert.strictEqual((await fresh.check()).version, 'API https://b.example/v1');
+  assert.strictEqual(reg.loadFresh('claude'), reg.get('claude'), '內建轉接器直接回傳');
+
+  // JS 外掛沒宣告 capabilities 時套用退路,而不是「完全不能讀附件」
+  const { attachmentCapabilities } = require('../src/attachments');
+  assert.strictEqual(reg.get('plug').capabilities, undefined);
+  assert.ok(attachmentCapabilities(reg.get('plug')).modes.has('filePath'));
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('ok - secrets 安全儲存、key 優先序與 capabilities 驗證');

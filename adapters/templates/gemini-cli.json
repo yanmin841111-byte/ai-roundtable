@@ -85,6 +85,6 @@
     "attachments": [
       "filePath"
     ],
-    "attachmentsNeedCwd": false
+    "attachmentsNeedCwd": true
   }
 }

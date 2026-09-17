@@ -55,7 +55,8 @@ function createOpenAIAdapter(spec, { fetchImpl, getSecret } = {}) {
   const staticModels = spec.models === 'auto' ? null : normalizeModels(spec.models);
   const sessions = new Map(); // sessionId -> [{ role, content }]
   const maxHistory = spec.maxHistoryMessages || 80;
-  const capabilities = normalizeCapabilities(spec.capabilities, ['imageInline', 'textInline']);
+  // 沒宣告時只送文字:很多相容端點(DeepSeek、多數 Ollama 模型)不收圖片。支援圖片的請在設定加上 imageInline。
+  const capabilities = normalizeCapabilities(spec.capabilities, ['textInline']);
   let fetched = { models: [], at: 0, error: null, pending: null };
 
   const apiKey = () => {
@@ -149,83 +150,108 @@ function createOpenAIAdapter(spec, { fetchImpl, getSecret } = {}) {
     if (eff.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: eff.note, status: 'done' });
 
     const history = (spec.history !== false && ctx.sessionId && sessions.get(ctx.sessionId)) || [];
-    const messages = [];
-    if (ctx.systemPrompt) messages.push({ role: spec.systemRole || 'system', content: ctx.systemPrompt });
-    const userContent = buildUserContent(ctx.prompt, ctx.attachments, capabilities);
-    messages.push(...history, { role: 'user', content: userContent });
-
     const vars = { model, effort: eff.effort || '', agentName: agent.name || '' };
     const effortBody = spec.effortBody || { reasoning_effort: '{effort}' };
     const stream = spec.stream !== false;
-    const body = {
-      ...renderDeep(spec.body || {}, vars),
-      ...(eff.effort ? renderDeep(effortBody, vars) : {}),
-      model,
-      messages,
-      stream,
-      ...(stream && spec.streamUsage !== false ? { stream_options: { include_usage: true } } : {}),
-    };
-
-    const controller = new AbortController();
-    const handle = createStopHandle(() => controller.abort());
-    ctx.onProc(handle);
     const timeoutMs = spec.timeoutMs || ctx.timeoutMs || DEFAULT_TURN_TIMEOUT_MS;
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-
-    let text = '';
-    let thinking = '';
-    let usage = null;
-    let error = null;
     const reasoningFields = spec.reasoningFields || ['reasoning_content', 'reasoning'];
 
-    const onChunk = (data) => {
-      if (data.error) { error = data.error.message || JSON.stringify(data.error); return; }
-      if (data.usage) usage = data.usage;
-      const choice = data.choices && data.choices[0];
-      if (!choice) return;
-      const part = choice.delta || choice.message || {};
-      if (typeof part.content === 'string' && part.content) { text += part.content; ctx.onText(text); }
-      for (const f of reasoningFields) {
-        if (typeof part[f] === 'string' && part[f]) { thinking += part[f]; ctx.onThinking(thinking); break; }
+    const request = async (userContent) => {
+      const messages = [];
+      if (ctx.systemPrompt) messages.push({ role: spec.systemRole || 'system', content: ctx.systemPrompt });
+      messages.push(...history, { role: 'user', content: userContent });
+      const body = {
+        ...renderDeep(spec.body || {}, vars),
+        ...(eff.effort ? renderDeep(effortBody, vars) : {}),
+        model,
+        messages,
+        stream,
+        ...(stream && spec.streamUsage !== false ? { stream_options: { include_usage: true } } : {}),
+      };
+
+      const controller = new AbortController();
+      const handle = createStopHandle(() => controller.abort());
+      ctx.onProc(handle);
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+      const out = { text: '', thinking: '', usage: null, error: null, status: 0 };
+
+      const onChunk = (data) => {
+        if (data.error) { out.error = data.error.message || JSON.stringify(data.error); return; }
+        if (data.usage) out.usage = data.usage;
+        const choice = data.choices && data.choices[0];
+        if (!choice) return;
+        const part = choice.delta || choice.message || {};
+        if (typeof part.content === 'string' && part.content) { out.text += part.content; ctx.onText(out.text); }
+        for (const f of reasoningFields) {
+          if (typeof part[f] === 'string' && part[f]) { out.thinking += part[f]; ctx.onThinking(out.thinking); break; }
+        }
+      };
+
+      try {
+        const res = await doFetch(joinUrl(spec.baseUrl, spec.path || '/chat/completions'), {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        out.status = res.status;
+        if (!res.ok) {
+          const raw = await res.text();
+          let msg = raw;
+          try { const j = JSON.parse(raw); msg = (j.error && (j.error.message || j.error)) || j.message || raw; } catch {}
+          out.error = `HTTP ${res.status}:${truncate(typeof msg === 'string' ? msg : JSON.stringify(msg), 800)}`;
+        } else if (stream && res.body) {
+          await readSse(res.body, onChunk);
+        } else {
+          onChunk(await res.json());
+        }
+      } catch (e) {
+        if (timedOut) out.error = `API 執行逾時(${formatTimeout(timeoutMs)})`;
+        else if (e.name === 'AbortError') out.error = out.error || '已停止';
+        else out.error = `無法連線到 ${spec.baseUrl}:${e.cause ? e.cause.message || e.cause.code : e.message}`;
+      } finally {
+        clearTimeout(timer);
+        handle.close();
       }
+      return out;
     };
 
-    try {
-      const res = await doFetch(joinUrl(spec.baseUrl, spec.path || '/chat/completions'), {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const raw = await res.text();
-        let msg = raw;
-        try { const j = JSON.parse(raw); msg = (j.error && (j.error.message || j.error)) || j.message || raw; } catch {}
-        error = `HTTP ${res.status}:${truncate(typeof msg === 'string' ? msg : JSON.stringify(msg), 800)}`;
-      } else if (stream && res.body) {
-        await readSse(res.body, onChunk);
-      } else {
-        onChunk(await res.json());
-      }
-    } catch (e) {
-      if (timedOut) error = `API 執行逾時(${formatTimeout(timeoutMs)})`;
-      else if (e.name === 'AbortError') error = error || '已停止';
-      else error = `無法連線到 ${spec.baseUrl}:${e.cause ? e.cause.message || e.cause.code : e.message}`;
-    } finally {
-      clearTimeout(timer);
-      handle.close();
+    let userContent = buildUserContent(ctx.prompt, ctx.attachments, capabilities);
+    let result = await request(userContent);
+    // 很多 OpenAI 相容端點(或同一家的純文字模型)不收 image_url,會直接回 4xx。
+    // 帶了圖片才失敗時改用純文字重送一次，否則每回合都會重送同一張圖、一直失敗。
+    const imageCount = Array.isArray(userContent) ? userContent.filter((p) => p.type === 'image_url').length : 0;
+    if (result.error && imageCount && [400, 415, 422].includes(result.status)) {
+      ctx.onActivity({ id: 'image-fallback', kind: 'note', title: `此模型不接受圖片(${result.error.slice(0, 120)}),已略過 ${imageCount} 張圖片改用純文字重送`, status: 'done' });
+      userContent = ctx.prompt;
+      result = await request(userContent);
     }
 
     let sessionId = ctx.sessionId || null;
-    if (!error && spec.history !== false) {
+    if (!result.error && spec.history !== false) {
       sessionId = sessionId || crypto.randomUUID();
-      const next = [...history, { role: 'user', content: userContent }, { role: 'assistant', content: text }];
-      sessions.set(sessionId, next.slice(-maxHistory));
+      const next = [...history, { role: 'user', content: userContent }, { role: 'assistant', content: result.text }];
+      sessions.set(sessionId, compactHistoryImages(next.slice(-maxHistory)));
       ctx.onSession(sessionId);
     }
-    return { text, thinking, sessionId, usage, error };
+    return { text: result.text, thinking: result.thinking, sessionId, usage: result.usage, error: result.error };
   }
+}
+
+// 對話記憶裡只保留最近一則帶圖訊息的影像資料，更早的換成文字佔位。
+// 否則每張 base64 圖片會在記憶中留到 maxHistory 則，並在之後每一回合重送。
+function compactHistoryImages(history) {
+  let keptLatest = false;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const content = history[i].content;
+    if (!Array.isArray(content) || !content.some((p) => p && p.type === 'image_url')) continue;
+    if (!keptLatest) { keptLatest = true; continue; }
+    const count = content.filter((p) => p && p.type === 'image_url').length;
+    const text = content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n');
+    history[i] = { ...history[i], content: `${text}\n\n(先前回合附上的 ${count} 張圖片已從記憶中移除)` };
+  }
+  return history;
 }
 
 // 解析 Server-Sent Events:每個 "data: {...}" 交給 onData,遇到 [DONE] 結束。
@@ -251,4 +277,4 @@ async function readSse(body, onData) {
   if (buf.trim()) handleLine(buf.trim());
 }
 
-module.exports = { createOpenAIAdapter, validateOpenAISpec, buildUserContent };
+module.exports = { createOpenAIAdapter, validateOpenAISpec, buildUserContent, compactHistoryImages };

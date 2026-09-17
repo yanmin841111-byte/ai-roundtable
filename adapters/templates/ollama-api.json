@@ -8,7 +8,6 @@
   "streamUsage": false,
   "capabilities": {
     "attachments": [
-      "imageInline",
       "textInline"
     ],
     "attachmentsNeedCwd": false

@@ -15,7 +15,9 @@ let exporting = false;
 let historyLoaded = false;
 let historySessions = [];
 let openHistoryId = null;
+let activeSessionId = null; // 目前對話寫入的歷史紀錄檔
 const historyErrors = new Map();
+const mentionMenu = { open: false, start: 0, items: [], index: 0 };
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -37,6 +39,7 @@ async function init() {
   renderSidebar();
   renderExtensions();
   const snap = await window.api.snapshot();
+  activeSessionId = snap.sessionId || null;
   snap.messages.forEach((m) => renderMessage(m, { animate: false }));
   setState(snap);
   checkClis();
@@ -45,17 +48,26 @@ async function init() {
   window.api.onMessage((m) => renderMessage(m, { animate: true }));
   window.api.onState(setState);
   window.api.onReset(() => {
-    msgEls.clear();
-    messageData.clear();
-    $('#timeline').innerHTML = '';
-    $('#timeline').appendChild(emptyEl());
+    clearTimeline();
     clearPendingAttachments();
-    updateUsageTotal();
-    updateSpeakingHighlight();
+    activeSessionId = null;
+    if (historyLoaded) renderHistoryList();
+  });
+  // 任務結束寫入紀錄後刷新清單,剛完成或剛續接的對話會排到最上面
+  window.api.onSessionSaved((info) => {
+    activeSessionId = (info && info.id) || activeSessionId;
+    if (historyLoaded) loadHistory(true, { quiet: true });
   });
 
   $('#send-btn').onclick = sendMessage;
-  $('#input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); } });
+  $('#input').addEventListener('keydown', (e) => {
+    if (handleMentionKey(e)) return;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
+  });
+  $('#input').addEventListener('input', () => { updateMentionMenu(); updateComposerHint(); });
+  $('#input').addEventListener('click', updateMentionMenu);
+  $('#input').addEventListener('blur', closeMentionMenu);
+  $('#history-resume').onclick = resumeHistory;
   $('#stop-btn').onclick = () => window.api.stop();
   $('#reset-btn').onclick = () => { if (!running || confirm('目前仍在進行中,確定要停止並清空對話?')) window.api.reset(); };
   $('#export-btn').onclick = exportConversation;
@@ -205,6 +217,15 @@ function saveAppearance() {
   flashSaved();
 }
 
+function clearTimeline() {
+  msgEls.clear();
+  messageData.clear();
+  $('#timeline').innerHTML = '';
+  $('#timeline').appendChild(emptyEl());
+  updateUsageTotal();
+  updateSpeakingHighlight();
+}
+
 function emptyEl() {
   const d = document.createElement('div');
   d.id = 'empty'; d.className = 'empty';
@@ -229,12 +250,12 @@ function setHistoryError(message) {
   el.textContent = message || '';
 }
 
-async function loadHistory(force = false) {
+async function loadHistory(force = false, { quiet = false } = {}) {
   if (historyLoaded && !force) return;
   const refresh = $('#history-refresh');
   refresh.disabled = true;
   setHistoryError('');
-  $('#history-list').innerHTML = '<div class="history-empty">載入中…</div>';
+  if (!quiet) $('#history-list').innerHTML = '<div class="history-empty">載入中…</div>';
   try {
     const result = await window.api.sessions.list();
     historySessions = Array.isArray(result && result.sessions) ? result.sessions : [];
@@ -262,13 +283,15 @@ function renderHistoryList() {
   }
   for (const session of historySessions) {
     const item = document.createElement('div');
-    item.className = 'history-item';
+    const active = session.id === activeSessionId;
+    item.className = `history-item${active ? ' active' : ''}`;
     item.dataset.sessionId = session.id;
     const main = document.createElement('button');
     main.className = 'history-open';
     const title = document.createElement('span');
     title.className = 'history-title';
     title.textContent = session.title || '未命名對話';
+    if (active) main.setAttribute('aria-current', 'true');
     const meta = document.createElement('span');
     meta.className = 'history-meta';
     const details = [formatHistoryTime(session.createdAt), `${Number(session.messageCount) || 0} 則`];
@@ -304,6 +327,7 @@ async function openHistory(summary) {
     const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), `${(session.messages || []).length} 則訊息`];
     $('#history-modal-meta').textContent = meta.filter(Boolean).join(' · ');
     renderHistoryPreview(session.messages || []);
+    updateResumeButton();
     $('#history-modal').classList.remove('hidden');
   } catch (error) {
     historyErrors.set(summary.id, cleanIpcError(error));
@@ -366,6 +390,43 @@ async function removeHistory(session) {
   } catch (error) {
     historyErrors.set(session.id, cleanIpcError(error));
     renderHistoryList();
+  }
+}
+
+function updateResumeButton() {
+  const button = $('#history-resume');
+  const hint = $('#history-resume-hint');
+  const current = !!openHistoryId && openHistoryId === activeSessionId;
+  button.disabled = running || current;
+  button.textContent = current ? '目前的對話' : '繼續這段對話';
+  hint.textContent = running
+    ? '目前仍在進行中,停止後才能載入其他對話。'
+    : current
+      ? '這段紀錄就是目前的對話,直接在下方輸入即可。'
+      : '載入後可以直接接著送出訊息,成員會先讀過這段紀錄。';
+}
+
+async function resumeHistory() {
+  const id = openHistoryId;
+  if (!id || running) return;
+  const button = $('#history-resume');
+  button.disabled = true;
+  try {
+    const result = await window.api.resume(id);
+    if (!result || !result.ok) throw new Error((result && result.error) || '無法載入這段對話');
+    clearTimeline();
+    await clearPendingAttachments();
+    activeSessionId = result.id;
+    const messages = (result.snapshot && result.snapshot.messages) || [];
+    messages.forEach((m) => renderMessage(m, { animate: false }));
+    setState(result.snapshot || { running: false });
+    closeHistoryModal();
+    renderHistoryList();
+    $('#timeline').scrollTop = $('#timeline').scrollHeight;
+    $('#input').focus();
+  } catch (error) {
+    $('#history-resume-hint').textContent = `無法載入:${cleanIpcError(error)}`;
+    button.disabled = false;
   }
 }
 
@@ -613,7 +674,7 @@ function syncExtBasicToJson() {
     const byId = new Map((Array.isArray(original) ? original : []).filter((item) => item && typeof item === 'object').map((item) => [item.id, item]));
     spec.models = ids.map((id) => byId.get(id) || id);
   }
-  if (!spec.capabilities) spec.capabilities = { attachments: spec.type === 'openai' ? ['imageInline', 'textInline'] : ['filePath'], attachmentsNeedCwd: false };
+  if (!spec.capabilities) spec.capabilities = { attachments: spec.type === 'openai' ? ['textInline'] : ['filePath'], attachmentsNeedCwd: false };
   editingExtSpec = spec;
   $('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
   updateExtTypeFields();
@@ -902,13 +963,14 @@ function deleteAgent() {
 }
 
 // ---------- 對話 ----------
-const STAGE_LABEL = { discuss: '① 討論', execute: '② 分工執行', review: '③ 交叉審查' };
+const STAGE_LABEL = { discuss: '① 討論', execute: '② 分工執行', review: '③ 交叉審查', direct: '@ 指定回覆' };
 const ATTACH_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'txt', 'md', 'json', 'csv', 'log', 'pdf']);
 const ATTACH_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
 const pendingAttachments = [];
 let attachLimits = { maxFiles: 10, maxFileBytes: 20 * 1024 * 1024, maxTotalBytes: 50 * 1024 * 1024 };
 
 async function sendMessage() {
+  closeMentionMenu();
   const text = $('#input').value.trim();
   if (!text && !pendingAttachments.length) return;
   const attachments = pendingAttachments.map((item) => ({
@@ -923,6 +985,7 @@ async function sendMessage() {
   }));
   const toClear = pendingAttachments.splice(0, pendingAttachments.length);
   $('#input').value = '';
+  updateComposerHint();
   renderAttachChips();
   clearAttachError();
   try {
@@ -941,8 +1004,139 @@ function setState(s) {
   pill.textContent = running ? s.phase : '閒置';
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
   $('#stop-btn').disabled = !running;
-  $('#hint').textContent = running ? '進行中,現在送出的訊息會在下一位成員發言時帶入' : '';
+  updateComposerHint();
+  if (openHistoryId) updateResumeButton();
   updateSpeakingHighlight();
+}
+
+// ---------- @ 指定成員 ----------
+function enabledAgents() { return (config && config.agents ? config.agents : []).filter((a) => a.enabled !== false); }
+
+function updateComposerHint() {
+  const mentioned = Marker.findMentions ? Marker.findMentions($('#input').value, enabledAgents()) : [];
+  const names = mentioned.map((a) => a.name).join('、');
+  let text = '';
+  if (mentioned.length && running) text = `@ 指定:${names} 會在下一次發言時看到;任務結束前沒輪到會補一次回覆`;
+  else if (mentioned.length) text = `@ 指定:只有 ${names} 會回覆,不跑討論流程`;
+  else if (running) text = '進行中,現在送出的訊息會在下一位成員發言時帶入';
+  const hint = $('#hint');
+  hint.textContent = text;
+  hint.title = text;
+  hint.classList.toggle('mention-hint', mentioned.length > 0);
+}
+
+// 游標前面是「@查詢字」時回傳範圍;@ 前面是英數字(例如 email)不算
+function mentionContext() {
+  const input = $('#input');
+  if (input.selectionStart !== input.selectionEnd) return null;
+  const before = input.value.slice(0, input.selectionStart);
+  const match = before.match(/(^|[^A-Za-z0-9_])[@＠]([^\s@＠]{0,40})$/);
+  if (!match) return null;
+  return { start: input.selectionStart - match[2].length - 1, query: match[2] };
+}
+
+function updateMentionMenu() {
+  const ctx = mentionContext();
+  if (!ctx) { closeMentionMenu(); return; }
+  const query = ctx.query.toLowerCase();
+  const items = enabledAgents()
+    .filter((a) => a.name.toLowerCase().includes(query))
+    .sort((a, b) => Number(!a.name.toLowerCase().startsWith(query)) - Number(!b.name.toLowerCase().startsWith(query)));
+  if (!items.length) { closeMentionMenu(); return; }
+  const same = mentionMenu.open && mentionMenu.items.map((a) => a.id).join() === items.map((a) => a.id).join();
+  Object.assign(mentionMenu, { open: true, start: ctx.start, items, index: same ? Math.min(mentionMenu.index, items.length - 1) : 0 });
+  renderMentionMenu();
+}
+
+function renderMentionMenu() {
+  const menu = $('#mention-menu');
+  menu.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'mention-menu-head';
+  head.textContent = '指定成員';
+  menu.appendChild(head);
+  mentionMenu.items.forEach((agent, i) => {
+    const option = document.createElement('div');
+    option.className = `mention-option${i === mentionMenu.index ? ' active' : ''}`;
+    option.id = `mention-option-${i}`;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(i === mentionMenu.index));
+    const t = cliTypes[agent.cli] || {};
+    option.innerHTML = `<div class="avatar" style="background:${escapeHtml(agent.color || '#6c8cff')}">${escapeHtml(initials(agent.name))}</div><div class="mention-option-main"><b>${escapeHtml(agent.name)}</b><span>${escapeHtml([t.label || agent.cli, agent.model].filter(Boolean).join(' · '))}</span></div>`;
+    // mousedown 就選取:click 會先觸發輸入框 blur 把選單關掉
+    option.addEventListener('mousedown', (e) => { e.preventDefault(); pickMention(i); });
+    option.addEventListener('mousemove', () => { if (mentionMenu.index !== i) { mentionMenu.index = i; renderMentionMenu(); } });
+    menu.appendChild(option);
+  });
+  menu.hidden = false;
+  $('#input').setAttribute('aria-activedescendant', `mention-option-${mentionMenu.index}`);
+}
+
+function closeMentionMenu() {
+  if (!mentionMenu.open) return;
+  mentionMenu.open = false;
+  $('#mention-menu').hidden = true;
+  $('#input').removeAttribute('aria-activedescendant');
+}
+
+function pickMention(index) {
+  const agent = mentionMenu.items[index];
+  if (!agent) return;
+  const input = $('#input');
+  const end = input.selectionStart;
+  const insert = `@${agent.name} `;
+  input.setRangeText(insert, mentionMenu.start, end, 'end');
+  closeMentionMenu();
+  input.focus();
+  updateComposerHint();
+}
+
+function handleMentionKey(e) {
+  if (!mentionMenu.open || e.isComposing) return false;
+  const count = mentionMenu.items.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    mentionMenu.index = (mentionMenu.index + (e.key === 'ArrowDown' ? 1 : -1) + count) % count;
+    renderMentionMenu();
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    pickMention(mentionMenu.index);
+  } else if (e.key === 'Escape') {
+    closeMentionMenu();
+  } else {
+    return false;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}
+
+// 使用者訊息裡的 @名稱 標成膠囊;跳過程式碼區塊
+function highlightMentions(root, mentions) {
+  const names = (Array.isArray(mentions) ? mentions : []).map((m) => m && m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!root || !names.length) return;
+  const pattern = new RegExp(`[@＠](${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z0-9_-])`, 'gi');
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.parentElement && node.parentElement.closest('code, pre, .mention') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    pattern.lastIndex = 0;
+    if (!pattern.test(text)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const match of text.matchAll(pattern)) {
+      frag.append(text.slice(last, match.index));
+      const chip = document.createElement('span');
+      chip.className = 'mention';
+      chip.textContent = `@${match[1]}`;
+      frag.append(chip);
+      last = match.index + match[0].length;
+    }
+    frag.append(text.slice(last));
+    node.replaceWith(frag);
+  }
 }
 
 function renderMessage(m, { animate = false } = {}) {
@@ -954,10 +1148,11 @@ function renderMessage(m, { animate = false } = {}) {
   let el = msgEls.get(m.id);
   const atBottom = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 80;
   const isNew = !el;
+  let placed = null;
   if (!el) {
     el = document.createElement('div');
     msgEls.set(m.id, el);
-    tl.appendChild(el);
+    placed = placeMessage(el, m);
     if (animate) {
       el.classList.add('enter');
       el.addEventListener('animationend', () => el.classList.remove('enter'), { once: true });
@@ -969,14 +1164,35 @@ function renderMessage(m, { animate = false } = {}) {
   if (m.kind === 'agent') renderAgentMessage(el, m);
   else if (m.kind === 'user') renderUserMessage(el, m);
   else el.innerHTML = systemHtml(m);
-  if (isNew) insertTimelineMarkers(el, m);
-  updateContinuation(el);
+  if (isNew && placed.isNewNode) insertTimelineMarkers(placed.node, m);
+  if (el.parentElement && el.parentElement.classList.contains('msg-group')) el.classList.remove('msg-continue');
+  else updateContinuation(el);
   updateSpeakingHighlight();
   if (atBottom) tl.scrollTop = tl.scrollHeight;
 }
 
+// 同一批平行發言(m.group)放進同一個格狀容器:每列最多三則,第四則起換行
+function placeMessage(el, m) {
+  const tl = $('#timeline');
+  if (!m.group) { tl.appendChild(el); return { node: el, isNewNode: true }; }
+  let group = [...tl.children].find((node) => node.classList.contains('msg-group') && node.dataset.group === m.group);
+  const isNewNode = !group;
+  if (isNewNode) {
+    group = document.createElement('div');
+    group.className = 'msg-group';
+    group.dataset.group = m.group;
+    tl.appendChild(group);
+  }
+  group.appendChild(el);
+  const count = group.children.length;
+  group.dataset.count = String(count);
+  group.style.setProperty('--cols', String(Math.min(count, 3)));
+  return { node: group, isNewNode };
+}
+
 function stageFromMessage(m) {
   const phase = String(m.phase || '');
+  if (m.directed || phase === '指定') return 'direct';
   if (/^討論/.test(phase)) return 'discuss';
   if (phase === '分工' || phase === '執行') return 'execute';
   if (phase === '審查' || phase === '修復' || phase === '總結') return 'review';
@@ -990,7 +1206,7 @@ function roundFromMessage(m) {
 
 function adjacentMsg(el, dir) {
   let node = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
-  while (node && !node.classList.contains('msg')) {
+  while (node && !node.classList.contains('msg') && !node.classList.contains('msg-group')) {
     node = dir < 0 ? node.previousElementSibling : node.nextElementSibling;
   }
   return node;
@@ -1045,6 +1261,7 @@ function systemHtml(m) {
 
 function renderUserMessage(el, m) {
   el.innerHTML = userHtml(m);
+  highlightMentions(el.querySelector('.body'), m.mentions);
   hydrateAttachmentThumbs(el, m.attachments);
 }
 
@@ -1094,7 +1311,7 @@ function renderAgentMessage(el, m) {
   shell.avatar.style.background = m.color || '#6c8cff';
   setTextIfChanged(shell.avatar, initials(m.agentName));
   shell.bubble.style.setProperty('--c', m.color || '#6c8cff');
-  setHtmlIfChanged(shell.head, `<b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml((cliTypes[m.cli] || {}).label || m.cli)}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${m.phase ? `<span class="badge">${escapeHtml(m.phase)}</span>` : ''}${agreed ? '<span class="badge agreed">✓ 同意分工</span>' : ''}${status}`);
+  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml((cliTypes[m.cli] || {}).label || m.cli)}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${m.phase ? `<span class="badge phase-badge">${escapeHtml(m.phase)}</span>` : ''}${agreed ? '<span class="badge agreed">✓ 同意分工</span>' : ''}${status}`);
   renderThinking(shell.thinking, m.thinking || '');
   renderActivities(shell.activities, m.activities || []);
   const body = text ? marked.parse(text) : (m.status === 'running' ? '<span class="hint">…</span>' : '');

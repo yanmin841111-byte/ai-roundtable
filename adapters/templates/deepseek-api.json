@@ -35,7 +35,6 @@
   },
   "capabilities": {
     "attachments": [
-      "imageInline",
       "textInline"
     ],
     "attachmentsNeedCwd": false

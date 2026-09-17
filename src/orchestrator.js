@@ -5,7 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
-const { hasMarker, stripMarker } = require('./shared');
+const { hasMarker, stripMarker, findMentions } = require('./shared');
 const {
   RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath,
 } = require('./attachments');
@@ -17,6 +17,8 @@ const EMIT_INTERVAL = 70; // 串流更新合併發送的間隔(ms),避免每個 
 const SEP = '\n\n';            // 對話紀錄各則之間的分隔
 const TRUNCATE_RESERVE = 200;   // 截斷時為省略提示預留的字元空間
 const MAX_GIT_FILES = 200;      // 總結提示裡最多列出的變更檔案數
+const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/; // 與 attachments 的目錄名規則一致
+const MESSAGE_KINDS = new Set(['user', 'agent', 'system']);
 
 class Orchestrator extends EventEmitter {
   constructor(store) {
@@ -35,6 +37,8 @@ class Orchestrator extends EventEmitter {
     this.stopped = false;
     this.phase = 'idle';
     this.taskStartIndex = 0;
+    this.taskCwd = null;          // 本次任務開始時的工作目錄;任務中途改設定也不影響暫存與清理
+    this.directedQueue = [];      // 進行中用 @ 指定成員的訊息,任務結束前要確保對方有回覆
     this.emitTimers = new Map(); // msgId -> timer,串流更新的節流
   }
 
@@ -95,19 +99,34 @@ class Orchestrator extends EventEmitter {
   // ---------- 對外操作 ----------
   async userMessage(text, mode, attachments = []) {
     const list = Array.isArray(attachments) ? attachments : [];
+    const mentioned = findMentions(text, this.agents);
     // metadata 跟著訊息走,歷史對話重開才看得到附件;絕不放 base64 內容
-    const msg = this.pushMessage({ kind: 'user', text, attachments: list });
+    const msg = this.pushMessage({
+      kind: 'user',
+      text,
+      attachments: list,
+      ...(mentioned.length ? { mentions: mentioned.map((a) => ({ id: a.id, name: a.name })) } : {}),
+      // 閒置時的 @ 指定會開啟一次「只有被指定成員回覆」的任務,介面據此顯示階段分隔
+      ...(mentioned.length && !this.running ? { directed: true } : {}),
+    });
     if (list.length) {
       this.attachments = this.running ? [...this.attachments, ...list] : list;
       this.attachmentsSeen.clear(); // 有新附件就讓每位成員重新看到完整清單
       // 進行中追加的附件也要補進沙箱 CLI 的 cwd 暫存,不能只處理任務開始前的那一批。
-      if (this.running) this.stageAttachments(this.agents, this.config.settings.workDir, list, false);
+      if (this.running) this.stageAttachments(this.agents, this.taskCwd || this.config.settings.workDir, list, false);
     } else if (!this.running) {
       this.attachments = [];
       this.attachmentsSeen.clear();
     }
-    if (this.running) return msg; // 進行中:訊息會在下一位成員發言時自動帶入
-    this.runTask(text, mode || this.config.settings.mode).catch((e) => this.system(`發生錯誤:${e.message}`, { level: 'error' }));
+    if (this.running) {
+      // 進行中:訊息會在下一位成員發言時自動帶入;有 @ 指定時,任務結束前還沒輪到對方就補一次指定回覆
+      if (mentioned.length) this.directedQueue.push({ msg, agentIds: mentioned.map((a) => a.id) });
+      return msg;
+    }
+    const run = mentioned.length
+      ? this.runExclusive(() => this.directedPhase(mentioned))
+      : this.runTask(text, mode || this.config.settings.mode);
+    run.catch((e) => this.system(`發生錯誤:${e.message}`, { level: 'error' }));
     return msg;
   }
 
@@ -116,7 +135,7 @@ class Orchestrator extends EventEmitter {
     for (const p of this.procs) { try { p.kill('SIGTERM'); } catch {} }
     // stop / app quit 不必等外部 CLI 真正退出才清附件副本。
     this.staged = [];
-    clearRuntime(this.config.settings.workDir, this.conversationId);
+    clearRuntime(this.taskCwd || this.config.settings.workDir, this.conversationId);
   }
 
   reset() {
@@ -132,22 +151,34 @@ class Orchestrator extends EventEmitter {
     this.sessions = {};
     this.lastSeen = {};
     this.taskStartIndex = 0;
+    this.directedQueue = [];
     this.emit('reset');
     this.setPhase('idle');
   }
 
+  // 載入歷史對話繼續討論。CLI 的 session 不會跟著紀錄保存,所以每位成員下一次發言時
+  // 會收到(依上限截斷的)完整對話紀錄,而不是只有新訊息。
+  loadConversation({ messages, conversationId } = {}) {
+    if (this.running) throw new Error('目前仍在進行中,請先停止再載入歷史對話');
+    this.clearEmitTimers();
+    clearRuntime(this.config.settings.workDir, this.conversationId);
+    this.conversationId = CONVERSATION_ID.test(conversationId || '') ? conversationId : newConversationId();
+    this.messages = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object').map(restoreMessage);
+    this.attachments = [];
+    this.staged = [];
+    this.attachmentsSeen.clear();
+    this.sessions = {};
+    this.lastSeen = {};
+    this.taskStartIndex = 0;
+    this.directedQueue = [];
+    this.stopped = false;
+    this.setPhase('idle');
+    return this.snapshot();
+  }
+
   // ---------- 主流程 ----------
   async runTask(task, mode) {
-    const agents = this.agents;
-    if (agents.length === 0) { this.system('沒有啟用的成員,請先在左側新增或啟用成員。', { level: 'error' }); return; }
-    const cwd = this.config.settings.workDir;
-    try { fs.mkdirSync(cwd, { recursive: true }); } catch (e) { this.system(`無法建立工作目錄 ${cwd}:${e.message}`, { level: 'error' }); return; }
-
-    this.running = true;
-    this.stopped = false;
-    this.taskStartIndex = this.messages.length - 1; // user 訊息的位置
-    this.stageAttachments(agents, cwd);
-    try {
+    return this.runExclusive(async (agents, cwd) => {
       const agreed = await this.discussPhase(agents, task);
       if (this.stopped) return;
       if (mode === 'divide') {
@@ -167,14 +198,67 @@ class Orchestrator extends EventEmitter {
         if (!agreed) this.system(`已達最大討論回合(${this.config.settings.maxRounds}),由主持人總結。`);
         await this.summaryPhase(task, 'discuss', {});
       }
+    });
+  }
+
+  // 任務的共同外殼:檢查成員與工作目錄、暫存附件、結束時一定清理。
+  // body(agents, cwd) 是實際流程(完整圓桌或 @ 指定回覆)。
+  async runExclusive(body) {
+    const agents = this.agents;
+    if (agents.length === 0) { this.system('沒有啟用的成員,請先在左側新增或啟用成員。', { level: 'error' }); return; }
+    const cwd = this.config.settings.workDir;
+    try { fs.mkdirSync(cwd, { recursive: true }); } catch (e) { this.system(`無法建立工作目錄 ${cwd}:${e.message}`, { level: 'error' }); return; }
+
+    this.running = true;
+    this.stopped = false;
+    this.taskStartIndex = this.messages.length - 1; // user 訊息的位置
+    this.taskCwd = cwd;
+    this.directedQueue = [];
+    this.stageAttachments(agents, cwd);
+    try {
+      await body(agents, cwd);
+      if (!this.stopped) await this.answerDirectedQueue();
     } finally {
       this.running = false;
       this.clearEmitTimers();
       // 不論正常結束、出錯或被停止,工作目錄的附件副本都要當場刪掉
       this.unstageAttachments(cwd);
+      this.taskCwd = null;
+      this.directedQueue = [];
       if (this.stopped) this.system('已停止。');
       this.setPhase('idle');
     }
+  }
+
+  // @ 指定:只有被指定的成員回覆;多人時平行執行
+  async directedPhase(targets) {
+    const names = targets.map((a) => a.name).join('、');
+    this.setPhase(`指定 ${names}`);
+    const group = targets.length > 1 ? crypto.randomUUID() : null;
+    await Promise.all(targets.map((agent) => this.turn(agent, this.directedPrompt(agent, targets), { phase: '指定', hideAgreed: true, group })));
+  }
+
+  // 進行中送出的 @ 指定訊息:被指定的成員若在那之後都沒發言過,任務結束前補一次指定回覆
+  async answerDirectedQueue() {
+    while (this.directedQueue.length && !this.stopped) {
+      const { msg, agentIds } = this.directedQueue.shift();
+      const at = this.messages.indexOf(msg);
+      const spoke = new Set(this.messages.slice(at + 1).filter((m) => m.kind === 'agent').map((m) => m.agentId));
+      const targets = this.agents.filter((a) => agentIds.includes(a.id) && !spoke.has(a.id));
+      if (targets.length) await this.directedPhase(targets);
+    }
+  }
+
+  directedPrompt(agent, targets) {
+    const others = targets.filter((a) => a.id !== agent.id).map((a) => `「${a.name}」`);
+    const cwd = this.taskCwd || this.config.settings.workDir;
+    return [
+      '【指定回覆】使用者在最新一則訊息中用 @ 指定由你處理,請直接回應或完成使用者的要求。',
+      others.length ? `同時被指定的還有 ${others.join('、')},各自處理即可,不需要等待對方。` : '這次只有你被指定,其他成員不會發言。',
+      effectiveCanEdit(agent)
+        ? `需要時可以直接在工作目錄(${cwd})建立、修改檔案與執行指令。`
+        : '你目前沒有修改檔案的權限,需要改動時請寫出完整內容或步驟。',
+    ].join('\n');
   }
 
   // 沙箱型 CLI(capabilities.attachmentsNeedCwd)讀不到 userData 下的絕對路徑,
@@ -266,7 +350,8 @@ class Orchestrator extends EventEmitter {
   // 階段三:各成員平行執行自己的工作
   async executePhase(agents, plan) {
     this.setPhase('執行');
-    const cwd = this.config.settings.workDir;
+    const cwd = this.taskCwd || this.config.settings.workDir;
+    const group = crypto.randomUUID(); // 同一批平行發言,介面會並排顯示
     const jobs = [];
     for (const agent of agents) {
       const mine = plan.assignments.filter((a) => a._agentId === agent.id && a.task);
@@ -280,7 +365,7 @@ class Orchestrator extends EventEmitter {
         taskText,
       ].join('\n');
       jobs.push(
-        this.turn(agent, prompt, { phase: '執行', hideAgreed: true })
+        this.turn(agent, prompt, { phase: '執行', hideAgreed: true, group })
           .then(({ text, error }) => ({ agent, task: taskText, report: text, error })),
       );
     }
@@ -308,6 +393,7 @@ class Orchestrator extends EventEmitter {
       return [];
     }
     this.setPhase('交叉審查');
+    const group = crypto.randomUUID();
     const jobs = pairs.map(({ reviewer, target }) => {
       const prompt = [
         `【交叉審查】請檢查「${target.agent.name}」剛完成的工作。請實際打開相關檔案確認,不要只看回報。`,
@@ -318,7 +404,7 @@ class Orchestrator extends EventEmitter {
         '',
         `他的回報:\n${target.report}`,
       ].join('\n');
-      return this.turn(reviewer, prompt, { phase: '審查', hideAgreed: true })
+      return this.turn(reviewer, prompt, { phase: '審查', hideAgreed: true, group })
         .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
@@ -352,6 +438,7 @@ class Orchestrator extends EventEmitter {
 
     const unresolved = [];
     const jobs = [];
+    const group = crypto.randomUUID();
     for (const it of issues.values()) {
       if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
       const prompt = [
@@ -362,7 +449,7 @@ class Orchestrator extends EventEmitter {
         '',
         `審查意見:\n${it.notes.join('\n\n')}`,
       ].join('\n');
-      jobs.push(this.turn(it.agent, prompt, { phase: '修復', hideAgreed: true }).then(({ error }) => ({ item: it, error })));
+      jobs.push(this.turn(it.agent, prompt, { phase: '修復', hideAgreed: true, group }).then(({ error }) => ({ item: it, error })));
     }
 
     if (unresolved.length) {
@@ -475,26 +562,30 @@ class Orchestrator extends EventEmitter {
   unseenTranscript(agent, current) {
     const seen = this.lastSeen[agent.id];
     const resumable = !!getAdapter(agent.cli)?.supportsResume;
-    const from = resumable ? (seen == null ? (this.taskStartIndex || 0) : seen) : 0;
+    // 可續接且發言過的成員只需要新訊息;第一次發言(含剛載入的歷史對話)要從頭看起
+    const incremental = resumable && seen != null;
+    const from = incremental ? seen : 0;
     const entries = [];
+    // 整段對話的第一個任務(載入歷史對話時就是原始任務)也要保留
+    const firstUser = this.messages.findIndex((m) => m.kind === 'user');
     for (let i = from; i < this.messages.length; i++) {
       const m = this.messages[i];
       if (m === current || m.status === 'running') continue;
       // 任務敘述與分工結果是後面每一句話的前提,截斷時一定要保留
-      if (m.kind === 'user') entries.push({ text: `[使用者]:\n${m.text}`, pinned: i === this.taskStartIndex });
+      if (m.kind === 'user') entries.push({ text: `[使用者${mentionLabel(m)}]:\n${m.text}`, pinned: i === this.taskStartIndex || i === firstUser });
       else if (m.kind === 'agent' && m.agentId !== agent.id && m.text) entries.push({ text: `[${m.agentName}]:\n${m.text}` });
       else if (m.kind === 'system' && m.level !== 'error' && m.text.startsWith('**分工結果**')) entries.push({ text: `[系統]:\n${m.text}`, pinned: true });
     }
     if (entries.length === 0) return '';
-    if (resumable) return entries.map((e) => e.text).join(SEP); // 只送新訊息,量本來就小
+    if (incremental) return entries.map((e) => e.text).join(SEP); // 只送新訊息,量本來就小
     return truncateTranscript(entries, Number(this.config.settings.maxTranscriptChars) || 0);
   }
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent, instruction, { phase, hideAgreed = false } = {}) {
+  async turn(agent, instruction, { phase, hideAgreed = false, group = null } = {}) {
     const startIdx = this.messages.length;
-    const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running' });
+    const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}) });
     const transcript = this.unseenTranscript(agent, msg);
     const adapter = getAdapter(agent.cli);
     const resumable = adapter?.supportsResume && this.sessions[agent.id];
@@ -510,7 +601,7 @@ class Orchestrator extends EventEmitter {
       prompt,
       systemPrompt: this.systemPrompt(agent, { showAgreed: !hideAgreed }),
       sessionId: this.sessions[agent.id] || null,
-      cwd: this.config.settings.workDir,
+      cwd: this.taskCwd || this.config.settings.workDir,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(agent, adapter) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
@@ -536,6 +627,28 @@ class Orchestrator extends EventEmitter {
     }, true); // 回合結束一定要 flush,不能讓最後一次更新卡在節流裡
     return { text, error };
   }
+}
+
+// 「[使用者 → @Codex]」:讓每位成員都看得出這則訊息指定給誰
+function mentionLabel(m) {
+  const names = Array.isArray(m.mentions) ? m.mentions.map((x) => x && x.name).filter(Boolean) : [];
+  return names.length ? ` → ${names.map((n) => `@${n}`).join('、')}` : '';
+}
+
+// 從紀錄還原訊息:補齊欄位;存檔時還在輸出中的訊息不可能再完成,標成中斷
+function restoreMessage(m) {
+  const kind = MESSAGE_KINDS.has(m.kind) ? m.kind : 'system';
+  const msg = {
+    ...m,
+    id: typeof m.id === 'string' && m.id ? m.id : crypto.randomUUID(),
+    kind,
+    text: typeof m.text === 'string' ? m.text : String(m.text ?? ''),
+    thinking: typeof m.thinking === 'string' ? m.thinking : '',
+    activities: Array.isArray(m.activities) ? m.activities : [],
+    status: m.status === 'error' ? 'error' : 'done',
+  };
+  if (m.status === 'running') { msg.status = 'error'; msg.error = m.error || '這則訊息在儲存時尚未完成'; }
+  return msg;
 }
 
 // ---------- 對話紀錄截斷 ----------

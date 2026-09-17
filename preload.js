@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   openSessions: () => ipcRenderer.invoke('chat:openSessions'),
   stop: () => ipcRenderer.invoke('chat:stop'),
   reset: () => ipcRenderer.invoke('chat:reset'),
+  resume: (sessionId) => ipcRenderer.invoke('chat:resume', sessionId),
   // 附件:主程序負責驗證、落地與上限,renderer 只拿 metadata 與縮圖 data URL
   attachments: {
     list: () => ipcRenderer.invoke('attachments:list'),
@@ -50,4 +51,5 @@ contextBridge.exposeInMainWorld('api', {
   onMessage: (fn) => ipcRenderer.on('chat:message', (_e, m) => fn(m)),
   onState: (fn) => ipcRenderer.on('chat:state', (_e, s) => fn(s)),
   onReset: (fn) => ipcRenderer.on('chat:reset', () => fn()),
+  onSessionSaved: (fn) => ipcRenderer.on('session:saved', (_e, info) => fn(info)),
 });

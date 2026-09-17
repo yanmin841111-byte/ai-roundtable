@@ -197,7 +197,8 @@ const builtinAdapters = [
     bin: 'claude',
     supportsResume: true,
     supportsEdit: true,
-    capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
+    // 唯讀模式(--permission-mode dontAsk)會拒絕讀取工作目錄以外的檔案，附件要放一份副本到工作目錄
+    capabilities: { attachments: ['filePath'], attachmentsNeedCwd: true },
     efforts: CLAUDE_EFFORTS,
     listModels: () => listModels('claude'),
     check: () => checkCli('claude'),

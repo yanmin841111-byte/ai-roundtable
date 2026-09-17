@@ -42,7 +42,7 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 }
 ```
 
-`attachments` 可包含 `filePath`、`imageInline`、`textInline`。CLI 通常使用 `filePath`;OpenAI 相容 API 通常使用 `imageInline` 與 `textInline`。只有確定 CLI 無法讀取工作目錄外的絕對路徑時才將 `attachmentsNeedCwd` 設為 `true`。
+`attachments` 可包含 `filePath`、`imageInline`、`textInline`。CLI 通常使用 `filePath`;OpenAI 相容 API 不宣告時只用 `textInline`,確定模型收圖片才加上 `imageInline`(端點以 400/415/422 拒絕圖片時會自動略過圖片改用純文字重送)。只有確定 CLI 無法讀取工作目錄外的絕對路徑時才將 `attachmentsNeedCwd` 設為 `true`。
 
 ### 模型清單
 

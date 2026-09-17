@@ -99,7 +99,8 @@ function toEnvelope(parsed, fallbackDate) {
 
 // 寫入同一目錄的暫存檔後 rename，避免留下只寫了一半的 session。
 // 所有錯誤都轉成回傳值，呼叫端不需要為記錄失敗中止任務。
-function writeSession(userDataDir, messages, { now, logger, conversationId } = {}) {
+// 帶 id 時覆寫同一份紀錄(同一段對話持續累積、載入歷史後繼續討論),否則新建一份。
+function writeSession(userDataDir, messages, { now, logger, conversationId, id } = {}) {
   // 連檔名與 envelope 的組裝都要在 try 裡:呼叫端傳進壞掉的 now 或 userDataDir 時,
   // 這裡一樣只能回傳錯誤,絕不能讓記錄失敗把整個任務炸掉。
   let tmp = null;
@@ -107,7 +108,9 @@ function writeSession(userDataDir, messages, { now, logger, conversationId } = {
     const at = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
     const dir = sessionsDir(userDataDir);
     const stamp = at.toISOString().replace(/[:.]/g, '-');
-    const file = path.join(dir, `${stamp}-${crypto.randomUUID()}.json`);
+    const existing = id == null ? null : resolveSessionPath(userDataDir, id);
+    if (id != null && !existing) throw new Error('無效的紀錄代號');
+    const file = existing || path.join(dir, `${stamp}-${crypto.randomUUID()}.json`);
     tmp = `${file}.tmp`;
     const list = Array.isArray(messages) ? messages : [];
     const envelope = {
@@ -122,7 +125,7 @@ function writeSession(userDataDir, messages, { now, logger, conversationId } = {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(envelope, null, 2), 'utf8');
     fs.renameSync(tmp, file);
-    return { ok: true, file };
+    return { ok: true, file, id: path.basename(file) };
   } catch (error) {
     if (tmp) { try { fs.rmSync(tmp, { force: true }); } catch {} }
     report(logger, `無法儲存對話紀錄: ${error.message}`);

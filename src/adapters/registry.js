@@ -99,7 +99,8 @@ class Registry {
         supportsResume: !!mod.supportsResume,
         supportsEdit: mod.supportsEdit != null ? !!mod.supportsEdit : true,
         efforts: mod.efforts || [],
-        capabilities: normalizeCapabilities(mod.capabilities),
+        // 沒宣告時保持 undefined,attachmentCapabilities 才會依 supportsEdit 套用退路
+        capabilities: mod.capabilities != null ? normalizeCapabilities(mod.capabilities) : undefined,
         listModels: () => {
           if (typeof mod.listModels === 'function') {
             const r = mod.listModels(kit);
@@ -120,6 +121,14 @@ class Registry {
   }
 
   get(id) { return this.adapters.get(id) || null; }
+
+  // 從磁碟重新讀一份獨立的轉接器實例，不動目前登錄的那份。
+  // 測試連線要用剛儲存的設定，但不能清掉進行中對話的 session 記憶。
+  loadFresh(id) {
+    const current = this.adapters.get(id);
+    if (!current || current.origin !== 'user' || !current.file) return current || null;
+    try { return this.loadFile(path.join(this.userDir, current.file)); } catch { return current; }
+  }
   list() { return [...this.adapters.values()]; }
 
   // ---------- 給介面用 ----------

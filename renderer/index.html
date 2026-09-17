@@ -62,7 +62,8 @@
 
       <footer id="composer">
         <div class="composer-box">
-          <textarea id="input" rows="3" placeholder="描述任務,例如:用 Node.js 寫一個 CLI 待辦事項工具,支援新增、列出、完成、刪除…(Enter 送出,Shift+Enter 換行)"></textarea>
+          <div id="mention-menu" class="mention-menu" role="listbox" aria-label="指定成員" hidden></div>
+          <textarea id="input" rows="3" placeholder="描述任務,或輸入 @ 指定成員處理…(Enter 送出,Shift+Enter 換行)" aria-autocomplete="list" aria-controls="mention-menu"></textarea>
           <div class="composer-bar">
             <select id="mode">
               <option value="divide">討論 → 分工執行 → 交叉審查</option>
@@ -165,7 +166,7 @@
 
           <section class="settings-page" data-page="data" hidden>
             <div class="setting row-setting">
-              <div class="setting-label"><b>對話紀錄</b><span>每次任務結束自動保存成 JSON,可在左側「歷史對話」檢視</span></div>
+              <div class="setting-label"><b>對話紀錄</b><span>每次任務結束自動保存成 JSON,可在左側「歷史對話」檢視或繼續討論</span></div>
               <button id="sessions-btn" class="ghost small">📁 開啟資料夾</button>
             </div>
             <div class="setting row-setting">
@@ -178,13 +179,17 @@
     </div>
   </div>
 
-  <!-- 歷史對話預覽；不載入到目前對話 -->
+  <!-- 歷史對話預覽;可載入成目前對話繼續討論 -->
   <div id="history-modal" class="modal hidden">
     <div class="modal-card wide history-modal-card">
       <div class="modal-head"><span id="history-modal-title">歷史對話</span><button id="history-modal-close" class="ghost small">✕</button></div>
       <div id="history-modal-meta" class="history-modal-meta"></div>
       <div id="history-preview" class="modal-body history-preview"></div>
-      <div class="modal-foot"><span class="hint">歷史紀錄僅供檢視,不會載入成目前對話。</span></div>
+      <div class="modal-foot">
+        <span id="history-resume-hint" class="hint">載入後可以直接接著送出訊息,成員會先讀過這段紀錄。</span>
+        <div class="spacer"></div>
+        <button id="history-resume" class="primary small">繼續這段對話</button>
+      </div>
     </div>
   </div>
 

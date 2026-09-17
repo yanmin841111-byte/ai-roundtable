@@ -291,5 +291,25 @@ t('合法 id 才通過,且解析結果就在 sessions 目錄下', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+t('帶 id 時覆寫同一份紀錄(繼續討論不會拆成多筆),壞 id 不寫任何檔案', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-overwrite-'));
+  const first = writeSession(dir, [{ kind: 'user', ts: 1, text: '原始任務' }], { conversationId: 'c1' });
+  assert.strictEqual(first.id, path.basename(first.file));
+  const again = writeSession(dir, [
+    { kind: 'user', ts: 1, text: '原始任務' },
+    { kind: 'user', ts: 2, text: '繼續討論' },
+  ], { conversationId: 'c1', id: first.id });
+  assert.strictEqual(again.ok, true);
+  assert.strictEqual(again.file, first.file);
+  assert.strictEqual(listSessions(dir).sessions.length, 1);
+  assert.strictEqual(readSession(dir, first.id).session.messages.length, 2);
+  assert.strictEqual(readSession(dir, first.id).session.title, '原始任務');
+
+  const bad = writeSession(dir, [{ kind: 'user', text: 'x' }], { id: '../escape.json', logger: { error() {} } });
+  assert.strictEqual(bad.ok, false);
+  assert.strictEqual(listSessions(dir).sessions.length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 fs.rmSync(base, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);

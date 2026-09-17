@@ -25,12 +25,16 @@ class SecretStore {
   }
 
   load() {
+    let raw;
+    try { raw = fs.readFileSync(this.file, 'utf8'); } catch { return {}; } // 檔案不存在:還沒存過任何 key
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      return parsed && parsed.version === 1 && parsed.values && typeof parsed.values === 'object' ? parsed.values : {};
-    } catch {
-      return {};
-    }
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.version === 1 && parsed.values && typeof parsed.values === 'object' && !Array.isArray(parsed.values)) return parsed.values;
+    } catch {}
+    // 內容壞掉時先把原檔改名保留，否則下一次 set 會直接蓋掉，所有已存的 key 一起消失
+    this.backupFile = `${this.file}.corrupt-${Date.now()}`;
+    try { fs.renameSync(this.file, this.backupFile); } catch { this.backupFile = null; }
+    return {};
   }
 
   save() {
