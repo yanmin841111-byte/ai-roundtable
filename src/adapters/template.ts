@@ -1,4 +1,3 @@
-'use strict';
 // 擴充設定檔用的小工具:取值路徑、字串範本、條件參數、事件比對。
 
 // 以點號路徑取值,例如 "delta.text"、"tool_calls.0.function.name"。空路徑回傳物件本身。
@@ -115,4 +114,4 @@ function matches(event: any, match: any) {
   return true;
 }
 
-module.exports = { getPath, render, renderDeep, buildArgs, evalCondition, matches, placeholders, isEmpty };
+export { getPath, render, renderDeep, buildArgs, evalCondition, matches, placeholders, isEmpty };

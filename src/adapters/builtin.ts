@@ -1,10 +1,9 @@
-'use strict';
 // 內建轉接器:Claude Code、Codex CLI、Cursor CLI、自訂 shell 指令。
 // 每個轉接器都遵守 registry.js 描述的介面。
 
-const { runProcess, parseJson, truncate, checkCli } = require('./process');
-const { listModels, resolveRunOptions } = require('../models');
-const { createCursorAdapter } = require('./cursor');
+import { runProcess, parseJson, truncate, checkCli } from './process';
+import { listModels, resolveRunOptions } from '../models';
+import { createCursorAdapter } from './cursor';
 
 // 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
 function reportRunNote(ctx: any, run: any) {
@@ -234,4 +233,4 @@ const builtinAdapters = [
   },
 ];
 
-module.exports = { builtinAdapters };
+export { builtinAdapters };

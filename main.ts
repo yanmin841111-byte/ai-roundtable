@@ -1,14 +1,14 @@
-'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
-const path = require('path');
-const os = require('os');
-const { execSync } = require('child_process');
-const { Store } = require('./src/store');
-const { Orchestrator } = require('./src/orchestrator');
-const { Registry, setRegistry } = require('./src/adapters');
-const { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } = require('./src/session-log');
-const attachments = require('./src/attachments');
-const { SecretStore } = require('./src/secrets');
+import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } from 'electron';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
+import { Store } from './src/store';
+import { Orchestrator } from './src/orchestrator';
+import { Registry, setRegistry } from './src/adapters';
+import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } from './src/session-log';
+import * as attachments from './src/attachments';
+import { SecretStore } from './src/secrets';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -82,11 +82,12 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
-  if (process.env.AI_ROUNDTABLE_SHOT) win.webContents.once('did-finish-load', () => setTimeout(async () => {
+  const shotFile = process.env.AI_ROUNDTABLE_SHOT;
+  if (shotFile) win.webContents.once('did-finish-load', () => setTimeout(async () => {
     if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
     await new Promise((r: any) => setTimeout(r, 500));
     const img = await win.webContents.capturePage();
-    require('fs').writeFileSync(process.env.AI_ROUNDTABLE_SHOT, img.toPNG());
+    fs.writeFileSync(shotFile, img.toPNG());
     console.log('screenshot saved');
   }, 2500));
   if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (_e: any, level: any, msg: any, line: any, src: any) => console.log(`[renderer:${level}] ${msg} (${path.basename(src || '')}:${line})`));
@@ -242,7 +243,7 @@ app.whenReady().then(async () => {
     });
     if (result.canceled || !result.filePath) return { ok: false, canceled: true };
     try {
-      await require('fs').promises.writeFile(result.filePath, messagesToMarkdown(messages), 'utf8');
+      await fs.promises.writeFile(result.filePath, messagesToMarkdown(messages), 'utf8');
       return { ok: true, file: result.filePath };
     } catch (error: any) {
       return { ok: false, error: error.message };
@@ -250,7 +251,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('chat:openSessions', () => {
     const dir = path.join(app.getPath('userData'), 'sessions');
-    require('fs').mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
     return shell.openPath(dir);
   });
   ipcMain.handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50 }));

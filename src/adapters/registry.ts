@@ -1,4 +1,3 @@
-'use strict';
 // 轉接器登錄中心:內建轉接器 + 使用者擴充資料夾裡的 *.json / *.js。
 //
 // 轉接器介面(內建與擴充都一樣):
@@ -12,13 +11,13 @@
 //   check?()         → Promise<{ ok, version?, error? }>
 //   run(agent, ctx)  → Promise<{ text, thinking, sessionId, usage, error }>
 
-const fs = require('fs');
-const path = require('path');
-const { builtinAdapters } = require('./builtin');
-const { validateCommon, normalizeModels, normalizeCapabilities } = require('./spec');
-const { createCliAdapter, validateCliSpec } = require('./cli-adapter');
-const { createOpenAIAdapter, validateOpenAISpec } = require('./openai-adapter');
-const kit = require('./kit');
+import fs from 'fs';
+import path from 'path';
+import { builtinAdapters } from './builtin';
+import { validateCommon, normalizeModels, normalizeCapabilities } from './spec';
+import { createCliAdapter, validateCliSpec } from './cli-adapter';
+import { createOpenAIAdapter, validateOpenAISpec } from './openai-adapter';
+import { kit } from './kit';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -270,4 +269,4 @@ class Registry {
   }
 }
 
-module.exports = { Registry };
+export { Registry };

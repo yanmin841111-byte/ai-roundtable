@@ -1,8 +1,7 @@
-'use strict';
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { deleteConversation } = require('./attachments');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { deleteConversation } from './attachments';
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
@@ -312,4 +311,4 @@ function messagesToMarkdown(messages: any) {
   return `${sections.join('\n\n')}\n`;
 }
 
-module.exports = { writeSession, listSessions, readSession, deleteSession, listConversationIds, messagesToMarkdown, usageMarkdown, resolveSessionPath };
+export { writeSession, listSessions, readSession, deleteSession, listConversationIds, messagesToMarkdown, usageMarkdown, resolveSessionPath };

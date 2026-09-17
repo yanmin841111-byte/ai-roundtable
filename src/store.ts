@@ -1,8 +1,7 @@
-'use strict';
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const crypto = require('crypto');
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
 
 function defaultConfig() {
   return {
@@ -72,4 +71,4 @@ class Store {
   get() { return this.config; }
 }
 
-module.exports = { Store, defaultConfig };
+export { Store, defaultConfig };

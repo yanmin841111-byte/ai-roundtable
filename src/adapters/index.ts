@@ -1,12 +1,11 @@
-'use strict';
 // CLI 轉接層入口:協調器與主程序只透過這裡使用轉接器。
 //
 // runTurn(agent, ctx) → Promise<{ text, thinking, sessionId, usage, error }>
 // ctx: { prompt, systemPrompt, sessionId, cwd, timeoutMs,
 //        onText(fullText), onThinking(fullText), onActivity(activity), onSession(id), onProc(handle) }
 
-const { Registry } = require('./registry');
-const { normalizeUsage } = require('../usage');
+import { Registry } from './registry';
+import { normalizeUsage } from '../usage';
 
 let registry = new Registry();
 
@@ -38,4 +37,4 @@ async function runTurn(agent: any, ctx: any) {
   }
 }
 
-module.exports = { runTurn, getAdapter, getRegistry, setRegistry, effectiveCanEdit, Registry };
+export { runTurn, getAdapter, getRegistry, setRegistry, effectiveCanEdit, Registry };

@@ -1,13 +1,12 @@
-'use strict';
 // 提供給 .js 外掛的工具箱:run(agent, ctx, kit) 的第三個參數。
 // 讓外掛不用自己處理行程、逾時、整組終止與模型/強度規則。
 
-const proc = require('./process');
-const template = require('./template');
-const rules = require('../model-rules');
-const { normalizeModels } = require('./spec');
+import * as proc from './process';
+import * as template from './template';
+import * as rules from '../model-rules';
+import { normalizeModels } from './spec';
 
-module.exports = {
+export const kit = {
   runProcess: proc.runProcess,
   checkCli: proc.checkCli,
   parseJson: proc.parseJson,

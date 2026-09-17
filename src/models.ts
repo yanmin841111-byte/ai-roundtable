@@ -1,4 +1,3 @@
-'use strict';
 // 模型目錄:從各 CLI 的本機快取讀出可用模型,統一格式後回傳。
 // 解析結果依檔案「修改時間 + 大小」快取;檔案沒變就不重讀,CLI 更新快取後下次呼叫自動生效。
 //
@@ -6,10 +5,10 @@
 //   { id, label, description, efforts: string[], defaultEffort, aliases: string[] }
 //   efforts 為空陣列代表此模型不支援強度設定。
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { findModel, resolveModelId, resolveEffort } = require('./model-rules');
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { findModel, resolveModelId, resolveEffort } from './model-rules';
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -147,4 +146,4 @@ function resolveRunOptions(cli: any, model: any, effort: any) {
   return { model: id, ...resolveEffort(models, id, effort) };
 }
 
-module.exports = { listModels, resolveRunOptions, findModel, parseCodexCache, parseClaudeCatalog, FALLBACK };
+export { listModels, resolveRunOptions, findModel, parseCodexCache, parseClaudeCatalog, FALLBACK };

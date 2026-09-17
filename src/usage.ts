@@ -1,4 +1,3 @@
-'use strict';
 // 用量正規化:各 CLI / API 回報的 usage 欄位名稱與語意都不一樣,
 // 在這裡統一成單一形狀,介面端才能安全地跨成員加總。
 //
@@ -117,4 +116,4 @@ function normalizeUsage(raw: any, shape: any) {
   };
 }
 
-module.exports = { normalizeUsage, detectShape, SHAPES };
+export { normalizeUsage, detectShape, SHAPES };

@@ -1,4 +1,3 @@
-'use strict';
 // 附件儲存層。
 //
 // 權威儲存一律放在 userData/attachments/<conversationId>/,不寫進使用者的工作目錄:
@@ -10,9 +9,9 @@
 // 暫存到 workDir/.roundtable-runtime/<conversationId>/,回合結束立刻刪掉;
 // 絕不修改使用者的 .gitignore 或 .git/info/exclude。
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 
 // ---------- 產品拍板的上限 ----------
 const LIMITS = {
@@ -103,7 +102,7 @@ function ensureManagedDir(dir: any) {
 
 function safeRegularFile(file: any) {
   const stat = lstat(file);
-  return !!(stat && stat !== false && stat.isFile() && !stat.isSymbolicLink());
+  return !!(stat && stat.isFile() && !stat.isSymbolicLink());
 }
 
 function sanitizeOriginalName(value: any) {
@@ -285,8 +284,8 @@ function absolutePath(userDataDir: any, meta: any) {
   if (!full || !safeRegularFile(full)) return null;
   const rootStat = lstat(attachmentsRoot(userDataDir));
   const dirStat = lstat(dir);
-  if (!rootStat || rootStat === false || rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
-  if (!dirStat || dirStat === false || dirStat.isSymbolicLink() || !dirStat.isDirectory()) return null;
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+  if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) return null;
   return full;
 }
 
@@ -302,9 +301,9 @@ function thumbPath(userDataDir: any, meta: any) {
   const rootStat = lstat(attachmentsRoot(userDataDir));
   const dirStat = lstat(dir);
   const thumbsStat = lstat(thumbsDir);
-  if (!file || !safeRegularFile(file) || !rootStat || rootStat === false || rootStat.isSymbolicLink()
-    || !dirStat || dirStat === false || dirStat.isSymbolicLink()
-    || !thumbsStat || thumbsStat === false || thumbsStat.isSymbolicLink()) return null;
+  if (!file || !safeRegularFile(file) || !rootStat || rootStat.isSymbolicLink()
+    || !dirStat || dirStat.isSymbolicLink()
+    || !thumbsStat || thumbsStat.isSymbolicLink()) return null;
   return file;
 }
 
@@ -339,9 +338,9 @@ function deleteConversation(userDataDir: any, conversationId: any) {
   if (!dir) return { ok: false, error: '無效的對話代號' };
   try {
     const rootStat = lstat(attachmentsRoot(userDataDir));
-    if (!rootStat || rootStat === false || rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { ok: false, error: '附件目錄不安全' };
+    if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { ok: false, error: '附件目錄不安全' };
     const dirStat = lstat(dir);
-    if (dirStat && dirStat !== false && dirStat.isSymbolicLink()) {
+    if (dirStat && dirStat.isSymbolicLink()) {
       fs.unlinkSync(dir);
       return { ok: true };
     }
@@ -427,7 +426,7 @@ function clearRuntime(workDir: any, conversationId: any = null) {
       const dir = resolveInDir(root, conversationId);
       if (dir) {
         const dirStat = lstat(dir);
-        if (dirStat && dirStat !== false && dirStat.isSymbolicLink()) fs.unlinkSync(dir);
+        if (dirStat && dirStat.isSymbolicLink()) fs.unlinkSync(dir);
         else if (dirStat === false) return { ok: false, error: '無法檢查附件暫存目錄' };
         else fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -520,22 +519,4 @@ function buildAttachmentPrompt(userDataDir: any, attachments: any, adapter: any,
   return parts.join('\n\n');
 }
 
-module.exports = {
-  LIMITS,
-  RUNTIME_DIR,
-  ALLOWED_EXTS,
-  newConversationId,
-  conversationDir,
-  resolveInDir,
-  addAttachments,
-  removeAttachment,
-  absolutePath,
-  thumbDataUrl,
-  deleteConversation,
-  cleanupOrphans,
-  stageToCwd,
-  clearRuntime,
-  attachmentCapabilities,
-  buildAttachmentPrompt,
-  formatBytes,
-};
+export { LIMITS, RUNTIME_DIR, ALLOWED_EXTS, newConversationId, conversationDir, resolveInDir, addAttachments, removeAttachment, absolutePath, thumbDataUrl, deleteConversation, cleanupOrphans, stageToCwd, clearRuntime, attachmentCapabilities, buildAttachmentPrompt, formatBytes };

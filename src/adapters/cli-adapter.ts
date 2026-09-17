@@ -1,14 +1,13 @@
-'use strict';
 // 用 JSON 描述的 CLI 轉接器。規格見 docs/adapters.md。
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { runProcess, parseJson, truncate, checkCli } = require('./process');
-const { getPath, render, buildArgs, matches } = require('./template');
-const { resolveModelId, resolveEffort } = require('../model-rules');
-const { normalizeModels, normalizeCapabilities } = require('./spec');
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import crypto from 'crypto';
+import { runProcess, parseJson, truncate, checkCli } from './process';
+import { getPath, render, buildArgs, matches } from './template';
+import { resolveModelId, resolveEffort } from '../model-rules';
+import { normalizeModels, normalizeCapabilities } from './spec';
 
 const TEXT_MODES = ['append', 'replace', 'message'];
 
@@ -188,4 +187,4 @@ function applyRule(rule: any, item: any, event: any, state: any, ctx: any) {
   }
 }
 
-module.exports = { createCliAdapter, validateCliSpec };
+export { createCliAdapter, validateCliSpec };

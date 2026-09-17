@@ -1,13 +1,12 @@
-'use strict';
 // OpenAI 相容 Chat Completions API 轉接器(DeepSeek、Kimi、Grok、OpenRouter、Ollama、LM Studio…)。
 // 規格見 docs/adapters.md。
 
-const crypto = require('crypto');
-const fs = require('fs');
-const { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } = require('./process');
-const { renderDeep } = require('./template');
-const { resolveModelId, resolveEffort } = require('../model-rules');
-const { normalizeModels, normalizeCapabilities } = require('./spec');
+import crypto from 'crypto';
+import fs from 'fs';
+import { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } from './process';
+import { renderDeep } from './template';
+import { resolveModelId, resolveEffort } from '../model-rules';
+import { normalizeModels, normalizeCapabilities } from './spec';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
@@ -277,4 +276,4 @@ async function readSse(body: any, onData: any) {
   if (buf.trim()) handleLine(buf.trim());
 }
 
-module.exports = { createOpenAIAdapter, validateOpenAISpec, buildUserContent, compactHistoryImages };
+export { createOpenAIAdapter, validateOpenAISpec, buildUserContent, compactHistoryImages };

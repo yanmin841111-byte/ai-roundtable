@@ -1,7 +1,5 @@
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 const REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 
@@ -102,4 +100,4 @@ function mask(value: any) {
   return `${text.slice(0, 3)}…${text.slice(-4)}`;
 }
 
-module.exports = { SecretStore, REF_PATTERN, mask };
+export { SecretStore, REF_PATTERN, mask };

@@ -1,15 +1,12 @@
-'use strict';
 // 協調器:安排多個 AI 成員輪流發言、達成共識後分工執行、交叉審查、再修復一輪。
-const { EventEmitter } = require('events');
-const fs = require('fs');
-const crypto = require('crypto');
-const { execFile } = require('child_process');
-const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
-const { hasMarker, stripMarker, findMentions } = require('./shared');
+import { EventEmitter } from 'events';
+import fs from 'fs';
+import crypto from 'crypto';
+import { execFile } from 'child_process';
+import { runTurn, getAdapter, effectiveCanEdit } from './adapters';
+import { hasMarker, stripMarker, findMentions } from './shared';
 import type { PhaseInfo } from './ipc-types';
-const {
-  RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath,
-} = require('./attachments');
+import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
@@ -874,4 +871,4 @@ function resolveAgent(token: any, codes: any, agents: any) {
   }) || null;
 }
 
-module.exports = { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, extractJson, resolveAgent };
+export { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, extractJson, resolveAgent };

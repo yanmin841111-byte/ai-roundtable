@@ -1,4 +1,3 @@
-'use strict';
 // Cursor CLI(指令 cursor-agent)轉接器。
 //
 // 依 cursor-agent 2026.09 實測的 `-p --output-format stream-json --stream-partial-output` 輸出撰寫:
@@ -13,8 +12,8 @@
 // 強度寫在模型名稱裡(例如 claude-opus-5-thinking-high),所以轉接器本身沒有強度選項。
 // Cursor 沒有系統提示參數,角色設定在第一回合接在提示詞前面;之後用 --resume 續接。
 
-const { runProcess, parseJson, truncate, checkCli } = require('./process');
-const { resolveModelId } = require('../model-rules');
+import { runProcess, parseJson, truncate, checkCli } from './process';
+import { resolveModelId } from '../model-rules';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const NOT_FOUND = 127;
@@ -74,7 +73,7 @@ function toolResultText(result: any) {
 // cursor-agent 是 Node 程式,stdout 是非阻塞 pipe 時會在寫完前就結束行程:
 // 在 Electron 主程序裡實測 --list-models 固定在約 8KB 處被截斷,回合最後的 result 事件也可能遺失。
 // 透過 sh 接一層 cat,讓它寫進一般的阻塞 pipe;pipefail 保留 cursor-agent 自己的結束代碼。
-function viaShell(bin: any, args: any) {
+function viaShell(bin: string, args: readonly string[]): [string, string[]] {
   return ['/bin/sh', ['-c', 'set -o pipefail; "$0" "$@" | cat', bin, ...args]];
 }
 
@@ -213,4 +212,4 @@ function createCursorAdapter({ bin = 'cursor-agent' }: any = {}) {
   };
 }
 
-module.exports = { createCursorAdapter, parseCursorModels, describeCursorTool };
+export { createCursorAdapter, parseCursorModels, describeCursorTool };

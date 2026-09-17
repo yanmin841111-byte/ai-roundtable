@@ -1,8 +1,7 @@
-'use strict';
 // 擴充規格的共用檢查與正規化。
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
-const { SHAPES: USAGE_SHAPES } = require('../usage');
+import { SHAPES as USAGE_SHAPES } from '../usage';
 const ATTACHMENT_CAPABILITIES = ['filePath', 'imageInline', 'textInline'];
 
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
@@ -57,4 +56,4 @@ function normalizeCapabilities(capabilities: any, fallback: any = []) {
   };
 }
 
-module.exports = { ID_PATTERN, ATTACHMENT_CAPABILITIES, normalizeModels, normalizeCapabilities, validateCommon };
+export { ID_PATTERN, ATTACHMENT_CAPABILITIES, normalizeModels, normalizeCapabilities, validateCommon };
