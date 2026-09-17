@@ -2,9 +2,33 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { deleteConversation } from './attachments';
-import type { OkResult, SessionReadResult } from './ipc-types';
+import type { ChatMessage, OkResult, PhaseValue, SessionReadResult, SessionSummary } from './ipc-types';
 
 type WriteSessionResult = { ok: true; file: string; id: string } | { ok: false; file: null; error: string };
+
+// 磁碟上的紀錄可能是舊格式或被手動改壞,訊息的欄位一律當作可能缺漏
+type LooseMessage = Partial<ChatMessage> | null | undefined;
+
+interface Envelope {
+  version: number;
+  createdAt: string;
+  title: string;
+  agents: string[];
+  conversationId: string | null;
+  // 沒有逐則驗證;載入繼續討論時由 orchestrator 的 restoreMessage 補齊欄位
+  messages: ChatMessage[];
+}
+
+type EnvelopeResult = { ok: true; envelope: Envelope } | { ok: false; error: string };
+
+type Logger = { error(message: string): void };
+
+// Array.isArray 會把唯讀陣列收窄成 any[],包一層保住元素型別
+function asList<T>(value: readonly T[]): readonly T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
@@ -12,18 +36,18 @@ const LIST_LIMIT = 50;
 // 檔名白名單:只接受單一檔名,不含任何目錄成分
 const ID_PATTERN = /^[\w.-]+\.json$/;
 
-function report(logger: any, message: any) {
+function report(logger: Logger | null | undefined, message: string) {
   try { (logger || console).error(message); } catch {}
 }
 
-const sessionsDir = (userDataDir: any) => path.join(userDataDir, 'sessions');
+const sessionsDir = (userDataDir: string) => path.join(userDataDir, 'sessions');
 
 // 全 app 唯一一條「使用者輸入 → 讀檔／刪檔」的通道,所以三層都要過:
 //   1. basename 砍掉所有目錄成分('../../x.json' → 'x.json')
 //   2. 白名單正規式(擋掉空字串、'.'、'..'、非 .json)
 //   3. 解析後的 dirname 必須嚴格等於 sessions 目錄
 // 任何一層不過就回傳 null,呼叫端不得碰任何檔案。
-function resolveSessionPath(userDataDir: any, id: any) {
+function resolveSessionPath(userDataDir: string, id: unknown): string | null {
   if (typeof id !== 'string') return null;
   const dir = path.resolve(sessionsDir(userDataDir));
   const name = path.basename(id);
@@ -35,9 +59,9 @@ function resolveSessionPath(userDataDir: any, id: any) {
 }
 
 // 第一則使用者訊息的開頭當標題;沒有就退回第一則有文字的訊息
-function deriveTitle(messages: any) {
-  const list = Array.isArray(messages) ? messages : [];
-  const first = list.find((m: any) => m && m.kind === 'user' && m.text) || list.find((m: any) => m && m.text);
+function deriveTitle(messages: readonly LooseMessage[]) {
+  const list = asList(messages);
+  const first = list.find((m) => m && m.kind === 'user' && m.text) || list.find((m) => m && m.text);
   const text = String((first && first.text) || '').replace(/\s+/g, ' ').trim();
   if (!text) return '(無標題)';
   return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX)}…` : text;
@@ -45,9 +69,10 @@ function deriveTitle(messages: any) {
 
 // 附件目錄名就是 conversationId。舊檔沒有這個欄位時從 relPath 的第一段還原,
 // 這樣即使 envelope 少了欄位,刪對話還是能連動清掉附件。
-function deriveConversationId(messages: any) {
-  for (const m of Array.isArray(messages) ? messages : []) {
-    for (const a of Array.isArray(m && m.attachments) ? m.attachments : []) {
+function deriveConversationId(messages: readonly LooseMessage[]): string | null {
+  for (const m of asList(messages)) {
+    const attachments = m?.attachments;
+    for (const a of Array.isArray(attachments) ? attachments : []) {
       const first = typeof a?.relPath === 'string' ? a.relPath.split('/')[0] : '';
       if (first) return first;
     }
@@ -55,9 +80,9 @@ function deriveConversationId(messages: any) {
   return null;
 }
 
-function deriveAgents(messages: any) {
-  const names: any[] = [];
-  for (const m of Array.isArray(messages) ? messages : []) {
+function deriveAgents(messages: readonly LooseMessage[]) {
+  const names: string[] = [];
+  for (const m of asList(messages)) {
     if (m && m.kind === 'agent' && m.agentName && !names.includes(m.agentName)) names.push(m.agentName);
   }
   return names;
@@ -65,8 +90,8 @@ function deriveAgents(messages: any) {
 
 // 只看第一則訊息的 ts。不要「往後找第一則有 ts 的」——後面那些訊息的時間點
 // 和對話開始時間沒有必然關係,拿來當 createdAt 會給出比檔案本身還離譜的值。
-function deriveCreatedAt(messages: any, fallback: any) {
-  const first = Array.isArray(messages) ? messages[0] : null;
+function deriveCreatedAt(messages: readonly LooseMessage[], fallback: unknown) {
+  const first = asList(messages)[0];
   const date = first && first.ts != null ? new Date(first.ts) : null;
   if (date && !Number.isNaN(date.getTime())) return date.toISOString();
   const back = fallback instanceof Date && !Number.isNaN(fallback.getTime()) ? fallback : new Date();
@@ -74,7 +99,7 @@ function deriveCreatedAt(messages: any, fallback: any) {
 }
 
 // 舊檔是純陣列,新檔是 envelope;兩者都包成同一個形狀,不批次改寫舊檔
-function toEnvelope(parsed: any, fallbackDate: any) {
+function toEnvelope(parsed: any, fallbackDate: Date): Envelope {
   if (Array.isArray(parsed)) {
     return {
       version: ENVELOPE_VERSION,
@@ -102,10 +127,14 @@ function toEnvelope(parsed: any, fallbackDate: any) {
 // 寫入同一目錄的暫存檔後 rename，避免留下只寫了一半的 session。
 // 所有錯誤都轉成回傳值，呼叫端不需要為記錄失敗中止任務。
 // 帶 id 時覆寫同一份紀錄(同一段對話持續累積、載入歷史後繼續討論),否則新建一份。
-function writeSession(userDataDir: any, messages: any, { now, logger, conversationId, id }: any = {}): WriteSessionResult {
+function writeSession(
+  userDataDir: string,
+  messages: readonly ChatMessage[],
+  { now, logger, conversationId, id }: { now?: unknown; logger?: Logger; conversationId?: string | null; id?: string | null } = {},
+): WriteSessionResult {
   // 連檔名與 envelope 的組裝都要在 try 裡:呼叫端傳進壞掉的 now 或 userDataDir 時,
   // 這裡一樣只能回傳錯誤,絕不能讓記錄失敗把整個任務炸掉。
-  let tmp: any = null;
+  let tmp: string | null = null;
   try {
     const at = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
     const dir = sessionsDir(userDataDir);
@@ -114,39 +143,39 @@ function writeSession(userDataDir: any, messages: any, { now, logger, conversati
     if (id != null && !existing) throw new Error('無效的紀錄代號');
     const file = existing || path.join(dir, `${stamp}-${crypto.randomUUID()}.json`);
     tmp = `${file}.tmp`;
-    const list = Array.isArray(messages) ? messages : [];
-    const envelope = {
+    const list = asList(messages);
+    const envelope: Envelope = {
       version: ENVELOPE_VERSION,
       createdAt: deriveCreatedAt(list, at),
       title: deriveTitle(list),
       agents: deriveAgents(list),
       // 附件存在 userData/attachments/<conversationId>/,刪這份紀錄時要連動清掉
       conversationId: conversationId || deriveConversationId(list),
-      messages: list,
+      messages: [...list],
     };
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(envelope, null, 2), 'utf8');
     fs.renameSync(tmp, file);
     return { ok: true, file, id: path.basename(file) };
-  } catch (error: any) {
+  } catch (error) {
     if (tmp) { try { fs.rmSync(tmp, { force: true }); } catch {} }
-    report(logger, `無法儲存對話紀錄: ${error.message}`);
-    return { ok: false, file: null, error: error.message };
+    report(logger, `無法儲存對話紀錄: ${errorMessage(error)}`);
+    return { ok: false, file: null, error: errorMessage(error) };
   }
 }
 
 // 依 (檔案路徑, mtimeMs) 快取解析結果,檔案沒變就不重讀。
 // 和 src/models.js 的模型快取是同一個模式。
-const parseCache = new Map();
+const parseCache = new Map<string, { mtimeMs: number; result: EnvelopeResult }>();
 
-function readEnvelope(full: any, stat: any) {
+function readEnvelope(full: string, stat: fs.Stats): EnvelopeResult {
   const cached = parseCache.get(full);
   if (cached && cached.mtimeMs === stat.mtimeMs) return cached.result;
-  let result: any;
+  let result: EnvelopeResult;
   try {
     result = { ok: true, envelope: toEnvelope(JSON.parse(fs.readFileSync(full, 'utf8')), stat.mtime) };
-  } catch (error: any) {
-    result = { ok: false, error: error.message };
+  } catch (error) {
+    result = { ok: false, error: errorMessage(error) };
   }
   parseCache.set(full, { mtimeMs: stat.mtimeMs, result });
   return result;
@@ -154,38 +183,38 @@ function readEnvelope(full: any, stat: any) {
 
 // 列出最近的對話。排序只看 mtime(不讀內容),只解析最新的 limit 筆。
 // 單一檔案壞掉時該筆降級顯示,不讓整份清單失效。
-function listSessions(userDataDir: any, { limit = LIST_LIMIT }: any = {}) {
+function listSessions(userDataDir: string, { limit = LIST_LIMIT }: { limit?: number } = {}): { sessions: SessionSummary[]; error?: string } {
   const dir = sessionsDir(userDataDir);
-  let entries: any;
+  let entries: Array<{ name: string; stat: fs.Stats }>;
   try {
     entries = fs.readdirSync(dir)
-      .filter((name: any) => ID_PATTERN.test(name))
-      .map((name: any) => {
+      .filter((name) => ID_PATTERN.test(name))
+      .map((name) => {
         try {
           const stat = fs.statSync(path.join(dir, name));
           return stat.isFile() ? { name, stat } : null;
         } catch { return null; }
       })
-      .filter(Boolean)
-      .sort((a: any, b: any) => b.stat.mtimeMs - a.stat.mtimeMs);
-  } catch (error: any) {
+      .filter((entry) => entry !== null)
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  } catch (error) {
     // 目錄還不存在只代表沒有紀錄,不是錯誤
-    if (error.code === 'ENOENT') return { sessions: [] };
-    return { sessions: [], error: error.message };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { sessions: [] };
+    return { sessions: [], error: errorMessage(error) };
   }
 
-  const sessions = entries.slice(0, Math.max(0, limit)).map(({ name, stat }: any) => {
+  const sessions = entries.slice(0, Math.max(0, limit)).map(({ name, stat }): SessionSummary => {
     const base = { id: name, size: stat.size, createdAt: stat.mtime.toISOString() };
     const parsed = readEnvelope(path.join(dir, name), stat);
     if (!parsed.ok) return { ...base, title: '(無法讀取)', agents: [], messageCount: 0, error: parsed.error };
     const e = parsed.envelope;
-    const attachmentCount = e.messages.reduce((n: any, m: any) => n + (Array.isArray(m.attachments) ? m.attachments.length : 0), 0);
+    const attachmentCount = e.messages.reduce((n, m: LooseMessage) => n + (Array.isArray(m?.attachments) ? m.attachments.length : 0), 0);
     return { ...base, title: e.title, agents: e.agents, createdAt: e.createdAt, messageCount: e.messages.length, conversationId: e.conversationId || null, attachmentCount };
   });
   return { sessions };
 }
 
-function readSession(userDataDir: any, id: any): SessionReadResult {
+function readSession(userDataDir: string, id: unknown): SessionReadResult {
   const full = resolveSessionPath(userDataDir, id);
   if (!full) return { ok: false, error: '無效的紀錄代號' };
   try {
@@ -193,12 +222,12 @@ function readSession(userDataDir: any, id: any): SessionReadResult {
     if (!stat.isFile()) return { ok: false, error: '無效的紀錄代號' };
     const parsed = readEnvelope(full, stat);
     return parsed.ok ? { ok: true, session: parsed.envelope } : { ok: false, error: parsed.error };
-  } catch (error: any) {
-    return { ok: false, error: error.message };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
   }
 }
 
-function deleteSession(userDataDir: any, id: any): OkResult {
+function deleteSession(userDataDir: string, id: unknown): OkResult {
   const full = resolveSessionPath(userDataDir, id);
   if (!full) return { ok: false, error: '無效的紀錄代號' };
   try {
@@ -212,17 +241,17 @@ function deleteSession(userDataDir: any, id: any): OkResult {
     // 同一個 conversation 可能分段寫成多份 session;最後一份刪除後才能清附件。
     if (conversationId && !listConversationIds(userDataDir).includes(conversationId)) deleteConversation(userDataDir, conversationId);
     return { ok: true };
-  } catch (error: any) {
-    return { ok: false, error: error.message };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
   }
 }
 
 // 給孤兒清理用:掃出所有已經寫進 session 的 conversationId,這些附件不能被清掉
-function listConversationIds(userDataDir: any) {
+function listConversationIds(userDataDir: string): string[] {
   const dir = sessionsDir(userDataDir);
-  const ids = new Set();
-  let names: any;
-  try { names = fs.readdirSync(dir).filter((name: any) => ID_PATTERN.test(name)); } catch { return []; }
+  const ids = new Set<string>();
+  let names: string[];
+  try { names = fs.readdirSync(dir).filter((name) => ID_PATTERN.test(name)); } catch { return []; }
   for (const name of names) {
     const full = path.join(dir, name);
     try {
@@ -235,7 +264,8 @@ function listConversationIds(userDataDir: any) {
   return [...ids];
 }
 
-function formatTime(ts: any) {
+function formatTime(ts: string | number | undefined) {
+  if (ts == null) return '時間不明';
   const date = new Date(ts);
   return Number.isNaN(date.getTime()) ? '時間不明' : date.toLocaleString('zh-TW', {
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -244,32 +274,32 @@ function formatTime(ts: any) {
   });
 }
 
-function messageTitle(message: any) {
+function messageTitle(message: ChatMessage) {
   if (message.kind === 'user') return '使用者';
   if (message.kind === 'agent') return message.agentName || 'AI 成員';
   return message.level === 'error' ? '系統錯誤' : message.level === 'warn' ? '系統警告' : '系統';
 }
 
-function hasNumber(value: any) { return value != null && Number.isFinite(Number(value)); }
+function hasNumber(value: unknown) { return value != null && Number.isFinite(Number(value)); }
 
-function rawValue(value: any) {
+function rawValue(value: unknown) {
   if (typeof value === 'string') return JSON.stringify(value);
   if (value == null || typeof value !== 'object') return String(value);
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function usageMarkdown(usage: any) {
+function usageMarkdown(usage: any): string {
   if (!usage || typeof usage !== 'object') return '';
   if (!usage.shape || usage.shape === 'unknown') {
     const raw = usage.raw && typeof usage.raw === 'object' ? usage.raw : usage;
     const fields = Object.entries(raw)
-      .filter(([key]: any) => !['shape', 'raw'].includes(key))
-      .map(([key, value]: any) => `${key}: ${rawValue(value)}`);
+      .filter(([key]) => !['shape', 'raw'].includes(key))
+      .map(([key, value]) => `${key}: ${rawValue(value)}`);
     return `> 原始用量：${fields.length ? fields.join(' · ') : '無欄位'}`;
   }
-  const fields: any[] = [];
+  const fields: string[] = [];
   if (hasNumber(usage.inputTokens)) {
-    const detail: any[] = [];
+    const detail: string[] = [];
     if (hasNumber(usage.cachedInputTokens)) detail.push(`其中快取 ${usage.cachedInputTokens}`);
     if (hasNumber(usage.cacheWriteTokens)) detail.push(`寫入快取 ${usage.cacheWriteTokens}`);
     fields.push(`輸入: ${usage.inputTokens}${detail.length ? `（${detail.join('、')}）` : ''}`);
@@ -289,22 +319,22 @@ const PHASE_TEXT: Record<string, string> = {
   execute: '執行', review: '審查', repair: '修復', summary: '總結',
 };
 
-function phaseToText(phase: any): string {
+function phaseToText(phase: PhaseValue | null | undefined): string {
   if (!phase) return '';
   if (typeof phase === 'string') return phase; // 舊 session
   const label = PHASE_TEXT[phase.code] || phase.code || '';
   return phase.round ? `${label} R${phase.round}` : label;
 }
 
-function messagesToMarkdown(messages: any) {
+function messagesToMarkdown(messages: readonly ChatMessage[]) {
   const sections = ['# AI Roundtable 對話'];
-  for (const message of Array.isArray(messages) ? messages : []) {
+  for (const message of asList(messages)) {
     const meta = [phaseToText(message.phase), message.model, formatTime(message.ts)].filter(Boolean).join(' · ');
     sections.push(`## ${messageTitle(message)}${meta ? ` · ${meta}` : ''}`);
     const usage = usageMarkdown(message.usage);
     if (usage) sections.push(usage);
     if (Array.isArray(message.attachments) && message.attachments.length) {
-      sections.push(`> 附件：${message.attachments.map((a: any) => `${a.name}（${a.mime}）`).join('、')}`);
+      sections.push(`> 附件：${message.attachments.map((a) => `${a.name}（${a.mime}）`).join('、')}`);
     }
     if (message.text) sections.push(String(message.text));
     if (message.error) sections.push(`> 錯誤：${String(message.error).replace(/\n/g, '\n> ')}`);
