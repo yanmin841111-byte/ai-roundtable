@@ -89,15 +89,25 @@ async function init() {
   $('#ext-docs').onclick = () => window.api.ext.openDocs();
   $('#ext-editor-docs').onclick = () => window.api.ext.openDocs();
   $('#ext-picker-close').onclick = () => $('#ext-picker').classList.add('hidden');
-  document.querySelectorAll('.template-filters [data-filter]').forEach((button) => {
+  const extFilterButtons = [...document.querySelectorAll('.template-filters [data-filter]')];
+  extFilterButtons.forEach((button, index) => {
     button.onclick = () => {
       extTemplateFilter = button.dataset.filter;
-      document.querySelectorAll('.template-filters [data-filter]').forEach((item) => {
+      extFilterButtons.forEach((item) => {
         const active = item === button;
         item.classList.toggle('active', active);
-        item.setAttribute('aria-pressed', String(active));
+        item.setAttribute('aria-checked', String(active));
+        item.tabIndex = active ? 0 : -1;
       });
       renderExtTemplates();
+    };
+    button.onkeydown = (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? extFilterButtons.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + extFilterButtons.length) % extFilterButtons.length;
+      extFilterButtons[nextIndex].focus();
+      extFilterButtons[nextIndex].click();
     };
   });
   $('#ext-search').addEventListener('input', renderExtTemplates);

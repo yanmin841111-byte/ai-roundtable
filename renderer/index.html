@@ -234,10 +234,10 @@
       <div class="modal-body">
         <div class="hint" style="margin-bottom:10px">點選範本即可複製到擴充資料夾並打開編輯器。</div>
         <div class="template-toolbar">
-          <div class="template-filters" role="group" aria-label="範本類型">
-            <button type="button" data-filter="cli" aria-pressed="false">CLI</button>
-            <button type="button" data-filter="api" aria-pressed="false">API</button>
-            <button type="button" class="active" data-filter="all" aria-pressed="true">全部</button>
+          <div class="template-filters" role="radiogroup" aria-label="範本類型">
+            <button type="button" role="radio" data-filter="cli" aria-checked="false" tabindex="-1">CLI</button>
+            <button type="button" role="radio" data-filter="api" aria-checked="false" tabindex="-1">API</button>
+            <button type="button" role="radio" class="active" data-filter="all" aria-checked="true">全部</button>
           </div>
           <input id="ext-search" type="search" placeholder="搜尋名稱或說明" aria-label="搜尋範本">
         </div>
