@@ -35,7 +35,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p renderer/tsconfig.json",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "npm run build && electron-builder --mac",
-    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts"
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "e2e": "npm run build && node --import tsx test/e2e/run.ts"
   },
   "build": {
     "appId": "io.github.yanmin841111-byte.airoundtable",

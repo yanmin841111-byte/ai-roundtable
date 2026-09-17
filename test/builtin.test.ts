@@ -16,8 +16,10 @@ process.env.CODEX_HOME = path.join(tmp, 'codex');
 process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH || ''}`;
 
 const { builtinAdapters } = require('../src/adapters/builtin');
-const claude = builtinAdapters.find((a: any) => a.id === 'claude');
-const codex = builtinAdapters.find((a: any) => a.id === 'codex');
+// 測試只看 run 的回傳,欄位逐一斷言,型別用 any 即可
+type Runnable = { run(agent: any, ctx: any): Promise<any> };
+const claude: Runnable = builtinAdapters.find((a: any) => a.id === 'claude');
+const codex: Runnable = builtinAdapters.find((a: any) => a.id === 'codex');
 
 const tests: any[] = [];
 const t = (name: any, fn: any) => tests.push({ name, fn });
@@ -90,8 +92,8 @@ function makeCtx(extra: any = {}) {
   return { ctx, log };
 }
 
-function withEnv(env: any, fn: any) {
-  const prev: Record<string, any> = {};
+function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  const prev: Record<string, string | undefined> = {};
   for (const k of Object.keys(env)) { prev[k] = process.env[k]; process.env[k] = env[k]; }
   return Promise.resolve().then(fn).finally(() => {
     for (const k of Object.keys(env)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; }

@@ -30,6 +30,7 @@ npm test
 | `npm test` | 用 `tsx` 直接跑 `test/*.test.ts`,不需要先建置 |
 | `npm run build` | `tsc` 編譯主程序、esbuild 打包介面、複製靜態檔到 `dist/` |
 | `npm run smoke:dist` | 確認 `dist/` 的 CommonJS 輸出可以正常載入 |
+| `npm run e2e` | 建置後啟動真正的 Electron app,用假成員跑完整圓桌、附件、@ 指定與歷史紀錄(`test/e2e/`),不需要安裝任何 CLI |
 
 開發時好用的環境變數與參數:
 
@@ -43,7 +44,7 @@ npm test
 ## 送 pull request
 
 1. 從 `main` 開新分支,一個 PR 只處理一件事。
-2. 行為有改動就補測試,送出前跑 `npm run typecheck` 與 `npm test`,全部通過才送。
+2. 行為有改動就補測試,送出前跑 `npm run typecheck` 與 `npm test`,全部通過才送;動到流程或介面時再跑 `npm run e2e`。
 3. 介面有改動時附上截圖,淺色與深色主題都檢查一次。
 4. 使用者看得到的功能或設定有變,一併更新 `README.md`、`docs/` 與 `CHANGELOG.md` 的「未發布」段落。
 5. PR 說明寫清楚改了什麼、為什麼、怎麼驗證。

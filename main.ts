@@ -96,6 +96,15 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
+  // 端對端測試(npm run e2e):載入後在介面執行劇本,把結果印到 stdout,依結果決定結束代碼
+  const e2eScript = process.env.AI_ROUNDTABLE_E2E_SCRIPT;
+  if (e2eScript) win.webContents.once('did-finish-load', async () => {
+    let result: { ok?: boolean } | null = null;
+    try { result = await win.webContents.executeJavaScript(fs.readFileSync(e2eScript, 'utf8')); } catch (e) { result = { ok: false, ...{ error: e instanceof Error ? e.message : String(e) } }; }
+    console.log(`E2E_RESULT ${JSON.stringify(result)}`);
+    stopOrchestrator();
+    app.exit(result && result.ok ? 0 : 1);
+  });
   const shotFile = process.env.AI_ROUNDTABLE_SHOT;
   if (shotFile) win.webContents.once('did-finish-load', () => setTimeout(async () => {
     if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
