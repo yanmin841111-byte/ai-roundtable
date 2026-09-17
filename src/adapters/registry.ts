@@ -23,7 +23,15 @@ const kit = require('./kit');
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
 class Registry {
-  constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret } = {}) {
+  userDir: any;
+  templatesDir: any;
+  fetchImpl: any;
+  getSecret: any;
+  setSecret: any;
+  adapters: any;
+  entries: any;
+
+  constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret }: any = {}) {
     this.userDir = userDir;
     this.templatesDir = templatesDir;
     this.fetchImpl = fetchImpl;
@@ -36,16 +44,16 @@ class Registry {
 
   // ---------- 載入 ----------
   reload() {
-    this.adapters = new Map(builtinAdapters.map((a) => [a.id, { ...a, origin: 'builtin' }]));
+    this.adapters = new Map(builtinAdapters.map((a: any) => [a.id, { ...a, origin: 'builtin' }]));
     this.entries = [];
     if (!this.userDir) return this.summary();
     try { fs.mkdirSync(this.userDir, { recursive: true }); } catch {}
-    let files = [];
-    try { files = fs.readdirSync(this.userDir).filter((f) => FILE_PATTERN.test(f)).sort(); } catch {}
+    let files: any[] = [];
+    try { files = fs.readdirSync(this.userDir).filter((f: any) => FILE_PATTERN.test(f)).sort(); } catch {}
     const seen = new Map();
     for (const file of files) {
       const full = path.join(this.userDir, file);
-      const entry = { file, path: full };
+      const entry: any = { file, path: full };
       try {
         if (file.endsWith('.json')) {
           const migration = this.migrateLegacyApiKey(file);
@@ -61,7 +69,7 @@ class Registry {
         const builtin = this.adapters.get(adapter.id);
         if (builtin && builtin.origin === 'builtin') entry.overrides = true;
         this.adapters.set(adapter.id, { ...adapter, origin: 'user', file });
-      } catch (e) {
+      } catch (e: any) {
         entry.error = e.message;
       }
       this.entries.push(entry);
@@ -69,12 +77,12 @@ class Registry {
     return this.summary();
   }
 
-  loadFile(full) {
-    const errors = [];
-    let adapter;
+  loadFile(full: any) {
+    const errors: any[] = [];
+    let adapter: any;
     if (full.endsWith('.json')) {
-      let spec;
-      try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (e) { throw new Error(`JSON 格式錯誤:${e.message}`); }
+      let spec: any;
+      try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (e: any) { throw new Error(`JSON 格式錯誤:${e.message}`); }
       validateCommon(spec, errors);
       const type = spec && spec.type;
       if (type === 'cli') validateCliSpec(spec, errors);
@@ -110,21 +118,21 @@ class Registry {
         },
         refreshModels: typeof mod.refreshModels === 'function' ? () => mod.refreshModels(kit) : undefined,
         check: typeof mod.check === 'function' ? () => mod.check(kit) : mod.bin ? () => kit.checkCli(mod.bin) : undefined,
-        run: (agent, ctx) => mod.run(agent, ctx, kit),
+        run: (agent: any, ctx: any) => mod.run(agent, ctx, kit),
       };
     }
     return adapter;
   }
 
   summary() {
-    return { dir: this.userDir, entries: this.entries.map(({ path: _p, ...e }) => e), templates: this.templates() };
+    return { dir: this.userDir, entries: this.entries.map(({ path: _p, ...e }: any) => e), templates: this.templates() };
   }
 
-  get(id) { return this.adapters.get(id) || null; }
+  get(id: any) { return this.adapters.get(id) || null; }
 
   // 從磁碟重新讀一份獨立的轉接器實例，不動目前登錄的那份。
   // 測試連線要用剛儲存的設定，但不能清掉進行中對話的 session 記憶。
-  loadFresh(id) {
+  loadFresh(id: any) {
     const current = this.adapters.get(id);
     if (!current || current.origin !== 'user' || !current.file) return current || null;
     try { return this.loadFile(path.join(this.userDir, current.file)); } catch { return current; }
@@ -132,13 +140,13 @@ class Registry {
   list() { return [...this.adapters.values()]; }
 
   // ---------- 給介面用 ----------
-  async catalog({ refreshTimeoutMs = 6000 } = {}) {
-    const refreshes = this.list().filter((a) => a.refreshModels).map((a) => Promise.resolve().then(() => a.refreshModels()).catch(() => {}));
-    if (refreshes.length) await Promise.race([Promise.all(refreshes), new Promise((r) => setTimeout(r, refreshTimeoutMs))]);
-    const out = {};
+  async catalog({ refreshTimeoutMs = 6000 }: any = {}) {
+    const refreshes = this.list().filter((a: any) => a.refreshModels).map((a: any) => Promise.resolve().then(() => a.refreshModels()).catch(() => {}));
+    if (refreshes.length) await Promise.race([Promise.all(refreshes), new Promise((r: any) => setTimeout(r, refreshTimeoutMs))]);
+    const out: Record<string, any> = {};
     for (const a of this.list()) {
-      let models = { models: [], source: 'none' };
-      try { models = a.listModels ? a.listModels() : models; } catch (e) { models = { models: [], source: 'error', error: e.message }; }
+      let models: any = { models: [], source: 'none' };
+      try { models = a.listModels ? a.listModels() : models; } catch (e: any) { models = { models: [], source: 'error', error: e.message }; }
       out[a.id] = {
         id: a.id,
         label: a.label,
@@ -161,26 +169,26 @@ class Registry {
   }
 
   async checkAll() {
-    const results = await Promise.all(this.list().map(async (a) => {
+    const results = await Promise.all(this.list().map(async (a: any) => {
       if (!a.check) return [a.id, null];
-      try { return [a.id, await a.check()]; } catch (e) { return [a.id, { ok: false, error: e.message }]; }
+      try { return [a.id, await a.check()]; } catch (e: any) { return [a.id, { ok: false, error: e.message }]; }
     }));
-    return Object.fromEntries(results.filter(([, r]) => r));
+    return Object.fromEntries(results.filter(([, r]: any) => r));
   }
 
   // ---------- 範本與檔案管理 ----------
   templates() {
     if (!this.templatesDir) return [];
-    let files = [];
-    try { files = fs.readdirSync(this.templatesDir).filter((f) => FILE_PATTERN.test(f)).sort(); } catch { return []; }
-    return files.map((file) => {
+    let files: any[] = [];
+    try { files = fs.readdirSync(this.templatesDir).filter((f: any) => FILE_PATTERN.test(f)).sort(); } catch { return []; }
+    return files.map((file: any) => {
       const full = path.join(this.templatesDir, file);
-      let meta = {};
+      let meta: Record<string, any> = {};
       try {
         if (file.endsWith('.json')) meta = JSON.parse(fs.readFileSync(full, 'utf8'));
         else {
           const src = fs.readFileSync(full, 'utf8');
-          const pick = (k) => { const m = src.match(new RegExp(`\\b${k}:\\s*['"]([^'"]+)['"]`)); return m ? m[1] : undefined; };
+          const pick = (k: any) => { const m = src.match(new RegExp(`\\b${k}:\\s*['"]([^'"]+)['"]`)); return m ? m[1] : undefined; };
           meta = { id: pick('id'), label: pick('label'), description: pick('description'), type: 'js' };
         }
       } catch {}
@@ -188,12 +196,12 @@ class Registry {
     });
   }
 
-  safeUserPath(file) {
+  safeUserPath(file: any) {
     if (!FILE_PATTERN.test(file || '')) throw new Error('檔名只能包含英數字、. _ -,並以 .json 或 .js 結尾');
     return path.join(this.userDir, file);
   }
 
-  installTemplate(templateFile) {
+  installTemplate(templateFile: any) {
     if (!FILE_PATTERN.test(templateFile || '')) throw new Error('範本名稱不正確');
     const src = path.join(this.templatesDir, templateFile);
     const ext = path.extname(templateFile);
@@ -214,15 +222,15 @@ class Registry {
     return { file: name, summary: this.reload() };
   }
 
-  readFile(file) {
+  readFile(file: any) {
     return fs.readFileSync(this.safeUserPath(file), 'utf8');
   }
 
   // 舊版擴充把 API key 明文寫在 apiKey 欄位。先存進安全儲存，成功後才改寫檔案；
   // 任何一步失敗都保留原檔，避免 key 遺失。JSON 壞掉或沒有 apiKey 時什麼都不做。
-  migrateLegacyApiKey(file) {
+  migrateLegacyApiKey(file: any) {
     const full = this.safeUserPath(file);
-    let spec;
+    let spec: any;
     try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { return { migrated: false }; }
     if (!spec || typeof spec !== 'object' || Array.isArray(spec) || spec.apiKey == null) return { migrated: false };
     const legacyKey = typeof spec.apiKey === 'string' ? spec.apiKey.trim() : '';
@@ -236,27 +244,27 @@ class Registry {
       }
       delete spec.apiKey;
       fs.writeFileSync(full, JSON.stringify(spec, null, 2) + '\n');
-    } catch (e) {
+    } catch (e: any) {
       return { migrated: false, error: `偵測到舊版明文 API key，但${e.message}。請設定環境變數後移除檔案中的 apiKey` };
     }
     return { migrated: !!legacyKey };
   }
 
-  writeFile(file, content, { originalFile } = {}) {
+  writeFile(file: any, content: any, { originalFile }: any = {}) {
     const full = this.safeUserPath(file);
     if (file.endsWith('.json')) {
-      try { JSON.parse(content); } catch (e) { throw new Error(`JSON 格式錯誤,尚未儲存:${e.message}`); }
+      try { JSON.parse(content); } catch (e: any) { throw new Error(`JSON 格式錯誤,尚未儲存:${e.message}`); }
     }
     if (originalFile && originalFile !== file && fs.existsSync(full)) throw new Error(`已經有名為 ${file} 的擴充`);
     fs.mkdirSync(this.userDir, { recursive: true });
     fs.writeFileSync(full, content);
     if (originalFile && originalFile !== file) fs.rmSync(this.safeUserPath(originalFile), { force: true });
     const summary = this.reload();
-    const entry = summary.entries.find((e) => e.file === file);
+    const entry = summary.entries.find((e: any) => e.file === file);
     return { summary, error: entry ? entry.error || null : null };
   }
 
-  deleteFile(file) {
+  deleteFile(file: any) {
     fs.rmSync(this.safeUserPath(file), { force: true });
     return this.reload();
   }

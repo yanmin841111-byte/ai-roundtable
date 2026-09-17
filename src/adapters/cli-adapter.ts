@@ -12,7 +12,7 @@ const { normalizeModels, normalizeCapabilities } = require('./spec');
 
 const TEXT_MODES = ['append', 'replace', 'message'];
 
-function validateCliSpec(spec, errors) {
+function validateCliSpec(spec: any, errors: any) {
   if (typeof spec.bin !== 'string' || !spec.bin.trim()) errors.push('bin 必須是指令名稱或路徑');
   if (spec.args != null && !Array.isArray(spec.args)) errors.push('args 必須是陣列');
   if (spec.input != null && !['stdin', 'arg', 'file', 'none'].includes(spec.input)) errors.push('input 必須是 stdin、arg、file 或 none');
@@ -20,23 +20,23 @@ function validateCliSpec(spec, errors) {
   const out = spec.output || {};
   if (out.format != null && !['text', 'jsonl', 'json'].includes(out.format)) errors.push('output.format 必須是 text、jsonl 或 json');
   if (out.rules != null && !Array.isArray(out.rules)) errors.push('output.rules 必須是陣列');
-  (out.rules || []).forEach((r, i) => {
+  (out.rules || []).forEach((r: any, i: any) => {
     if (!r || typeof r !== 'object') { errors.push(`output.rules[${i}] 必須是物件`); return; }
     for (const key of ['mode', 'thinkingMode']) {
       if (r[key] != null && !TEXT_MODES.includes(r[key])) errors.push(`output.rules[${i}].${key} 必須是 ${TEXT_MODES.join('、')}`);
     }
   });
   if (out.sessionIdPattern != null) {
-    try { new RegExp(out.sessionIdPattern); } catch (e) { errors.push(`output.sessionIdPattern 不是有效的正規表示式:${e.message}`); }
+    try { new RegExp(out.sessionIdPattern); } catch (e: any) { errors.push(`output.sessionIdPattern 不是有效的正規表示式:${e.message}`); }
   }
   if (spec.env != null && (typeof spec.env !== 'object' || Array.isArray(spec.env))) errors.push('env 必須是物件');
 }
 
-function createCliAdapter(spec) {
+function createCliAdapter(spec: any) {
   const out = spec.output || {};
   const format = out.format || 'text';
   const rules = out.rules || [];
-  const hasSessionRule = rules.some((r) => r.sessionId) || !!out.sessionIdPattern;
+  const hasSessionRule = rules.some((r: any) => r.sessionId) || !!out.sessionIdPattern;
   const models = normalizeModels(spec.models);
 
   return {
@@ -52,11 +52,11 @@ function createCliAdapter(spec) {
     capabilities: normalizeCapabilities(spec.capabilities, ['filePath']),
     listModels: () => ({ models, source: models.length ? 'config' : 'none' }),
     check: () => (spec.versionArgs === false ? Promise.resolve({ ok: true, version: '(略過檢查)' }) : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'])),
-    run: (agent, ctx) => runCli(spec, { format, rules, models }, agent, ctx),
+    run: (agent: any, ctx: any) => runCli(spec, { format, rules, models }, agent, ctx),
   };
 }
 
-async function runCli(spec, { format, rules, models }, agent, ctx) {
+async function runCli(spec: any, { format, rules, models }: any, agent: any, ctx: any) {
   const out = spec.output || {};
   const input = spec.input || 'stdin';
   const systemMode = spec.systemPrompt || 'prepend';
@@ -86,13 +86,13 @@ async function runCli(spec, { format, rules, models }, agent, ctx) {
     agentName: agent.name || '',
   };
   const args = buildArgs(spec.args || [], vars);
-  const env = spec.env ? Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, render(v, vars)])) : null;
+  const env = spec.env ? Object.fromEntries(Object.entries(spec.env).map(([k, v]: any) => [k, render(v, vars)])) : null;
 
-  const state = { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: null, actSeq: 0 };
+  const state: any = { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: null, actSeq: 0 };
   let stdout = '';
   const stdoutLimit = 2 * 1024 * 1024;
 
-  const applyEvent = (ev) => {
+  const applyEvent = (ev: any) => {
     for (const rule of rules) {
       if (!matches(ev, rule.match)) continue;
       const items = rule.each ? getPath(ev, rule.each) : [ev];
@@ -100,7 +100,7 @@ async function runCli(spec, { format, rules, models }, agent, ctx) {
     }
   };
 
-  let res;
+  let res: any;
   try {
     res = await runProcess(spec.bin, args, {
       cwd: ctx.cwd,
@@ -110,8 +110,8 @@ async function runCli(spec, { format, rules, models }, agent, ctx) {
       timeoutMs: spec.timeoutMs || ctx.timeoutMs,
     }, {
       onProc: ctx.onProc,
-      onStderr: (d) => { if (out.sessionIdPattern) stdout += d; },
-      onLine: (line) => {
+      onStderr: (d: any) => { if (out.sessionIdPattern) stdout += d; },
+      onLine: (line: any) => {
         if (stdout.length < stdoutLimit) stdout += line + '\n';
         if (format === 'text') {
           state.text += (state.text ? '\n' : '') + line;
@@ -146,7 +146,7 @@ async function runCli(spec, { format, rules, models }, agent, ctx) {
   return { text: state.text, thinking: state.thinking, sessionId: state.sessionId, usage: state.usage, error };
 }
 
-function mergeText(current, piece, mode) {
+function mergeText(current: any, piece: any, mode: any) {
   if (piece == null || piece === '') return current;
   const s = typeof piece === 'string' ? piece : JSON.stringify(piece);
   if (mode === 'replace') return s;
@@ -154,7 +154,7 @@ function mergeText(current, piece, mode) {
   return current + s;
 }
 
-function applyRule(rule, item, event, state, ctx) {
+function applyRule(rule: any, item: any, event: any, state: any, ctx: any) {
   const scope = { ...item, $event: event };
   if (rule.text) {
     const next = mergeText(state.text, getPath(scope, rule.text), rule.mode || 'append');
@@ -179,7 +179,7 @@ function applyRule(rule, item, event, state, ctx) {
   if (rule.activity) {
     const a = rule.activity;
     const id = a.id ? render(a.id, scope) : `act-${++state.actSeq}`;
-    const activity = { id, kind: 'tool' };
+    const activity: any = { id, kind: 'tool' };
     for (const key of ['title', 'detail', 'result', 'status']) {
       if (a[key] != null) activity[key] = truncate(render(a[key], scope), key === 'title' ? 200 : 1500);
     }

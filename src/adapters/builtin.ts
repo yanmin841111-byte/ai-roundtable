@@ -7,12 +7,12 @@ const { listModels, resolveRunOptions } = require('../models');
 const { createCursorAdapter } = require('./cursor');
 
 // 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
-function reportRunNote(ctx, run) {
+function reportRunNote(ctx: any, run: any) {
   if (run.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: run.note, status: 'done' });
 }
 
 // ---------- Claude Code ----------
-async function runClaude(agent, ctx) {
+async function runClaude(agent: any, ctx: any) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
   const run = resolveRunOptions('claude', agent.model, agent.effort);
   if (run.model) args.push('--model', run.model);
@@ -26,14 +26,14 @@ async function runClaude(agent, ctx) {
   let text = '';
   let thinking = '';
   let sessionId = ctx.sessionId || null;
-  let resultText = null;
-  let usage = null;
-  let errorMsg = null;
-  const toolNames = {};
+  let resultText: any = null;
+  let usage: any = null;
+  let errorMsg: any = null;
+  const toolNames: Record<string, any> = {};
 
   const res = await runProcess('claude', args, { cwd: ctx.cwd, stdin: ctx.prompt, timeoutMs: ctx.timeoutMs }, {
     onProc: ctx.onProc,
-    onLine: (line) => {
+    onLine: (line: any) => {
       const ev = parseJson(line);
       if (!ev) return;
       if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
@@ -63,7 +63,7 @@ async function runClaude(agent, ctx) {
       if (ev.type === 'user' && ev.message && Array.isArray(ev.message.content)) {
         for (const block of ev.message.content) {
           if (block.type === 'tool_result') {
-            const content = Array.isArray(block.content) ? block.content.map((c) => c.text || '').join('\n') : (block.content || '');
+            const content = Array.isArray(block.content) ? block.content.map((c: any) => c.text || '').join('\n') : (block.content || '');
             ctx.onActivity({ id: block.tool_use_id, kind: 'tool', status: block.is_error ? 'error' : 'done', result: truncate(content, 1500) });
           }
         }
@@ -84,7 +84,7 @@ async function runClaude(agent, ctx) {
   return { text, thinking, sessionId, usage, error: errorMsg };
 }
 
-function describeClaudeTool(block) {
+function describeClaudeTool(block: any) {
   const i = block.input || {};
   switch (block.name) {
     case 'Bash': return `執行指令:${truncate(i.command, 120)}`;
@@ -98,7 +98,7 @@ function describeClaudeTool(block) {
 }
 
 // ---------- Codex CLI ----------
-async function runCodex(agent, ctx) {
+async function runCodex(agent: any, ctx: any) {
   const args = ['exec'];
   let prompt = ctx.prompt;
   if (ctx.sessionId) {
@@ -119,15 +119,15 @@ async function runCodex(agent, ctx) {
   const items = new Map(); // id -> item(含順序)
   let order = 0;
   let sessionId = ctx.sessionId || null;
-  let usage = null;
-  let errorMsg = null;
+  let usage: any = null;
+  let errorMsg: any = null;
 
-  const renderText = () => [...items.values()].filter((it) => it.type === 'agent_message').sort((a, b) => a._o - b._o).map((it) => it.text || '').join('\n\n');
-  const renderThinking = () => [...items.values()].filter((it) => it.type === 'reasoning').sort((a, b) => a._o - b._o).map((it) => it.text || '').join('\n\n');
+  const renderText = () => [...items.values()].filter((it: any) => it.type === 'agent_message').sort((a: any, b: any) => a._o - b._o).map((it: any) => it.text || '').join('\n\n');
+  const renderThinking = () => [...items.values()].filter((it: any) => it.type === 'reasoning').sort((a: any, b: any) => a._o - b._o).map((it: any) => it.text || '').join('\n\n');
 
   const res = await runProcess('codex', args, { cwd: ctx.cwd, stdin: prompt, timeoutMs: ctx.timeoutMs }, {
     onProc: ctx.onProc,
-    onLine: (line) => {
+    onLine: (line: any) => {
       const ev = parseJson(line);
       if (!ev) return;
       if (ev.type === 'thread.started' && ev.thread_id) {
@@ -145,7 +145,7 @@ async function runCodex(agent, ctx) {
         else if (it.type === 'command_execution') {
           ctx.onActivity({ id: it.id, kind: 'tool', title: `執行指令:${truncate(it.command, 120)}`, detail: it.command, status: ev.type === 'item.completed' ? (it.exit_code === 0 || it.exit_code == null ? 'done' : 'error') : 'running', result: truncate(it.aggregated_output, 1500) });
         } else if (it.type === 'file_change') {
-          const files = (it.changes || []).map((c) => `${c.kind || ''} ${c.path || ''}`).join('\n');
+          const files = (it.changes || []).map((c: any) => `${c.kind || ''} ${c.path || ''}`).join('\n');
           ctx.onActivity({ id: it.id, kind: 'tool', title: `修改檔案(${(it.changes || []).length})`, detail: files, status: ev.type === 'item.completed' ? 'done' : 'running' });
         } else if (it.type === 'mcp_tool_call' || it.type === 'web_search') {
           ctx.onActivity({ id: it.id, kind: 'tool', title: it.type === 'web_search' ? `搜尋網路:${truncate(it.query, 100)}` : `工具:${it.server || ''}/${it.tool || ''}`, detail: truncate(JSON.stringify(it.arguments || it, null, 1), 1200), status: ev.type === 'item.completed' ? 'done' : 'running' });
@@ -169,7 +169,7 @@ async function runCodex(agent, ctx) {
 
 // ---------- 自訂指令 ----------
 // 指令範本可用 {model}、{effort} 佔位;提示詞從 stdin 送入,stdout 視為純文字回覆。
-async function runCustom(agent, ctx) {
+async function runCustom(agent: any, ctx: any) {
   const cmd = (agent.customCommand || '').replace(/\{model\}/g, agent.model || '').replace(/\{effort\}/g, agent.effort || '');
   if (!cmd.trim()) return { text: '', sessionId: null, usage: null, error: '尚未設定自訂指令' };
   let prompt = ctx.prompt;
@@ -177,9 +177,9 @@ async function runCustom(agent, ctx) {
   let text = '';
   const res = await runProcess(cmd, [], { cwd: ctx.cwd, stdin: prompt, shell: true, timeoutMs: ctx.timeoutMs }, {
     onProc: ctx.onProc,
-    onLine: (line) => { text += (text ? '\n' : '') + line; ctx.onText(text); },
+    onLine: (line: any) => { text += (text ? '\n' : '') + line; ctx.onText(text); },
   });
-  let errorMsg = null;
+  let errorMsg: any = null;
   if (res.spawnError) errorMsg = `無法啟動指令:${res.stderr}`;
   else if (res.timedOut) errorMsg = res.error || `自訂指令執行逾時\n${truncate(res.stderr, 2000)}`;
   else if (res.code !== 0 && !text) errorMsg = `指令結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;

@@ -22,34 +22,37 @@
     "llm"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.6.0"
   },
-  "main": "main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
-    "dist": "electron-builder --mac",
-    "test": "node test/models.test.js && node test/adapters.test.js && node test/secrets.test.js && node test/orchestrator.test.js && node test/session-log.test.js && node test/attachments.test.js && node test/usage.test.js && node test/cursor.test.js"
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:node": "tsc -p tsconfig.build.json",
+    "build:renderer": "esbuild renderer/app.ts --bundle --format=iife --platform=browser --outfile=dist/renderer/app.js --sourcemap",
+    "build:static": "node -e \"const f=require('fs');f.mkdirSync('dist/renderer',{recursive:true});f.copyFileSync('renderer/index.html','dist/renderer/index.html');f.copyFileSync('renderer/style.css','dist/renderer/style.css');f.cpSync('adapters/templates','dist/adapters/templates',{recursive:true})\"",
+    "build": "npm run clean && npm run build:node && npm run build:renderer && npm run build:static",
+    "smoke:dist": "node -e \"const s=require('./dist/src/shared');const r=require('./dist/src/model-rules');require('./dist/src/orchestrator');if(!s.hasMarker||!r.resolveModelId)throw new Error('dist CommonJS exports incomplete');console.log('dist smoke passed')\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p renderer/tsconfig.json",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "npm run build && electron-builder --mac",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts"
   },
   "build": {
     "appId": "io.github.yanmin841111-byte.airoundtable",
     "productName": "AI Roundtable",
     "files": [
-      "main.js",
-      "preload.js",
-      "src/**",
-      "renderer/**",
-      "node_modules/marked/**",
-      "adapters/**"
+      "dist/**"
     ],
     "mac": {
       "target": "dmg",
       "category": "public.app-category.developer-tools"
     }
   },
-  "dependencies": {
-    "marked": "^15.0.0"
-  },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "esbuild": "^0.28.2",
+    "marked": "^15.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
   }
 }

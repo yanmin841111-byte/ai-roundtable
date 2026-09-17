@@ -12,8 +12,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-roundtable-secrets-'));
 const fakeSafeStorage = {
   available: true,
   isEncryptionAvailable() { return this.available; },
-  encryptString(value) { return Buffer.from(`encrypted:${[...value].reverse().join('')}`); },
-  decryptString(value) { return [...value.toString().replace(/^encrypted:/, '')].reverse().join(''); },
+  encryptString(value: any) { return Buffer.from(`encrypted:${[...value].reverse().join('')}`); },
+  decryptString(value: any) { return [...value.toString().replace(/^encrypted:/, '')].reverse().join(''); },
 };
 
 (async () => {
@@ -32,23 +32,23 @@ const fakeSafeStorage = {
   fakeSafeStorage.available = true;
   assert.throws(() => store.set('../bad', 'secret'), /secretRef/);
 
-  const errors = [];
+  const errors: any[] = [];
   validateCommon({ id: 'x', capabilities: { attachments: ['filePath', 'bad'], attachmentsNeedCwd: 'yes' } }, errors);
-  assert.ok(errors.some((e) => e.includes('只接受')));
-  assert.ok(errors.some((e) => e.includes('布林值')));
+  assert.ok(errors.some((e: any) => e.includes('只接受')));
+  assert.ok(errors.some((e: any) => e.includes('布林值')));
   assert.deepStrictEqual(normalizeCapabilities(null, ['filePath']), { attachments: ['filePath'], attachmentsNeedCwd: false });
 
-  const legacyErrors = [];
+  const legacyErrors: any[] = [];
   validateOpenAISpec({ baseUrl: 'https://example.com', apiKey: 'plain' }, legacyErrors);
-  assert.ok(legacyErrors.some((e) => e.includes('明文')));
+  assert.ok(legacyErrors.some((e: any) => e.includes('明文')));
 
   process.env.SECRET_FALLBACK = 'env-key';
-  const seen = [];
+  const seen: any[] = [];
   const adapter = createOpenAIAdapter({
     id: 'api', baseUrl: 'https://example.com/v1', secretRef: 'adapter:api', apiKeyEnv: 'SECRET_FALLBACK', models: ['m'],
   }, {
     getSecret: () => 'stored-key',
-    fetchImpl: async (_url, options) => {
+    fetchImpl: async (_url: any, options: any) => {
       seen.push(options.headers.Authorization);
       return { ok: true, text: async () => '', json: async () => ({ data: [] }) };
     },
@@ -70,12 +70,12 @@ const fakeSafeStorage = {
   // 端點拒收圖片時略過圖片改用純文字重送,記憶裡只留最近一則的影像
   const imagePath = path.join(dir, 'pic.png');
   fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-  const bodies = [];
-  const notes = [];
+  const bodies: any[] = [];
+  const notes: any[] = [];
   const visionless = createOpenAIAdapter({
     id: 'nov', baseUrl: 'https://example.com/v1', models: ['m'], stream: false, capabilities: { attachments: ['imageInline', 'textInline'] },
   }, {
-    fetchImpl: async (_url, options) => {
+    fetchImpl: async (_url: any, options: any) => {
       const body = JSON.parse(options.body);
       bodies.push(body);
       const last = body.messages[body.messages.length - 1];
@@ -83,19 +83,19 @@ const fakeSafeStorage = {
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '好' } }] }) };
     },
   });
-  const ctx = (sessionId) => ({
+  const ctx = (sessionId: any) => ({
     prompt: '看圖', sessionId, attachments: [{ kind: 'image', mime: 'image/png', path: imagePath }],
-    onProc: () => {}, onText: () => {}, onThinking: () => {}, onActivity: (a) => notes.push(a), onSession: () => {},
+    onProc: () => {}, onText: () => {}, onThinking: () => {}, onActivity: (a: any) => notes.push(a), onSession: () => {},
   });
   const first = await visionless.run({ model: 'm' }, ctx(null));
   assert.strictEqual(first.error, null);
   assert.strictEqual(first.text, '好');
   assert.strictEqual(bodies.length, 2, '被拒後重送一次');
   assert.strictEqual(typeof bodies[1].messages.at(-1).content, 'string');
-  assert.ok(notes.some((n) => n.id === 'image-fallback'));
+  assert.ok(notes.some((n: any) => n.id === 'image-fallback'));
 
   const { compactHistoryImages } = require('../src/adapters/openai-adapter');
-  const img = (t) => [{ type: 'text', text: t }, { type: 'image_url', image_url: { url: 'data:x' } }];
+  const img = (t: any) => [{ type: 'text', text: t }, { type: 'image_url', image_url: { url: 'data:x' } }];
   const compacted = compactHistoryImages([{ role: 'user', content: img('舊') }, { role: 'assistant', content: 'a' }, { role: 'user', content: img('新') }]);
   assert.ok(typeof compacted[0].content === 'string' && compacted[0].content.includes('舊') && compacted[0].content.includes('1 張圖片'));
   assert.ok(Array.isArray(compacted[2].content), '最近一則帶圖訊息保留影像');
@@ -122,7 +122,7 @@ const fakeSafeStorage = {
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('ok - secrets 安全儲存、key 優先序與 capabilities 驗證');
-})().catch((error) => {
+})().catch((error: any) => {
   console.error(error);
   process.exitCode = 1;
 });

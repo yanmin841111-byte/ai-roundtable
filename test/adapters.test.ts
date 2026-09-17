@@ -13,23 +13,23 @@ const { buildArgs, render, matches, renderDeep } = require('../src/adapters/temp
 const adapters = require('../src/adapters');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-roundtable-adapters-'));
-const tests = [];
-const t = (name, fn) => tests.push({ name, fn });
+const tests: any[] = [];
+const t = (name: any, fn: any) => tests.push({ name, fn });
 
 // 收集回呼的 ctx
-function makeCtx(extra = {}) {
-  const log = { texts: [], thinking: [], activities: [], sessions: [], procs: [] };
+function makeCtx(extra: any = {}) {
+  const log: any = { texts: [], thinking: [], activities: [], sessions: [], procs: [] };
   const ctx = {
     prompt: 'hello',
     systemPrompt: 'SYS',
     sessionId: null,
     cwd: tmp,
     timeoutMs: 15000,
-    onText: (x) => log.texts.push(x),
-    onThinking: (x) => log.thinking.push(x),
-    onActivity: (a) => log.activities.push(a),
-    onSession: (id) => log.sessions.push(id),
-    onProc: (p) => log.procs.push(p),
+    onText: (x: any) => log.texts.push(x),
+    onThinking: (x: any) => log.thinking.push(x),
+    onActivity: (a: any) => log.activities.push(a),
+    onSession: (id: any) => log.sessions.push(id),
+    onProc: (p: any) => log.procs.push(p),
     ...extra,
   };
   return { ctx, log };
@@ -62,7 +62,7 @@ process.stdin.on('end', () => {
 });
 `);
 
-function cliSpec(overrides = {}) {
+function cliSpec(overrides: any = {}) {
   return {
     id: 'fake',
     type: 'cli',
@@ -115,25 +115,25 @@ t('CLI jsonl:文字累加、訊息分段、思考、工具、usage、session、�
   assert.strictEqual(r.thinking, 'hmm');
   assert.strictEqual(r.sessionId, 'sess-1');
   assert.deepStrictEqual(r.usage, { input_tokens: 5, output_tokens: 7 });
-  assert.deepStrictEqual(log.activities.map((a) => a.title), ['工具:Read', '工具:Bash']);
+  assert.deepStrictEqual(log.activities.map((a: any) => a.title), ['工具:Read', '工具:Bash']);
   assert.strictEqual(adapter.supportsResume, true);
   // 別名轉完整名稱、首回合 system prompt 前置到 stdin、canEdit 參數
   assert.ok(log.texts.length >= 3);
 });
 
 t('CLI:參數實際送達(別名、強度、續接、唯讀),續接時不再前置 system prompt', async () => {
-  let echo;
+  let echo: any;
   const spec = cliSpec();
   spec.output.rules.push({ match: { type: 'echo' }, text: '$event', mode: 'replace' });
   const adapter = createCliAdapter(spec);
-  const { ctx } = makeCtx({ sessionId: 'prev', onText: (x) => { if (!echo && x.startsWith('{')) echo = JSON.parse(x); } });
+  const { ctx } = makeCtx({ sessionId: 'prev', onText: (x: any) => { if (!echo && x.startsWith('{')) echo = JSON.parse(x); } });
   await adapter.run({ model: 'm', effort: 'ultra', canEdit: false }, ctx);
   assert.deepStrictEqual(echo.args, ['-m', 'm-1', '--effort', 'high', '--resume', 'prev', '--read-only']);
   assert.strictEqual(echo.stdin, 'hello');
 });
 
 t('CLI input=arg / file,systemPrompt=arg,env 範本', async () => {
-  let echo;
+  let echo: any;
   const spec = cliSpec({
     input: 'file',
     systemPrompt: 'arg',
@@ -142,14 +142,14 @@ t('CLI input=arg / file,systemPrompt=arg,env 範本', async () => {
   });
   spec.output.rules.push({ match: { type: 'echo' }, text: '$event', mode: 'replace' });
   const adapter = createCliAdapter(spec);
-  const { ctx } = makeCtx({ onText: (x) => { if (!echo && x.startsWith('{')) echo = JSON.parse(x); } });
+  const { ctx } = makeCtx({ onText: (x: any) => { if (!echo && x.startsWith('{')) echo = JSON.parse(x); } });
   await adapter.run({ model: 'm-1' }, ctx);
   assert.strictEqual(echo.fromFile, 'hello');
   assert.strictEqual(echo.stdin, '');
   assert.ok(echo.args.includes('--system') && echo.args.includes('SYS'));
   assert.strictEqual(echo.env, 'model=m-1');
   const promptFile = echo.args[echo.args.indexOf('--prompt-file') + 1];
-  await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r: any) => setTimeout(r, 100));
   assert.ok(!fs.existsSync(promptFile), '暫存提示詞檔應該被刪除');
 });
 
@@ -174,17 +174,17 @@ t('CLI format=text、json、sessionIdPattern(stderr)、非零結束代碼', asyn
 });
 
 t('validateCliSpec:回報錯誤欄位', () => {
-  const errors = [];
+  const errors: any[] = [];
   validateCliSpec({ bin: '', input: 'pipe', output: { format: 'xml', rules: [{ mode: 'bad' }], sessionIdPattern: '(' } }, errors);
   assert.strictEqual(errors.length, 5, errors.join('\n'));
 });
 
 // ---------- OpenAI 相容 API ----------
-function startMockApi() {
-  const requests = [];
-  const server = http.createServer((req, res) => {
+function startMockApi(): Promise<any> {
+  const requests: any[] = [];
+  const server = http.createServer((req: any, res: any) => {
     let body = '';
-    req.on('data', (d) => (body += d));
+    req.on('data', (d: any) => (body += d));
     req.on('end', () => {
       const json = body ? JSON.parse(body) : null;
       requests.push({ url: req.url, auth: req.headers.authorization, extra: req.headers['x-extra'], body: json });
@@ -202,7 +202,7 @@ function startMockApi() {
         return; // 不結束,測試停止
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      const send = (o) => res.write('data: ' + JSON.stringify(o) + '\n\n');
+      const send = (o: any) => res.write('data: ' + JSON.stringify(o) + '\n\n');
       send({ choices: [{ delta: { reasoning_content: 'think ' } }] });
       send({ choices: [{ delta: { reasoning_content: 'more' } }] });
       send({ choices: [{ delta: { content: 'Hi ' } }] });
@@ -211,7 +211,7 @@ function startMockApi() {
       res.end('data: [DONE]\n\n');
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, requests, base: `http://127.0.0.1:${server.address().port}/v1` })));
+  return new Promise((resolve: any) => server.listen(0, '127.0.0.1', () => resolve({ server, requests, base: `http://127.0.0.1:${server.address().port}/v1` })));
 }
 
 t('API:串流文字與思考、usage、金鑰、額外 header 與 body、強度參數、續接歷史', async () => {
@@ -241,12 +241,12 @@ t('API:串流文字與思考、usage、金鑰、額外 header 與 body、強度�
     assert.deepStrictEqual(q1.body.thinking, { type: 'enabled' });
     assert.strictEqual(q1.body.tag, 'for mock-pro');
     assert.deepStrictEqual(q1.body.messages, [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'hello' }]);
-    assert.ok(log.activities.some((a) => a.kind === 'note'));
+    assert.ok(log.activities.some((a: any) => a.kind === 'note'));
 
     const r2 = await adapter.run({ model: 'mock-pro' }, makeCtx({ prompt: 'again', sessionId: r1.sessionId }).ctx);
     assert.strictEqual(r2.sessionId, r1.sessionId);
     const q2 = requests.at(-1);
-    assert.deepStrictEqual(q2.body.messages.map((m) => m.role + ':' + m.content), ['system:SYS', 'user:hello', 'assistant:Hi there', 'user:again']);
+    assert.deepStrictEqual(q2.body.messages.map((m: any) => m.role + ':' + m.content), ['system:SYS', 'user:hello', 'assistant:Hi there', 'user:again']);
     assert.ok(!('reasoning_effort' in q2.body));
   } finally {
     server.close();
@@ -260,7 +260,7 @@ t('API:自動模型清單與篩選、HTTP 錯誤、缺少金鑰、停止', async
     const adapter = createOpenAIAdapter({ id: 'mock', type: 'openai', baseUrl: base, models: 'auto', modelFilter: 'chat$' });
     assert.strictEqual(adapter.listModels().source, 'loading');
     await adapter.refreshModels();
-    assert.deepStrictEqual(adapter.listModels().models.map((m) => m.id), ['alpha-chat', 'zeta-chat']);
+    assert.deepStrictEqual(adapter.listModels().models.map((m: any) => m.id), ['alpha-chat', 'zeta-chat']);
 
     const bad = await adapter.run({ model: 'bad' }, makeCtx().ctx);
     assert.ok(/HTTP 401/.test(bad.error) && /invalid key/.test(bad.error), bad.error);
@@ -272,7 +272,7 @@ t('API:自動模型清單與篩選、HTTP 錯誤、缺少金鑰、停止', async
 
     const { ctx, log } = makeCtx();
     const pending = adapter.run({ model: 'slow' }, ctx);
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r: any) => setTimeout(r, 300));
     log.procs[0].kill();
     const stopped = await pending;
     assert.strictEqual(stopped.text, 'partial');
@@ -296,7 +296,7 @@ t('Registry:載入 JSON 與 JS、回報錯誤、重複 id、覆寫內建、重�
   fs.writeFileSync(path.join(dir, 'ignored.txt'), 'x');
 
   const reg = new Registry({ userDir: dir, templatesDir: path.join(__dirname, '..', 'adapters', 'templates') });
-  const byFile = Object.fromEntries(reg.summary().entries.map((e) => [e.file, e]));
+  const byFile = Object.fromEntries(reg.summary().entries.map((e: any) => [e.file, e]));
   assert.ok(!byFile['good.json'].error);
   assert.ok(/JSON 格式錯誤/.test(byFile['broken.json'].error));
   assert.ok(/type 必須是/.test(byFile['badtype.json'].error));
@@ -306,7 +306,7 @@ t('Registry:載入 JSON 與 JS、回報錯誤、重複 id、覆寫內建、重�
   assert.ok(/run/.test(byFile['noRun.js'].error));
   assert.ok(!('ignored.txt' in byFile));
   assert.strictEqual(reg.get('plug').type, 'js');
-  assert.deepStrictEqual(reg.get('plug').listModels().models.map((m) => m.id), ['p1']);
+  assert.deepStrictEqual(reg.get('plug').listModels().models.map((m: any) => m.id), ['p1']);
 
   fs.writeFileSync(path.join(dir, 'plugin.js'), "module.exports = { id: 'plug', label: 'Plug v2', run: async () => ({}) };");
   reg.reload();
@@ -323,7 +323,7 @@ t('Registry:所有內建範本都能載入', () => {
   const templates = reg.templates();
   assert.ok(templates.length >= 5);
   for (const tpl of templates) reg.installTemplate(tpl.file);
-  const errors = reg.summary().entries.filter((e) => e.error);
+  const errors = reg.summary().entries.filter((e: any) => e.error);
   assert.deepStrictEqual(errors, []);
   assert.strictEqual(reg.summary().entries.length, templates.length);
 });
@@ -358,7 +358,7 @@ t('Registry:載入時把舊版明文 apiKey 移到安全儲存，失敗時保留
 
   // 安全儲存不可用:檔案原封不動，key 不能不見
   const failing = new Registry({ userDir: dir, setSecret: () => { throw new Error('系統安全儲存目前不可用'); } });
-  const failedEntry = failing.entries.find((e) => e.file === 'legacy.json');
+  const failedEntry = failing.entries.find((e: any) => e.file === 'legacy.json');
   assert.ok(/舊版明文 API key/.test(failedEntry.error));
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'legacy.json'), 'utf8')).apiKey, 'sk-legacy');
   assert.deepStrictEqual(failing.migrateLegacyApiKey('broken.json'), { migrated: false });
@@ -366,14 +366,14 @@ t('Registry:載入時把舊版明文 apiKey 移到安全儲存，失敗時保留
   // 空白 apiKey 不需要安全儲存，直接移除即可載入
   assert.ok(failing.get('blank'));
 
-  const stored = {};
-  const reg = new Registry({ userDir: dir, setSecret: (ref, value) => { stored[ref] = value; }, getSecret: (ref) => stored[ref] });
+  const stored: Record<string, any> = {};
+  const reg = new Registry({ userDir: dir, setSecret: (ref: any, value: any) => { stored[ref] = value; }, getSecret: (ref: any) => stored[ref] });
   assert.strictEqual(stored['adapter:legacy'], 'sk-legacy');
   const migrated = JSON.parse(fs.readFileSync(path.join(dir, 'legacy.json'), 'utf8'));
   assert.strictEqual(migrated.apiKey, undefined);
   assert.strictEqual(migrated.secretRef, 'adapter:legacy');
   assert.ok(reg.get('legacy'));
-  assert.ok(/JSON 格式錯誤/.test(reg.entries.find((e) => e.file === 'broken.json').error));
+  assert.ok(/JSON 格式錯誤/.test(reg.entries.find((e: any) => e.file === 'broken.json').error));
   assert.strictEqual(reg.readFile('broken.json'), '{bad');
 });
 
@@ -406,7 +406,7 @@ t('runTurn:找不到 CLI、外掛丟例外、API 成員不能改檔案', async (
       await fn();
       passed++;
       console.log('ok -', name);
-    } catch (e) {
+    } catch (e: any) {
       console.log('FAIL -', name);
       console.log(e);
       process.exitCode = 1;

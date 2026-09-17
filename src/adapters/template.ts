@@ -2,7 +2,7 @@
 // 擴充設定檔用的小工具:取值路徑、字串範本、條件參數、事件比對。
 
 // 以點號路徑取值,例如 "delta.text"、"tool_calls.0.function.name"。空路徑回傳物件本身。
-function getPath(obj, path) {
+function getPath(obj: any, path: any) {
   if (path == null || path === '' || path === '.') return obj;
   let cur = obj;
   for (const key of String(path).split('.')) {
@@ -14,26 +14,26 @@ function getPath(obj, path) {
 
 const PLACEHOLDER = /\{\{|\}\}|\{([^{}]+)\}/g;
 
-function isEmpty(v) {
+function isEmpty(v: any) {
   return v === undefined || v === null || v === '' || v === false;
 }
 
-function stringify(v) {
+function stringify(v: any) {
   if (v === undefined || v === null) return '';
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
 
 // 找出字串中的佔位名稱(不含 {{ }} 跳脫)
-function placeholders(str) {
-  const names = [];
-  String(str).replace(PLACEHOLDER, (m, name) => { if (name) names.push(name.trim()); return m; });
+function placeholders(str: any) {
+  const names: any[] = [];
+  String(str).replace(PLACEHOLDER, (m: any, name: any) => { if (name) names.push(name.trim()); return m; });
   return names;
 }
 
 // "{model}" → vars.model;"{{" 與 "}}" 輸出成單一大括號。
-function render(str, vars) {
-  return String(str).replace(PLACEHOLDER, (m, name) => {
+function render(str: any, vars: any) {
+  return String(str).replace(PLACEHOLDER, (m: any, name: any) => {
     if (m === '{{') return '{';
     if (m === '}}') return '}';
     return stringify(getPath(vars, name.trim()));
@@ -41,8 +41,8 @@ function render(str, vars) {
 }
 
 // 條件:"name" 為真、"!name" 為假、"name=value" 相等、"name!=value" 不相等;陣列表示全部成立。
-function evalCondition(cond, vars) {
-  if (Array.isArray(cond)) return cond.every((c) => evalCondition(c, vars));
+function evalCondition(cond: any, vars: any): any {
+  if (Array.isArray(cond)) return cond.every((c: any) => evalCondition(c, vars));
   const s = String(cond).trim();
   let m = s.match(/^([^!=]+)!=(.*)$/);
   if (m) return stringify(getPath(vars, m[1].trim())) !== m[2].trim();
@@ -56,17 +56,17 @@ function evalCondition(cond, vars) {
 //   "字串"                      含佔位時,任一佔位為空就略過這個參數
 //   ["-m", "{model}"]           參數群組,任一佔位為空就整組略過
 //   { "if": "cond", "then": [...], "else": [...] }  依條件選擇
-function buildArgs(spec, vars) {
-  const out = [];
+function buildArgs(spec: any, vars: any) {
+  const out: any[] = [];
   for (const item of spec || []) {
     if (typeof item === 'string' || typeof item === 'number') {
       const s = String(item);
-      if (placeholders(s).some((n) => isEmpty(getPath(vars, n)))) continue;
+      if (placeholders(s).some((n: any) => isEmpty(getPath(vars, n)))) continue;
       out.push(render(s, vars));
     } else if (Array.isArray(item)) {
       const strings = item.map(String);
-      if (strings.some((s) => placeholders(s).some((n) => isEmpty(getPath(vars, n))))) continue;
-      out.push(...strings.map((s) => render(s, vars)));
+      if (strings.some((s: any) => placeholders(s).some((n: any) => isEmpty(getPath(vars, n))))) continue;
+      out.push(...strings.map((s: any) => render(s, vars)));
     } else if (item && typeof item === 'object' && 'if' in item) {
       out.push(...buildArgs(evalCondition(item.if, vars) ? item.then : item.else, vars));
     }
@@ -75,15 +75,15 @@ function buildArgs(spec, vars) {
 }
 
 // 深層套用範本:物件與陣列中的字串都會 render;整個字串剛好是單一佔位時保留原始型別。
-function renderDeep(value, vars) {
+function renderDeep(value: any, vars: any): any {
   if (typeof value === 'string') {
     const only = value.match(/^\{([^{}]+)\}$/);
     if (only) return getPath(vars, only[1].trim());
     return render(value, vars);
   }
-  if (Array.isArray(value)) return value.map((v) => renderDeep(v, vars));
+  if (Array.isArray(value)) return value.map((v: any): any => renderDeep(v, vars));
   if (value && typeof value === 'object') {
-    const out = {};
+    const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(value)) out[k] = renderDeep(v, vars);
     return out;
   }
@@ -95,18 +95,19 @@ function renderDeep(value, vars) {
 //   [a, b]               其中之一
 //   { "$exists": true }  存在與否
 //   { "$startsWith": "item." } / { "$regex": "^a" } / { "$ne": x } / { "$in": [...] }
-function matches(event, match) {
+function matches(event: any, match: any) {
   if (!match) return true;
   for (const [path, expected] of Object.entries(match)) {
     const v = getPath(event, path);
     if (Array.isArray(expected)) {
       if (!expected.includes(v)) return false;
     } else if (expected && typeof expected === 'object') {
-      if ('$exists' in expected && (v !== undefined) !== !!expected.$exists) return false;
-      if ('$startsWith' in expected && !(typeof v === 'string' && v.startsWith(expected.$startsWith))) return false;
-      if ('$regex' in expected && !(typeof v === 'string' && new RegExp(expected.$regex).test(v))) return false;
-      if ('$ne' in expected && v === expected.$ne) return false;
-      if ('$in' in expected && !(Array.isArray(expected.$in) && expected.$in.includes(v))) return false;
+      const rule: any = expected;
+      if ('$exists' in rule && (v !== undefined) !== !!rule.$exists) return false;
+      if ('$startsWith' in rule && !(typeof v === 'string' && v.startsWith(String(rule.$startsWith)))) return false;
+      if ('$regex' in rule && !(typeof v === 'string' && new RegExp(String(rule.$regex)).test(v))) return false;
+      if ('$ne' in rule && v === rule.$ne) return false;
+      if ('$in' in rule && !(Array.isArray(rule.$in) && rule.$in.includes(v))) return false;
     } else if (v !== expected) {
       return false;
     }

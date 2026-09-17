@@ -7,7 +7,7 @@ const { writeSession, listSessions, readSession, deleteSession, messagesToMarkdo
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-roundtable-sessions-'));
 let n = 0;
-const t = (name, fn) => { fn(); n++; console.log('ok -', name); };
+const t = (name: any, fn: any) => { fn(); n++; console.log('ok -', name); };
 
 t('原子寫入產生 envelope 且沒有留下暫存檔', () => {
   const messages = [{ id: '1', kind: 'user', ts: 1, text: '測試任務' }];
@@ -18,7 +18,7 @@ t('原子寫入產生 envelope 且沒有留下暫存檔', () => {
   assert.strictEqual(saved.title, '測試任務');
   assert.deepStrictEqual(saved.messages, messages);
   assert.ok(saved.createdAt, 'createdAt 必填');
-  assert.strictEqual(fs.readdirSync(path.dirname(result.file)).some((name) => name.endsWith('.tmp')), false);
+  assert.strictEqual(fs.readdirSync(path.dirname(result.file)).some((name: any) => name.endsWith('.tmp')), false);
 });
 
 t('envelope 的 title / agents / createdAt 從訊息推導', () => {
@@ -50,8 +50,8 @@ t('空訊息也能寫入,標題降級為「(無標題)」', () => {
 t('寫入失敗時回傳錯誤且不拋出', () => {
   const blocked = path.join(base, 'not-a-directory');
   fs.writeFileSync(blocked, 'file');
-  const errors = [];
-  const result = writeSession(blocked, [{ text: 'x' }], { logger: { error: (message) => errors.push(message) } });
+  const errors: any[] = [];
+  const result = writeSession(blocked, [{ text: 'x' }], { logger: { error: (message: any) => errors.push(message) } });
   assert.strictEqual(result.ok, false);
   assert.ok(result.error);
   assert.strictEqual(errors.length, 1);
@@ -167,7 +167,7 @@ function makeStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-list-'));
   const sdir = path.join(dir, 'sessions');
   fs.mkdirSync(sdir, { recursive: true });
-  const write = (name, content, mtime) => {
+  const write = (name: any, content: any, mtime: any) => {
     const full = path.join(sdir, name);
     fs.writeFileSync(full, typeof content === 'string' ? content : JSON.stringify(content));
     fs.utimesSync(full, mtime, mtime);
@@ -191,13 +191,13 @@ t('listSessions 依時間倒序,只收 .json', () => {
   const dir = makeStore();
   const { sessions, error } = listSessions(dir);
   assert.strictEqual(error, undefined);
-  assert.deepStrictEqual(sessions.map((s) => s.id), ['new.json', 'broken.json', 'old.json']);
+  assert.deepStrictEqual(sessions.map((s: any) => s.id), ['new.json', 'broken.json', 'old.json']);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 t('listSessions 對舊的純陣列格式動態推導 title / createdAt / agents', () => {
   const dir = makeStore();
-  const old = listSessions(dir).sessions.find((s) => s.id === 'old.json');
+  const old = listSessions(dir).sessions.find((s: any) => s.id === 'old.json');
   assert.strictEqual(old.title, '舊格式任務');
   assert.deepStrictEqual(old.agents, ['Codex']);
   assert.strictEqual(old.createdAt, new Date(Date.UTC(2026, 0, 1)).toISOString());
@@ -211,7 +211,7 @@ t('listSessions 對舊的純陣列格式動態推導 title / createdAt / agents'
 t('壞掉的檔案只讓該筆降級,不讓整份清單失效', () => {
   const dir = makeStore();
   const { sessions } = listSessions(dir);
-  const bad = sessions.find((s) => s.id === 'broken.json');
+  const bad = sessions.find((s: any) => s.id === 'broken.json');
   assert.strictEqual(bad.title, '(無法讀取)');
   assert.ok(bad.error, '該筆要帶錯誤訊息');
   assert.strictEqual(sessions.length, 3, '其餘紀錄仍然列得出來');

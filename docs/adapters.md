@@ -61,7 +61,7 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 
 ## 用量正規化
 
-各家 CLI / API 回報的用量欄位名稱與語意都不一樣,`src/usage.js` 會在 `runTurn` 出口統一成同一種形狀,介面與匯出才能安全地跨成員加總:
+各家 CLI / API 回報的用量欄位名稱與語意都不一樣,`src/usage.ts` 會在 `runTurn` 出口統一成同一種形狀,介面與匯出才能安全地跨成員加總:
 
 | 正規化欄位 | 意義 |
 | --- | --- |
@@ -233,17 +233,19 @@ module.exports = {
   bin: 'my-agent',          // 有寫就會自動檢查是否安裝
   supportsResume: false,
   supportsEdit: true,
+  // 附件能力,格式同 JSON;不寫時依 supportsEdit 判斷(可改檔案 → filePath + textInline,否則 textInline)
+  capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
   models: ['a', 'b'],       // 或 listModels(kit) / refreshModels(kit)
   async run(agent, ctx, kit) {
     // agent:model、effort、canEdit、name…
-    // ctx:prompt、systemPrompt、sessionId、cwd、timeoutMs
+    // ctx:prompt、systemPrompt、sessionId、cwd、timeoutMs、attachments(附件 metadata 與可讀路徑)
     //      onText(全文)、onThinking(全文)、onActivity(動作)、onSession(id)、onProc(可停止的行程)
     return { text: '回覆', thinking: '', sessionId: null, usage: null, error: null };
   },
 };
 ```
 
-也可以匯出 `(kit) => ({ ... })`。`kit` 提供 `runProcess`、`buildArgs`、`render`、`getPath`、`matches`、`truncate`、`createStopHandle`、`resolveEffort` 等工具,定義在 [src/adapters/kit.js](../src/adapters/kit.js)。
+也可以匯出 `(kit) => ({ ... })`。`kit` 提供 `runProcess`、`buildArgs`、`render`、`getPath`、`matches`、`truncate`、`createStopHandle`、`resolveEffort` 等工具,定義在 [src/adapters/kit.ts](../src/adapters/kit.ts)。
 
 長時間的工作請把行程或 `kit.createStopHandle(() => abort())` 傳給 `ctx.onProc`,使用者按「停止」時才停得下來。
 
@@ -251,7 +253,7 @@ module.exports = {
 
 - 擴充會以你的帳號權限執行指令。JS 外掛在 app 主程序中執行,擁有完整的 Node.js 權限。只安裝你看得懂、信任的擴充。
 - CLI 擴充在成員開啟「允許修改檔案」時,通常會帶上自動核准的參數,例如 `--yolo` 或 `--always-approve`。
-- API key 建議用環境變數,不要寫進擴充檔。
+- API key 請在擴充編輯器的 API key 欄位填入(加密儲存),或使用環境變數,不要寫進擴充檔。擴充檔裡的明文 `apiKey` 欄位已停用,載入時會自動搬到安全儲存;無法搬移時該擴充會載入失敗並顯示原因。
 
 ## 分享擴充
 

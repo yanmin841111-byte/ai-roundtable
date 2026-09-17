@@ -14,9 +14,11 @@
 - **討論 → 分工 → 平行執行 → 交叉審查 → 總結**,全程即時串流顯示,包含工具呼叫與思考過程。
 - **隨時插話**:進行中送出的訊息會在下一位成員發言時帶入。
 - **@ 指定成員**:輸入 `@名稱` 只讓指定的成員回覆或動手,不跑整套討論流程;同時指定多位時平行處理。
-- **繼續歷史對話**:從左側「歷史對話」打開任一筆紀錄,按「繼續這段對話」即可接著討論。
+- **附件**:拖放或點 📎 附加圖片、文字檔或 PDF,依各成員的能力給檔案路徑或內嵌內容。
+- **歷史對話**:每次任務結束自動保存,可以預覽、匯出成 Markdown,或按「繼續這段對話」接著討論。
 - **平行發言並排**:執行、審查等平行階段的成員訊息每列並排三張。
-- **直接用你現有的 CLI 訂閱**,不需要另外申請 API key。
+- **用量統計**:跨 CLI 與 API 統一計算輸入、快取、輸出 token 與成本。
+- **直接用你現有的 CLI 訂閱**,不需要另外申請 API key;API 類成員的 key 用作業系統安全儲存加密保存。
 
 ## 需求
 
@@ -26,7 +28,7 @@
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 、[Codex CLI](https://github.com/openai/codex) 或 [Cursor CLI](https://cursor.com/cli)(`cursor-agent`),安裝並登入即可直接使用
   - 或其他 CLI / API,透過擴充接入
 
-## 啟動
+## 快速開始
 
 ```bash
 git clone https://github.com/yanmin841111-byte/ai-roundtable.git
@@ -82,7 +84,7 @@ npm run dist
 | 範本 | 類型 | 需要 |
 | --- | --- | --- |
 | Grok CLI、Kimi Code CLI、Gemini CLI | CLI | 安裝對應 CLI |
-| DeepSeek、Kimi(Moonshot)、Grok(xAI)、OpenRouter | API | 設定 API key 環境變數 |
+| DeepSeek、Kimi(Moonshot)、Grok(xAI)、OpenRouter | API | API key(在擴充編輯器填入,或設定環境變數) |
 | Ollama | API | 本機執行 Ollama |
 | 空白 CLI、空白 API、Aider JS 外掛 | 自訂 | 自己填 |
 
@@ -94,7 +96,7 @@ npm run dist
 
 ## 模型清單
 
-模型清單邏輯在 `src/models.js`,別名與強度規則在 `src/model-rules.js`(主程序與介面共用)。
+模型清單邏輯在 `src/models.ts`,別名與強度規則在 `src/model-rules.ts`(主程序與介面共用)。
 
 - Claude Code:`~/.claude/cache/model-catalog/*.json`,取 `section` 為 `main` 的模型;多個檔案時由新到舊找第一個有效的。
 - Codex:`~/.codex/models_cache.json`,排除 `visibility` 非 `list` 與有 `upgrade`(已退役)的模型。
@@ -102,11 +104,20 @@ npm run dist
 - 讀取結果依檔案修改時間快取,檔案沒變不重讀;每次打開成員編輯視窗都會重抓,CLI 更新快取後不用重開 app。
 - 讀不到快取時使用內建清單,編輯視窗會標示。
 
-執行 `npm test` 可跑模型清單與擴充系統的測試。
+## 附件
+
+在輸入框拖放檔案或點 📎,支援 png / jpg / webp / gif / txt / md / json / csv / log / pdf。預設一次最多 10 個檔案、單檔 20 MB、合計 50 MB,驗證在主程序進行(副檔名與檔案內容都會檢查)。
+
+附件存在 app 的資料夾,不會寫進工作目錄。依成員能力決定怎麼給:
+
+- 本機 CLI:給檔案路徑,由 CLI 自己讀。讀取範圍受限的 CLI(Claude Code、Gemini CLI)會在工作目錄的 `.roundtable-runtime/` 放一份暫存副本,任務結束、停止或關閉 app 時刪除。
+- API:文字檔直接內嵌;宣告支援圖片的端點會附上圖片,被拒收時自動改用純文字重送。PDF 只提供給能讀檔的 CLI,API 成員會被告知無法讀取。
 
 ## 記憶方式
 
-Claude 以 `--resume <session_id>`、Codex 以 `codex exec resume <thread_id>`、Cursor 以 `--resume <chatId>` 續接,所以後續回合只送「新訊息」,省 token。自訂指令沒有 session,每次都會送完整對話紀錄。
+Claude 以 `--resume <session_id>`、Codex 以 `codex exec resume <thread_id>`、Cursor 以 `--resume <chatId>` 續接,所以後續回合只送「新訊息」,省 token。OpenAI 相容 API 在 app 記憶體中保留對話歷史。自訂指令沒有 session,每次都會送完整對話紀錄,長度受「對話紀錄上限」限制。
+
+CLI 的 session 不會寫進歷史紀錄。載入歷史對話繼續討論時,每位成員第一次發言會收到依上限截斷的完整紀錄(原始任務一定保留),之後才恢復只送新訊息。
 
 ## ⚠️ 安全提醒
 
@@ -115,18 +126,46 @@ Claude 以 `--resume <session_id>`、Codex 以 `codex exec resume <thread_id>`�
 「允許修改檔案與執行指令」開啟時,Claude Code 會以 `--dangerously-skip-permissions` 執行,Codex 會以 `workspace-write` 沙箱且不詢問確認執行,Cursor CLI 會以 `--force` 自動核准指令。AI 可以在工作目錄內建立、修改、刪除檔案並執行指令。
 
 - 工作目錄請使用獨立資料夾,不要指到重要專案或家目錄。
+- API key 在擴充編輯器填入時,以作業系統安全儲存(macOS 鑰匙圈)加密後存在 `secrets.json`,不會寫進擴充 JSON。舊版寫在擴充檔的明文 `apiKey` 會在載入時自動搬移。
 - 建議工作目錄使用 git,方便檢查與回溯 AI 做的變更。
 - 只想看討論時,關閉該選項或使用「只討論,不執行」模式。
 
 ## 注意
 
-- 兩個 CLI 都用你現有的登入與訂閱額度,多回合討論會消耗較快。建議討論用較便宜的模型與較低強度,執行階段再用高強度。
+- 各 CLI 都用你現有的登入與訂閱額度,多回合討論會消耗較快。建議討論用較便宜的模型與較低強度,執行階段再用高強度;只需要某位成員處理時用 `@名稱`,不必跑完整流程。
 - 平行執行時多人改同一個檔案仍可能衝突;分工提示已要求主持人避免重疊,但複雜任務建議工作目錄使用 git 以便回溯。
-- 設定檔位於 `~/Library/Application Support/AI Roundtable/config.json`。
+
+## 資料位置
+
+都在 `~/Library/Application Support/AI Roundtable/`;`sessions/` 與 `adapters/` 可以從「設定 → 資料與紀錄」直接打開:
+
+| 路徑 | 內容 |
+| --- | --- |
+| `config.json` | 成員與設定 |
+| `sessions/` | 歷史對話(每段對話一個 JSON) |
+| `attachments/` | 附件,刪除歷史對話時一併清掉 |
+| `adapters/` | 擴充設定檔 |
+| `secrets.json` | 加密後的 API key |
+
+## 專案結構
+
+| 路徑 | 說明 |
+| --- | --- |
+| `main.ts`、`preload.ts` | Electron 主程序與 IPC 介面 |
+| `src/ipc-types.ts`、`renderer/api.d.ts` | 主程序與介面共用的 IPC 型別 |
+| `renderer/` | 介面(HTML / CSS / TypeScript,由 esbuild 打包) |
+| `src/orchestrator.ts` | 討論、分工、執行、審查、@ 指定的流程 |
+| `src/adapters/` | 內建轉接器、擴充載入、CLI / API 通用轉接器 |
+| `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts` | 附件、歷史紀錄、API key 儲存 |
+| `src/models.ts`、`src/model-rules.ts`、`src/usage.ts` | 模型清單、強度規則、用量正規化 |
+| `adapters/templates/` | 「+ 新增」裡的擴充範本 |
+| `docs/` | 擴充撰寫說明與介面文案規格 |
+| `test/` | `npm test` 執行的測試 |
+| `dist/` | `npm run build` 的輸出,app 實際載入的是這裡(不進版控) |
 
 ## 貢獻
 
-歡迎開 issue 或送 pull request。修改模型清單邏輯後請跑 `npm test`。
+歡迎開 issue 或送 pull request,流程與注意事項見 [CONTRIBUTING.md](CONTRIBUTING.md)。發現安全問題請依 [SECURITY.md](SECURITY.md) 私下回報。變更紀錄見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 授權
 

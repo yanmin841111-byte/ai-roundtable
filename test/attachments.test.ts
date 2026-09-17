@@ -9,13 +9,13 @@ const { writeSession, deleteSession, listConversationIds, messagesToMarkdown } =
 const { Orchestrator, describeGitChanges, parsePorcelain } = require('../src/orchestrator');
 
 let n = 0;
-const t = (name, fn) => { fn(); n++; console.log('ok -', name); };
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `ai-roundtable-${tag}-`));
+const t = (name: any, fn: any) => { fn(); n++; console.log('ok -', name); };
+const tmp = (tag: any) => fs.mkdtempSync(path.join(os.tmpdir(), `ai-roundtable-${tag}-`));
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02]);
 const CONV = 'conv-0001';
-const item = (name, data) => ({ name, data: Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8') });
-const addOne = (dir, name, data, conv = CONV) => A.addAttachments(dir, conv, [item(name, data)]);
+const item = (name: any, data: any) => ({ name, data: Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8') });
+const addOne = (dir: any, name: any, data: any, conv: any = CONV) => A.addAttachments(dir, conv, [item(name, data)]);
 
 // ---------- 落地與 metadata ----------
 t('附件寫進 userData/attachments/<conversationId>/,metadata 不含檔案內容', () => {
@@ -99,7 +99,7 @@ t('正確的 magic bytes 才通過', () => {
   ]) {
     const { added, errors } = addOne(dir, name, data);
     assert.strictEqual(added.length, 1, `${name} 應通過,錯誤:${JSON.stringify(errors)}`);
-    assert.strictEqual(added[0].kind, name.endsWith('.pdf') ? 'pdf' : 'image');
+    assert.strictEqual(added[0].kind, String(name).endsWith('.pdf') ? 'pdf' : 'image');
   }
 });
 
@@ -132,7 +132,7 @@ t('空檔案被擋下', () => {
 // ---------- 上限 ----------
 t('超過單次 10 個檔的部分被擋下,前 10 個照常收下', () => {
   const dir = tmp('att');
-  const items = Array.from({ length: 12 }, (_, i) => item(`f${i}.txt`, `x${i}`));
+  const items = Array.from({ length: 12 }, (_: any, i: any) => item(`f${i}.txt`, `x${i}`));
   const { added, errors } = A.addAttachments(dir, CONV, items);
   assert.strictEqual(added.length, 10);
   assert.strictEqual(errors.length, 2);
@@ -341,7 +341,7 @@ t('textInline 型 adapter 內嵌文字內容,並在過長時截斷', () => {
 
 t('多個 textInline 附件共用總預算,不會把 20 萬字灌進單次提示詞', () => {
   const dir = tmp('att');
-  const metas = [];
+  const metas: any[] = [];
   for (let i = 0; i < 4; i++) metas.push(addOne(dir, `long-${i}.txt`, String(i).repeat(20000)).added[0]);
   const out = A.buildAttachmentPrompt(dir, metas, { capabilities: { attachments: ['textInline'] } });
   assert.ok(out.length < 45000, `提示詞過長:${out.length}`);

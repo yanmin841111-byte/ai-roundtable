@@ -6,27 +6,27 @@ const { SHAPES: USAGE_SHAPES } = require('../usage');
 const ATTACHMENT_CAPABILITIES = ['filePath', 'imageInline', 'textInline'];
 
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
-function normalizeModels(list) {
+function normalizeModels(list: any) {
   if (!Array.isArray(list)) return [];
   return list
-    .map((m) => (typeof m === 'string' ? { id: m } : m))
-    .filter((m) => m && typeof m.id === 'string' && m.id.trim())
-    .map((m) => {
-      const efforts = [...new Set((m.efforts || []).map((e) => String(e).toLowerCase()).filter(Boolean))];
+    .map((m: any) => (typeof m === 'string' ? { id: m } : m))
+    .filter((m: any) => m && typeof m.id === 'string' && m.id.trim())
+    .map((m: any) => {
+      const efforts = [...new Set((m.efforts || []).map((e: any) => String(e).toLowerCase()).filter(Boolean))];
       return {
         id: m.id.trim(),
         label: m.label || m.id.trim(),
         description: m.description || '',
         efforts,
         defaultEffort: efforts.includes(m.defaultEffort) ? m.defaultEffort : '',
-        aliases: [...new Set((m.aliases || []).map((a) => String(a).toLowerCase()).filter(Boolean))],
+        aliases: [...new Set((m.aliases || []).map((a: any) => String(a).toLowerCase()).filter(Boolean))],
         // 沒寫 efforts 的模型不限制強度(交給 CLI / API 自己判斷)
         ...(Array.isArray(m.efforts) ? {} : { efforts: [], unrestrictedEffort: true }),
       };
     });
 }
 
-function validateCommon(spec, errors) {
+function validateCommon(spec: any, errors: any) {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) { errors.push('內容必須是物件'); return; }
   if (typeof spec.id !== 'string' || !ID_PATTERN.test(spec.id)) errors.push('id 必須是 1–64 個英數字,可含 . _ -,且以英數字開頭');
   if (spec.label != null && typeof spec.label !== 'string') errors.push('label 必須是字串');
@@ -40,7 +40,7 @@ function validateCommon(spec, errors) {
     else {
       if (!Array.isArray(caps.attachments)) errors.push('capabilities.attachments 必須是陣列');
       else {
-        const invalid = caps.attachments.filter((value) => !ATTACHMENT_CAPABILITIES.includes(value));
+        const invalid = caps.attachments.filter((value: any) => !ATTACHMENT_CAPABILITIES.includes(value));
         if (invalid.length) errors.push(`capabilities.attachments 只接受 ${ATTACHMENT_CAPABILITIES.join('、')}`);
         if (new Set(caps.attachments).size !== caps.attachments.length) errors.push('capabilities.attachments 不可重複');
       }
@@ -49,7 +49,7 @@ function validateCommon(spec, errors) {
   }
 }
 
-function normalizeCapabilities(capabilities, fallback = []) {
+function normalizeCapabilities(capabilities: any, fallback: any = []) {
   const caps = capabilities && typeof capabilities === 'object' ? capabilities : {};
   return {
     attachments: Array.isArray(caps.attachments) ? [...new Set(caps.attachments)] : [...fallback],

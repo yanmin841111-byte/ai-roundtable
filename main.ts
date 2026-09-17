@@ -18,8 +18,8 @@ function importShellEnv() {
   try {
     const out = execSync(`${process.env.SHELL || '/bin/zsh'} -ilc 'echo ${marker}; env'`, { encoding: 'utf8', timeout: 5000 });
     const lines = out.slice(out.indexOf(marker) + marker.length).split('\n');
-    let key = null;
-    const shellEnv = {};
+    let key: any = null;
+    const shellEnv: Record<string, any> = {};
     for (const line of lines) {
       const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (m) { key = m[1]; shellEnv[key] = m[2]; } else if (key) shellEnv[key] += '\n' + line; // 多行值
@@ -30,26 +30,26 @@ function importShellEnv() {
     }
   } catch {}
   const seen = new Set();
-  process.env.PATH = [...extra, ...(process.env.PATH || '').split(':')].filter((p) => p && !seen.has(p) && seen.add(p)).join(':');
+  process.env.PATH = [...extra, ...(process.env.PATH || '').split(':')].filter((p: any) => p && !seen.has(p) && seen.add(p)).join(':');
 }
 
-let win;
-let store;
-let orchestrator;
-let registry;
-let secrets;
-let activeTaskStart = null;
+let win: any;
+let store: any;
+let orchestrator: any;
+let registry: any;
+let secrets: any;
+let activeTaskStart: any = null;
 let wasRunning = false;
 // 目前對話寫入的紀錄檔;同一段對話每次任務結束都覆寫這一份,新對話時清空
-let sessionFileId = null;
+let sessionFileId: any = null;
 // 已經落地、但還沒隨訊息送出的附件(對應介面上的 chip)。
 // 上限由這裡把關,不信任 renderer 傳來的數字。
-let pending = [];
+let pending: any[] = [];
 
 const userData = () => app.getPath('userData');
-const pendingBytes = () => pending.reduce((n, a) => n + (a.size || 0), 0);
+const pendingBytes = () => pending.reduce((n: any, a: any) => n + (a.size || 0), 0);
 
-function dropPending(list) {
+function dropPending(list: any) {
   for (const meta of list) attachments.removeAttachment(userData(), meta);
 }
 
@@ -84,16 +84,16 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
   if (process.env.AI_ROUNDTABLE_SHOT) win.webContents.once('did-finish-load', () => setTimeout(async () => {
     if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r: any) => setTimeout(r, 500));
     const img = await win.webContents.capturePage();
     require('fs').writeFileSync(process.env.AI_ROUNDTABLE_SHOT, img.toPNG());
     console.log('screenshot saved');
   }, 2500));
-  if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (_e, level, msg, line, src) => console.log(`[renderer:${level}] ${msg} (${path.basename(src || '')}:${line})`));
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (_e: any, level: any, msg: any, line: any, src: any) => console.log(`[renderer:${level}] ${msg} (${path.basename(src || '')}:${line})`));
+  win.webContents.setWindowOpenHandler(({ url }: any) => { shell.openExternal(url); return { action: 'deny' }; });
 }
 
-function send(channel, payload) { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); }
+function send(channel: any, payload: any = undefined) { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); }
 function stopOrchestrator() { if (orchestrator) orchestrator.stop(); }
 
 app.whenReady().then(async () => {
@@ -104,15 +104,15 @@ app.whenReady().then(async () => {
   registry = new Registry({
     userDir: process.env.AI_ROUNDTABLE_ADAPTERS_DIR || path.join(app.getPath('userData'), 'adapters'),
     templatesDir: path.join(__dirname, 'adapters', 'templates'),
-    getSecret: (ref) => secrets.get(ref),
-    setSecret: (ref, value) => secrets.set(ref, value),
+    getSecret: (ref: any) => secrets.get(ref),
+    setSecret: (ref: any, value: any) => secrets.set(ref, value),
   });
   setRegistry(registry);
   // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
   for (const a of registry.list()) if (a.refreshModels) Promise.resolve().then(() => a.refreshModels()).catch(() => {});
   orchestrator = new Orchestrator(store);
-  orchestrator.on('message', (m) => send('chat:message', m));
-  orchestrator.on('state', (s) => {
+  orchestrator.on('message', (m: any) => send('chat:message', m));
+  orchestrator.on('state', (s: any) => {
     send('chat:state', s);
     if (wasRunning && !s.running && activeTaskStart != null) {
       activeTaskStart = null;
@@ -134,15 +134,15 @@ app.whenReady().then(async () => {
   } catch {}
 
   ipcMain.handle('config:get', () => store.get());
-  ipcMain.handle('config:save', (_e, cfg) => store.save(cfg));
+  ipcMain.handle('config:save', (_e: any, cfg: any) => store.save(cfg));
   ipcMain.handle('cli:types', () => registry.catalog());
   ipcMain.handle('cli:check', () => registry.checkAll());
 
   // CLI 擴充管理
   ipcMain.handle('ext:list', () => registry.summary());
   ipcMain.handle('ext:reload', () => registry.reload());
-  ipcMain.handle('ext:install', (_e, templateFile) => registry.installTemplate(templateFile));
-  ipcMain.handle('ext:read', (_e, file) => {
+  ipcMain.handle('ext:install', (_e: any, templateFile: any) => registry.installTemplate(templateFile));
+  ipcMain.handle('ext:read', (_e: any, file: any) => {
     let migration = '';
     let migrationError = '';
     if (file.endsWith('.json')) {
@@ -152,8 +152,8 @@ app.whenReady().then(async () => {
     }
     return { content: registry.readFile(file), migration, migrationError };
   });
-  ipcMain.handle('ext:write', (_e, { file, content, originalFile }) => registry.writeFile(file, content, { originalFile }));
-  ipcMain.handle('ext:delete', (_e, file) => registry.deleteFile(file));
+  ipcMain.handle('ext:write', (_e: any, { file, content, originalFile }: any) => registry.writeFile(file, content, { originalFile }));
+  ipcMain.handle('ext:delete', (_e: any, file: any) => registry.deleteFile(file));
   ipcMain.handle('ext:openDir', () => shell.openPath(registry.userDir));
   ipcMain.handle('ext:openDocs', () => shell.openExternal('https://github.com/yanmin841111-byte/ai-roundtable/blob/main/docs/adapters.md'));
   ipcMain.handle('dialog:pickDir', async () => {
@@ -164,20 +164,20 @@ app.whenReady().then(async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openFile'] });
     return r.canceled ? null : r.filePaths[0];
   });
-  ipcMain.handle('secrets:set', (_e, { ref, value }) => secrets.set(ref, value));
-  ipcMain.handle('secrets:status', (_e, { ref, envName }) => secrets.status(ref, envName));
-  ipcMain.handle('secrets:clear', (_e, { ref }) => secrets.clear(ref));
-  ipcMain.handle('secrets:test', async (_e, { adapterId }) => {
+  ipcMain.handle('secrets:set', (_e: any, { ref, value }: any) => secrets.set(ref, value));
+  ipcMain.handle('secrets:status', (_e: any, { ref, envName }: any) => secrets.status(ref, envName));
+  ipcMain.handle('secrets:clear', (_e: any, { ref }: any) => secrets.clear(ref));
+  ipcMain.handle('secrets:test', async (_e: any, { adapterId }: any) => {
     const adapter = registry.loadFresh(adapterId);
     if (!adapter) return { ok: false, error: '找不到此 API 擴充，請先儲存設定' };
     if (typeof adapter.testConnection !== 'function') return { ok: false, error: '此擴充不支援 API 連線測試' };
     return adapter.testConnection();
   });
-  ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
+  ipcMain.handle('shell:openPath', (_e: any, p: any) => shell.openPath(p));
   ipcMain.handle('chat:snapshot', () => ({ ...orchestrator.snapshot(), sessionId: sessionFileId }));
   // ---------- 附件 ----------
   // 權威儲存在 userData/attachments/<conversationId>/,不寫進使用者的工作目錄。
-  const addFiles = (items) => {
+  const addFiles = (items: any) => {
     const result = attachments.addAttachments(userData(), orchestrator.conversationId, items, {
       existingCount: pending.length,
       existingBytes: pendingBytes(),
@@ -188,7 +188,7 @@ app.whenReady().then(async () => {
   };
 
   ipcMain.handle('attachments:list', () => ({ attachments: pending, limits: attachments.LIMITS }));
-  ipcMain.handle('attachments:add', (_e, { items } = {}) => addFiles(Array.isArray(items) ? items : []));
+  ipcMain.handle('attachments:add', (_e: any, { items }: any = {}) => addFiles(Array.isArray(items) ? items : []));
   ipcMain.handle('attachments:pick', async () => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections'],
@@ -197,28 +197,28 @@ app.whenReady().then(async () => {
       ],
     });
     if (r.canceled || !r.filePaths.length) return { attachments: pending, errors: [], canceled: true, limits: attachments.LIMITS };
-    return addFiles(r.filePaths.map((file) => ({ name: path.basename(file), path: file })));
+    return addFiles(r.filePaths.map((file: any) => ({ name: path.basename(file), path: file })));
   });
-  ipcMain.handle('attachments:remove', (_e, { id } = {}) => {
-    const meta = pending.find((a) => a.id === id);
+  ipcMain.handle('attachments:remove', (_e: any, { id }: any = {}) => {
+    const meta = pending.find((a: any) => a.id === id);
     if (meta) {
       attachments.removeAttachment(userData(), meta);
-      pending = pending.filter((a) => a.id !== id);
+      pending = pending.filter((a: any) => a.id !== id);
     }
     return { attachments: pending };
   });
   // 縮圖走 data URL(CSP 維持 img-src 'self' data:,不放寬成 file:)
-  ipcMain.handle('attachments:thumb', (_e, meta) => attachments.thumbDataUrl(userData(), meta));
+  ipcMain.handle('attachments:thumb', (_e: any, meta: any) => attachments.thumbDataUrl(userData(), meta));
 
-  ipcMain.handle('chat:send', async (_e, { text, mode, attachments: wanted }) => {
+  ipcMain.handle('chat:send', async (_e: any, { text, mode, attachments: wanted }: any) => {
     const snap = orchestrator.snapshot();
     if (!snap.running) activeTaskStart = snap.messages.length;
     // renderer 決定「這次要送哪些 chip」,main 仍是唯一驗證與儲存的一方
     let sending = pending;
     if (Array.isArray(wanted)) {
-      const keep = new Set(wanted.map((a) => (a && a.id) || a));
-      sending = pending.filter((a) => keep.has(a.id));
-      dropPending(pending.filter((a) => !keep.has(a.id)));
+      const keep = new Set(wanted.map((a: any) => (a && a.id) || a));
+      sending = pending.filter((a: any) => keep.has(a.id));
+      dropPending(pending.filter((a: any) => !keep.has(a.id)));
     }
     const message = await orchestrator.userMessage(text, mode, sending);
     // 成功交給 orchestrator 之後才清 pending:中途丟例外時 renderer 會復原 chip,
@@ -244,7 +244,7 @@ app.whenReady().then(async () => {
     try {
       await require('fs').promises.writeFile(result.filePath, messagesToMarkdown(messages), 'utf8');
       return { ok: true, file: result.filePath };
-    } catch (error) {
+    } catch (error: any) {
       return { ok: false, error: error.message };
     }
   });
@@ -254,14 +254,14 @@ app.whenReady().then(async () => {
     return shell.openPath(dir);
   });
   ipcMain.handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50 }));
-  ipcMain.handle('session:read', (_e, id) => readSession(app.getPath('userData'), id));
-  ipcMain.handle('session:delete', (_e, id) => {
+  ipcMain.handle('session:read', (_e: any, id: any) => readSession(app.getPath('userData'), id));
+  ipcMain.handle('session:delete', (_e: any, id: any) => {
     const result = deleteSession(app.getPath('userData'), id);
     if (result.ok && id === sessionFileId) sessionFileId = null;
     return result;
   });
   // 載入歷史對話繼續討論:之後的任務會寫回同一份紀錄
-  ipcMain.handle('chat:resume', (_e, id) => {
+  ipcMain.handle('chat:resume', (_e: any, id: any) => {
     if (orchestrator.snapshot().running) return { ok: false, error: '目前仍在進行中,請先停止再載入歷史對話' };
     const result = readSession(userData(), id);
     if (!result.ok) return result;

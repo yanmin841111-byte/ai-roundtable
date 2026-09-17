@@ -16,7 +16,7 @@ module.exports = {
 
   // agent:成員設定(model、effort、canEdit、name…)
   // ctx:prompt、systemPrompt、sessionId、cwd、timeoutMs,以及 onText / onThinking / onActivity / onSession / onProc 回呼
-  // kit:runProcess、buildArgs、truncate、resolveEffort… 等工具,見 src/adapters/kit.js
+  // kit:runProcess、buildArgs、truncate、resolveEffort… 等工具,見 src/adapters/kit.ts
   async run(agent, ctx, kit) {
     const prompt = ctx.systemPrompt ? `${ctx.systemPrompt}\n\n---\n\n${ctx.prompt}` : ctx.prompt;
     const args = kit.buildArgs([

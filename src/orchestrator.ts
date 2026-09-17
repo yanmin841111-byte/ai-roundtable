@@ -6,13 +6,14 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { runTurn, getAdapter, effectiveCanEdit } = require('./adapters');
 const { hasMarker, stripMarker, findMentions } = require('./shared');
+import type { PhaseInfo } from './ipc-types';
 const {
   RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath,
 } = require('./attachments');
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
-const MARK = (t) => `[${t}]`;
+const MARK = (t: any) => `[${t}]`;
 const EMIT_INTERVAL = 70; // 串流更新合併發送的間隔(ms),避免每個 token 都走一次 IPC
 const SEP = '\n\n';            // 對話紀錄各則之間的分隔
 const TRUNCATE_RESERVE = 200;   // 截斷時為省略提示預留的字元空間
@@ -21,7 +22,24 @@ const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/; // 與 attachments 
 const MESSAGE_KINDS = new Set(['user', 'agent', 'system']);
 
 class Orchestrator extends EventEmitter {
-  constructor(store) {
+  store: any;
+  conversationId: any;
+  attachments: any;
+  staged: any;
+  attachmentsSeen: any;
+  messages: any;
+  sessions: any;
+  lastSeen: any;
+  procs: any;
+  running: any;
+  stopped: any;
+  phase: PhaseInfo;
+  taskStartIndex: any;
+  taskCwd: any;
+  directedQueue: any;
+  emitTimers: any;
+
+  constructor(store: any) {
     super();
     this.store = store;
     // 附件要在「送出當下」就有歸屬,不能等任務結束寫 session 時才有 id
@@ -35,7 +53,7 @@ class Orchestrator extends EventEmitter {
     this.procs = new Set();
     this.running = false;
     this.stopped = false;
-    this.phase = 'idle';
+    this.phase = { code: 'idle' };
     this.taskStartIndex = 0;
     this.taskCwd = null;          // 本次任務開始時的工作目錄;任務中途改設定也不影響暫存與清理
     this.directedQueue = [];      // 進行中用 @ 指定成員的訊息,任務結束前要確保對方有回覆
@@ -45,10 +63,10 @@ class Orchestrator extends EventEmitter {
   // ---------- 狀態與事件 ----------
   get config() { return this.store.get(); }
   get userDataDir() { return this.store.userDataDir; }
-  get agents() { return this.config.agents.filter((a) => a.enabled !== false); }
+  get agents() { return this.config.agents.filter((a: any) => a.enabled !== false); }
   get lead() {
     const agents = this.agents;
-    return agents.find((a) => a.id === this.config.settings.leadAgentId) || agents[0];
+    return agents.find((a: any) => a.id === this.config.settings.leadAgentId) || agents[0];
   }
 
   snapshot() {
@@ -60,9 +78,10 @@ class Orchestrator extends EventEmitter {
       attachments: this.attachments,
     };
   }
-  setPhase(phase) { this.phase = phase; this.emit('state', { running: this.running, phase }); }
+  // phase 只帶 code 與參數,顯示文字由 renderer 依 uiLocale 組出。
+  setPhase(phase: PhaseInfo) { this.phase = phase; this.emit('state', { running: this.running, phase }); }
 
-  pushMessage(m) {
+  pushMessage(m: any) {
     const msg = { id: crypto.randomUUID(), ts: Date.now(), status: 'done', text: '', thinking: '', activities: [], ...m };
     this.messages.push(msg);
     this.emit('message', msg); // 建立節點要立即送出,不節流
@@ -70,12 +89,12 @@ class Orchestrator extends EventEmitter {
   }
 
   // flush = true 時立刻送出並取消排程中的更新(回合結束、狀態變更時使用)
-  updateMessage(msg, patch, flush = false) {
+  updateMessage(msg: any, patch: any, flush: any = false) {
     Object.assign(msg, patch);
     this.emitMessage(msg, flush);
   }
 
-  emitMessage(msg, flush = false) {
+  emitMessage(msg: any, flush: any = false) {
     const timer = this.emitTimers.get(msg.id);
     if (flush) {
       if (timer) { clearTimeout(timer); this.emitTimers.delete(msg.id); }
@@ -94,10 +113,10 @@ class Orchestrator extends EventEmitter {
     this.emitTimers.clear();
   }
 
-  system(text, extra = {}) { return this.pushMessage({ kind: 'system', text, ...extra }); }
+  system(text: any, extra: any = {}) { return this.pushMessage({ kind: 'system', text, ...extra }); }
 
   // ---------- 對外操作 ----------
-  async userMessage(text, mode, attachments = []) {
+  async userMessage(text: any, mode: any, attachments: any = []) {
     const list = Array.isArray(attachments) ? attachments : [];
     const mentioned = findMentions(text, this.agents);
     // metadata 跟著訊息走,歷史對話重開才看得到附件;絕不放 base64 內容
@@ -105,7 +124,7 @@ class Orchestrator extends EventEmitter {
       kind: 'user',
       text,
       attachments: list,
-      ...(mentioned.length ? { mentions: mentioned.map((a) => ({ id: a.id, name: a.name })) } : {}),
+      ...(mentioned.length ? { mentions: mentioned.map((a: any) => ({ id: a.id, name: a.name })) } : {}),
       // 閒置時的 @ 指定會開啟一次「只有被指定成員回覆」的任務,介面據此顯示階段分隔
       ...(mentioned.length && !this.running ? { directed: true } : {}),
     });
@@ -120,13 +139,13 @@ class Orchestrator extends EventEmitter {
     }
     if (this.running) {
       // 進行中:訊息會在下一位成員發言時自動帶入;有 @ 指定時,任務結束前還沒輪到對方就補一次指定回覆
-      if (mentioned.length) this.directedQueue.push({ msg, agentIds: mentioned.map((a) => a.id) });
+      if (mentioned.length) this.directedQueue.push({ msg, agentIds: mentioned.map((a: any) => a.id) });
       return msg;
     }
     const run = mentioned.length
       ? this.runExclusive(() => this.directedPhase(mentioned))
       : this.runTask(text, mode || this.config.settings.mode);
-    run.catch((e) => this.system(`發生錯誤:${e.message}`, { level: 'error' }));
+    run.catch((e: any) => this.system(`發生錯誤:${e.message}`, { level: 'error' }));
     return msg;
   }
 
@@ -153,17 +172,17 @@ class Orchestrator extends EventEmitter {
     this.taskStartIndex = 0;
     this.directedQueue = [];
     this.emit('reset');
-    this.setPhase('idle');
+    this.setPhase({ code: 'idle' });
   }
 
   // 載入歷史對話繼續討論。CLI 的 session 不會跟著紀錄保存,所以每位成員下一次發言時
   // 會收到(依上限截斷的)完整對話紀錄,而不是只有新訊息。
-  loadConversation({ messages, conversationId } = {}) {
+  loadConversation({ messages, conversationId }: any = {}) {
     if (this.running) throw new Error('目前仍在進行中,請先停止再載入歷史對話');
     this.clearEmitTimers();
     clearRuntime(this.config.settings.workDir, this.conversationId);
     this.conversationId = CONVERSATION_ID.test(conversationId || '') ? conversationId : newConversationId();
-    this.messages = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object').map(restoreMessage);
+    this.messages = (Array.isArray(messages) ? messages : []).filter((m: any) => m && typeof m === 'object').map(restoreMessage);
     this.attachments = [];
     this.staged = [];
     this.attachmentsSeen.clear();
@@ -172,13 +191,13 @@ class Orchestrator extends EventEmitter {
     this.taskStartIndex = 0;
     this.directedQueue = [];
     this.stopped = false;
-    this.setPhase('idle');
+    this.setPhase({ code: 'idle' });
     return this.snapshot();
   }
 
   // ---------- 主流程 ----------
-  async runTask(task, mode) {
-    return this.runExclusive(async (agents, cwd) => {
+  async runTask(task: any, mode: any) {
+    return this.runExclusive(async (agents: any, cwd: any) => {
       const agreed = await this.discussPhase(agents, task);
       if (this.stopped) return;
       if (mode === 'divide') {
@@ -203,11 +222,11 @@ class Orchestrator extends EventEmitter {
 
   // 任務的共同外殼:檢查成員與工作目錄、暫存附件、結束時一定清理。
   // body(agents, cwd) 是實際流程(完整圓桌或 @ 指定回覆)。
-  async runExclusive(body) {
+  async runExclusive(body: any) {
     const agents = this.agents;
     if (agents.length === 0) { this.system('沒有啟用的成員,請先在左側新增或啟用成員。', { level: 'error' }); return; }
     const cwd = this.config.settings.workDir;
-    try { fs.mkdirSync(cwd, { recursive: true }); } catch (e) { this.system(`無法建立工作目錄 ${cwd}:${e.message}`, { level: 'error' }); return; }
+    try { fs.mkdirSync(cwd, { recursive: true }); } catch (e: any) { this.system(`無法建立工作目錄 ${cwd}:${e.message}`, { level: 'error' }); return; }
 
     this.running = true;
     this.stopped = false;
@@ -226,16 +245,17 @@ class Orchestrator extends EventEmitter {
       this.taskCwd = null;
       this.directedQueue = [];
       if (this.stopped) this.system('已停止。');
-      this.setPhase('idle');
+      this.setPhase({ code: 'idle' });
     }
   }
 
   // @ 指定:只有被指定的成員回覆;多人時平行執行
-  async directedPhase(targets) {
-    const names = targets.map((a) => a.name).join('、');
-    this.setPhase(`指定 ${names}`);
+  async directedPhase(targets: any) {
+    // names 必須維持陣列:PhaseInfo.names 是 string[],顯示時的分隔符由 renderer 決定。
+    const names: string[] = targets.map((a: any) => String(a.name));
+    this.setPhase({ code: 'direct', names });
     const group = targets.length > 1 ? crypto.randomUUID() : null;
-    await Promise.all(targets.map((agent) => this.turn(agent, this.directedPrompt(agent, targets), { phase: '指定', hideAgreed: true, group })));
+    await Promise.all(targets.map((agent: any) => this.turn(agent, this.directedPrompt(agent, targets), { phase: { code: 'direct' }, hideAgreed: true, group })));
   }
 
   // 進行中送出的 @ 指定訊息:被指定的成員若在那之後都沒發言過,任務結束前補一次指定回覆
@@ -243,14 +263,14 @@ class Orchestrator extends EventEmitter {
     while (this.directedQueue.length && !this.stopped) {
       const { msg, agentIds } = this.directedQueue.shift();
       const at = this.messages.indexOf(msg);
-      const spoke = new Set(this.messages.slice(at + 1).filter((m) => m.kind === 'agent').map((m) => m.agentId));
-      const targets = this.agents.filter((a) => agentIds.includes(a.id) && !spoke.has(a.id));
+      const spoke = new Set(this.messages.slice(at + 1).filter((m: any) => m.kind === 'agent').map((m: any) => m.agentId));
+      const targets = this.agents.filter((a: any) => agentIds.includes(a.id) && !spoke.has(a.id));
       if (targets.length) await this.directedPhase(targets);
     }
   }
 
-  directedPrompt(agent, targets) {
-    const others = targets.filter((a) => a.id !== agent.id).map((a) => `「${a.name}」`);
+  directedPrompt(agent: any, targets: any) {
+    const others = targets.filter((a: any) => a.id !== agent.id).map((a: any) => `「${a.name}」`);
     const cwd = this.taskCwd || this.config.settings.workDir;
     return [
       '【指定回覆】使用者在最新一則訊息中用 @ 指定由你處理,請直接回應或完成使用者的要求。',
@@ -263,31 +283,31 @@ class Orchestrator extends EventEmitter {
 
   // 沙箱型 CLI(capabilities.attachmentsNeedCwd)讀不到 userData 下的絕對路徑,
   // 只好在工作目錄放一份暫存副本。userData 仍是唯一權威來源。
-  stageAttachments(agents, cwd, items = this.attachments, reset = true) {
+  stageAttachments(agents: any, cwd: any, items: any = this.attachments, reset: any = true) {
     if (reset) this.staged = [];
     if (!items.length) return;
-    const needsCwd = agents.some((a) => attachmentCapabilities(getAdapter(a.cli)).needCwd);
+    const needsCwd = agents.some((a: any) => attachmentCapabilities(getAdapter(a.cli)).needCwd);
     if (!needsCwd) return;
     const { staged, error } = stageToCwd(this.userDataDir, this.conversationId, cwd, items);
     this.staged = reset ? staged : [...this.staged, ...staged];
     if (error) this.system(`附件無法複製到工作目錄:${error}`, { level: 'warn' });
   }
 
-  unstageAttachments(cwd) {
+  unstageAttachments(cwd: any) {
     this.staged = [];
     const r = clearRuntime(cwd, this.conversationId);
     if (!r.ok) this.system(`無法清除工作目錄的附件暫存(${RUNTIME_DIR}):${r.error}`, { level: 'warn' });
   }
 
   // 階段一:輪流討論直到全員同意或到達回合上限
-  async discussPhase(agents, task) {
+  async discussPhase(agents: any, task: any) {
     const maxRounds = Math.max(1, Number(this.config.settings.maxRounds) || 3);
     for (let round = 1; round <= maxRounds; round++) {
-      this.setPhase(`討論 第 ${round}/${maxRounds} 回合`);
+      this.setPhase({ code: 'discuss', round, maxRounds });
       let agreedCount = 0;
       for (const agent of agents) {
         if (this.stopped) return false;
-        const { text } = await this.turn(agent, this.discussPrompt(agent, task, round, maxRounds), { phase: `討論 R${round}` });
+        const { text } = await this.turn(agent, this.discussPrompt(agent, task, round, maxRounds), { phase: { code: 'discuss', round, maxRounds } });
         // 只認「最後幾行、單獨成行」的標記,避免成員在內文中提到它就被誤判為同意
         if (hasMarker(text, AGREED)) agreedCount++;
       }
@@ -297,13 +317,13 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段二:主持人產生分工 JSON(用 A1/A2 短代號,避免模型抄錯 UUID 或名稱)
-  async assignPhase(agents, task) {
-    this.setPhase('分工');
+  async assignPhase(agents: any, task: any) {
+    this.setPhase({ code: 'divide' });
     const lead = this.lead;
     const codes = new Map();
-    agents.forEach((a, i) => codes.set(`A${i + 1}`, a));
+    agents.forEach((a: any, i: any) => codes.set(`A${i + 1}`, a));
     const roster = [...codes.entries()]
-      .map(([code, a]) => `- ${code} =「${a.name}」(${(getAdapter(a.cli) || {}).label || a.cli}${effectiveCanEdit(a) ? '' : ',唯讀,不能修改檔案'})`)
+      .map(([code, a]: any) => `- ${code} =「${a.name}」(${(getAdapter(a.cli) || {}).label || a.cli}${effectiveCanEdit(a) ? '' : ',唯讀,不能修改檔案'})`)
       .join('\n');
     const prompt = [
       '【分工】你是本次的主持人。請根據到目前為止的討論結果,把任務拆解並分配給以下成員:',
@@ -316,7 +336,7 @@ class Orchestrator extends EventEmitter {
     ].join('\n');
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const { text } = await this.turn(lead, prompt, { phase: '分工', hideAgreed: true });
+      const { text } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
       if (this.stopped) return null;
       const plan = extractJson(text);
       if (plan && Array.isArray(plan.assignments)) {
@@ -325,16 +345,16 @@ class Orchestrator extends EventEmitter {
           a._agentId = target ? target.id : null;
           a._agentName = target ? target.name : null;
         }
-        const matched = plan.assignments.filter((a) => a._agentId && a.task);
-        const unmatched = plan.assignments.filter((a) => !a._agentId && a.task);
+        const matched = plan.assignments.filter((a: any) => a._agentId && a.task);
+        const unmatched = plan.assignments.filter((a: any) => !a._agentId && a.task);
         if (unmatched.length) {
           this.system(
-            `**有工作無法對應到成員**,已跳過:\n${unmatched.map((a) => `- \`${a.agent}\`:${a.task}`).join('\n')}`,
+            `**有工作無法對應到成員**,已跳過:\n${unmatched.map((a: any) => `- \`${a.agent}\`:${a.task}`).join('\n')}`,
             { level: 'warn' },
           );
         }
         if (matched.length) {
-          const lines = matched.map((a) => `- **${a._agentName}**:${a.task}`).join('\n');
+          const lines = matched.map((a: any) => `- **${a._agentName}**:${a.task}`).join('\n');
           this.system(`**分工結果**${plan.summary ? `:${plan.summary}` : ''}\n\n${lines}`);
           return plan;
         }
@@ -348,15 +368,15 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段三:各成員平行執行自己的工作
-  async executePhase(agents, plan) {
-    this.setPhase('執行');
+  async executePhase(agents: any, plan: any) {
+    this.setPhase({ code: 'execute' });
     const cwd = this.taskCwd || this.config.settings.workDir;
     const group = crypto.randomUUID(); // 同一批平行發言,介面會並排顯示
-    const jobs = [];
+    const jobs: any[] = [];
     for (const agent of agents) {
-      const mine = plan.assignments.filter((a) => a._agentId === agent.id && a.task);
+      const mine = plan.assignments.filter((a: any) => a._agentId === agent.id && a.task);
       if (mine.length === 0) continue;
-      const taskText = mine.map((a) => a.task).join('\n');
+      const taskText = mine.map((a: any) => a.task).join('\n');
       const prompt = [
         `【執行】以下是分配給你的工作,請現在實際完成它(工作目錄:${cwd})。`,
         effectiveCanEdit(agent) ? '你可以直接建立、修改檔案與執行指令。' : '注意:你目前沒有修改檔案的權限,請把要做的內容以完整程式碼或步驟寫出來。',
@@ -365,18 +385,18 @@ class Orchestrator extends EventEmitter {
         taskText,
       ].join('\n');
       jobs.push(
-        this.turn(agent, prompt, { phase: '執行', hideAgreed: true, group })
-          .then(({ text, error }) => ({ agent, task: taskText, report: text, error })),
+        this.turn(agent, prompt, { phase: { code: 'execute' }, hideAgreed: true, group })
+          .then(({ text, error }: any) => ({ agent, task: taskText, report: text, error })),
       );
     }
     if (jobs.length === 0) { this.system('沒有任何成員被分配到工作。', { level: 'warn' }); return { reports: [], failed: [] }; }
 
     const all = await Promise.all(jobs);
-    const reports = all.filter((r) => !r.error && (r.report || '').trim());
-    const failed = all.filter((r) => r.error || !(r.report || '').trim());
+    const reports = all.filter((r: any) => !r.error && (r.report || '').trim());
+    const failed = all.filter((r: any) => r.error || !(r.report || '').trim());
     if (failed.length) {
       this.system(
-        `**執行失敗**,這些成員的成果不會進入審查:\n${failed.map((f) => `- **${f.agent.name}**:${f.error || '沒有產生回報'}`).join('\n')}`,
+        `**執行失敗**,這些成員的成果不會進入審查:\n${failed.map((f: any) => `- **${f.agent.name}**:${f.error || '沒有產生回報'}`).join('\n')}`,
         { level: 'error' },
       );
     }
@@ -386,15 +406,15 @@ class Orchestrator extends EventEmitter {
   // 階段四:交叉審查
   // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
   // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
-  async reviewPhase(agents, reports) {
+  async reviewPhase(agents: any, reports: any) {
     const pairs = pickReviewPairs(agents, reports);
     if (pairs.length === 0) {
       if (reports.length >= 1) this.system('找不到可以擔任審查者的其他成員(整場只有一名啟用成員),略過交叉審查。', { level: 'warn' });
       return [];
     }
-    this.setPhase('交叉審查');
+    this.setPhase({ code: 'review' });
     const group = crypto.randomUUID();
-    const jobs = pairs.map(({ reviewer, target }) => {
+    const jobs = pairs.map(({ reviewer, target }: any) => {
       const prompt = [
         `【交叉審查】請檢查「${target.agent.name}」剛完成的工作。請實際打開相關檔案確認,不要只看回報。`,
         '指出:明確的錯誤、與討論結論不一致之處、可以改進的地方。請簡潔。',
@@ -404,20 +424,20 @@ class Orchestrator extends EventEmitter {
         '',
         `他的回報:\n${target.report}`,
       ].join('\n');
-      return this.turn(reviewer, prompt, { phase: '審查', hideAgreed: true, group })
-        .then(({ text, error }) => ({ reviewer, target, text, error }));
+      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group })
+        .then(({ text, error }: any) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
   }
 
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
-  async fixPhase(reviews) {
+  async fixPhase(reviews: any) {
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
-    const reviewFailed = reviews.filter((rv) => rv.error || !(rv.text || '').trim());
+    const reviewFailed = reviews.filter((rv: any) => rv.error || !(rv.text || '').trim());
     if (reviewFailed.length) {
       this.system(
-        `**交叉審查失敗**,這些審查沒有結果,不代表被審查的成果沒有問題:\n${reviewFailed.map((rv) => `- **${rv.reviewer.name}** 審查「${rv.target.agent.name}」:${rv.error || '沒有產生審查意見'}`).join('\n')}`,
+        `**交叉審查失敗**,這些審查沒有結果,不代表被審查的成果沒有問題:\n${reviewFailed.map((rv: any) => `- **${rv.reviewer.name}** 審查「${rv.target.agent.name}」:${rv.error || '沒有產生審查意見'}`).join('\n')}`,
         { level: 'error' },
       );
     }
@@ -436,8 +456,8 @@ class Orchestrator extends EventEmitter {
       return { unresolved: [], reviewFailed, fixFailed: [] };
     }
 
-    const unresolved = [];
-    const jobs = [];
+    const unresolved: any[] = [];
+    const jobs: any[] = [];
     const group = crypto.randomUUID();
     for (const it of issues.values()) {
       if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
@@ -449,25 +469,25 @@ class Orchestrator extends EventEmitter {
         '',
         `審查意見:\n${it.notes.join('\n\n')}`,
       ].join('\n');
-      jobs.push(this.turn(it.agent, prompt, { phase: '修復', hideAgreed: true, group }).then(({ error }) => ({ item: it, error })));
+      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group }).then(({ error }: any) => ({ item: it, error })));
     }
 
     if (unresolved.length) {
       this.system(
-        `「${unresolved.map((u) => u.agent.name).join('」、「')}」沒有修改檔案的權限,審查意見將直接帶入總結。`,
+        `「${unresolved.map((u: any) => u.agent.name).join('」、「')}」沒有修改檔案的權限,審查意見將直接帶入總結。`,
         { level: 'warn' },
       );
     }
 
-    let fixFailed = [];
+    let fixFailed: any[] = [];
     if (jobs.length) {
-      this.setPhase('修復');
+    this.setPhase({ code: 'repair' });
       const results = await Promise.all(jobs);
       // 修復本身也可能失敗(逾時、崩潰),那些問題等於沒修掉
-      fixFailed = results.filter((r) => r.error);
+      fixFailed = results.filter((r: any) => r.error);
       if (fixFailed.length) {
         this.system(
-          `**修復失敗**,以下成員的審查意見仍未處理:\n${fixFailed.map((r) => `- **${r.item.agent.name}**:${r.error}`).join('\n')}`,
+          `**修復失敗**,以下成員的審查意見仍未處理:\n${fixFailed.map((r: any) => `- **${r.item.agent.name}**:${r.error}`).join('\n')}`,
           { level: 'error' },
         );
       }
@@ -476,20 +496,20 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段六:主持人總結
-  async summaryPhase(task, mode, { failed = [], unresolved = [], reviewFailed = [], fixFailed = [], gitChanges = null } = {}) {
-    this.setPhase('總結');
-    const notes = [];
+  async summaryPhase(task: any, mode: any, { failed = [], unresolved = [], reviewFailed = [], fixFailed = [], gitChanges = null }: any = {}) {
+    this.setPhase({ code: 'summary' });
+    const notes: any[] = [];
     if (failed.length) {
-      notes.push(`以下成員的執行失敗,成果未納入審查,請在總結中明確指出:\n${failed.map((f) => `- ${f.agent.name}:${f.error || '沒有產生回報'}`).join('\n')}`);
+      notes.push(`以下成員的執行失敗,成果未納入審查,請在總結中明確指出:\n${failed.map((f: any) => `- ${f.agent.name}:${f.error || '沒有產生回報'}`).join('\n')}`);
     }
     if (reviewFailed.length) {
-      notes.push(`以下交叉審查沒有完成,對應的成果等於沒有被檢查過,請在總結中明確標示為「未經審查」,不要說成沒有問題:\n${reviewFailed.map((rv) => `- ${rv.reviewer.name} 審查 ${rv.target.agent.name}:${rv.error || '沒有產生審查意見'}`).join('\n')}`);
+      notes.push(`以下交叉審查沒有完成,對應的成果等於沒有被檢查過,請在總結中明確標示為「未經審查」,不要說成沒有問題:\n${reviewFailed.map((rv: any) => `- ${rv.reviewer.name} 審查 ${rv.target.agent.name}:${rv.error || '沒有產生審查意見'}`).join('\n')}`);
     }
     if (fixFailed.length) {
-      notes.push(`以下成員的修復回合失敗,審查指出的問題仍然存在,請在總結中列為未解決:\n${fixFailed.map((r) => `- ${r.item.agent.name}:${r.error}\n  未處理的審查意見:\n${r.item.notes.join('\n')}`).join('\n\n')}`);
+      notes.push(`以下成員的修復回合失敗,審查指出的問題仍然存在,請在總結中列為未解決:\n${fixFailed.map((r: any) => `- ${r.item.agent.name}:${r.error}\n  未處理的審查意見:\n${r.item.notes.join('\n')}`).join('\n\n')}`);
     }
     if (unresolved.length) {
-      notes.push(`以下成員沒有修改檔案的權限,審查意見尚未處理,請在總結中列出並說明需要使用者做什麼:\n${unresolved.map((u) => `- ${u.agent.name}:\n${u.notes.join('\n')}`).join('\n\n')}`);
+      notes.push(`以下成員沒有修改檔案的權限,審查意見尚未處理,請在總結中列出並說明需要使用者做什麼:\n${unresolved.map((u: any) => `- ${u.agent.name}:\n${u.notes.join('\n')}`).join('\n\n')}`);
     }
     if (gitChanges) {
       notes.push(`執行結束時,工作目錄的 git 變更如下。這是**當下的工作區狀態**,可能包含本次任務開始前就已存在的變更,請據實轉述、不要宣稱這些變更全部由本次任務產生:\n${gitChanges}`);
@@ -500,13 +520,13 @@ class Orchestrator extends EventEmitter {
         : '【總結】請以主持人身分,簡潔總結這次討論的結論、分歧點,以及建議的下一步。',
       ...notes,
     ].join('\n\n');
-    await this.turn(this.lead, prompt, { phase: '總結', hideAgreed: true });
+    await this.turn(this.lead, prompt, { phase: { code: 'summary' }, hideAgreed: true });
   }
 
   // ---------- 提示詞 ----------
   // showAgreed:只有討論階段才需要共識標記的規則,其他階段提到它只會汙染提示詞
-  systemPrompt(agent, { showAgreed = true } = {}) {
-    const others = this.agents.filter((a) => a.id !== agent.id).map((a) => `「${a.name}」`).join('、') || '(目前沒有其他成員)';
+  systemPrompt(agent: any, { showAgreed = true }: any = {}) {
+    const others = this.agents.filter((a: any) => a.id !== agent.id).map((a: any) => `「${a.name}」`).join('、') || '(目前沒有其他成員)';
     const lang = this.config.settings.language || '繁體中文';
     const rules = [
       `- 使用${lang}回覆,簡潔、有重點,不要重複別人已經說過的內容。`,
@@ -525,7 +545,7 @@ class Orchestrator extends EventEmitter {
     ].join('\n');
   }
 
-  discussPrompt(agent, task, round, maxRounds) {
+  discussPrompt(agent: any, task: any, round: any, maxRounds: any) {
     const first = this.lastSeen[agent.id] == null;
     const header = first ? `【任務】\n${task}\n` : '';
     const tail = round === maxRounds
@@ -535,11 +555,11 @@ class Orchestrator extends EventEmitter {
   }
 
   // 這位成員這回合實際拿得到的附件(沙箱 CLI 用工作目錄副本,其餘用 userData 權威路徑)
-  attachmentsFor(agent, adapter) {
+  attachmentsFor(agent: any, adapter: any) {
     if (!this.attachments.length) return [];
     const { needCwd } = attachmentCapabilities(adapter);
-    const byId = new Map(this.staged.map((s) => [s.id, s]));
-    return this.attachments.map((m) => ({
+    const byId = new Map<any, any>(this.staged.map((s: any) => [s.id, s]));
+    return this.attachments.map((m: any) => ({
       ...m,
       path: needCwd ? (byId.get(m.id)?.cwdPath || null) : absolutePath(this.userDataDir, m),
     }));
@@ -547,7 +567,7 @@ class Orchestrator extends EventEmitter {
 
   // 可續接的成員只在第一次發言時收到完整附件區塊(含內嵌文字),之後靠 session 記憶;
   // 不可續接的成員每回合都要重送,否則下一輪就完全不知道有附件這回事。
-  attachmentPrompt(agent, adapter, resumable) {
+  attachmentPrompt(agent: any, adapter: any, resumable: any) {
     if (!this.attachments.length) return '';
     const seen = this.attachmentsSeen.has(agent.id);
     if (seen && resumable) return '';
@@ -559,15 +579,15 @@ class Orchestrator extends EventEmitter {
   // 收集該成員尚未看到的訊息,組成「[名稱]: 內容」的紀錄
   // 不支援 resume 的成員(自訂 CLI、所有 OpenAI 相容 API)每回合都要重送全部紀錄,
   // 這裡要加上字元上限,否則長討論會直接撞上模型的 context 上限。
-  unseenTranscript(agent, current) {
+  unseenTranscript(agent: any, current: any) {
     const seen = this.lastSeen[agent.id];
     const resumable = !!getAdapter(agent.cli)?.supportsResume;
     // 可續接且發言過的成員只需要新訊息;第一次發言(含剛載入的歷史對話)要從頭看起
     const incremental = resumable && seen != null;
     const from = incremental ? seen : 0;
-    const entries = [];
+    const entries: any[] = [];
     // 整段對話的第一個任務(載入歷史對話時就是原始任務)也要保留
-    const firstUser = this.messages.findIndex((m) => m.kind === 'user');
+    const firstUser = this.messages.findIndex((m: any) => m.kind === 'user');
     for (let i = from; i < this.messages.length; i++) {
       const m = this.messages[i];
       if (m === current || m.status === 'running') continue;
@@ -577,13 +597,13 @@ class Orchestrator extends EventEmitter {
       else if (m.kind === 'system' && m.level !== 'error' && m.text.startsWith('**分工結果**')) entries.push({ text: `[系統]:\n${m.text}`, pinned: true });
     }
     if (entries.length === 0) return '';
-    if (incremental) return entries.map((e) => e.text).join(SEP); // 只送新訊息,量本來就小
+    if (incremental) return entries.map((e: any) => e.text).join(SEP); // 只送新訊息,量本來就小
     return truncateTranscript(entries, Number(this.config.settings.maxTranscriptChars) || 0);
   }
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent, instruction, { phase, hideAgreed = false, group = null } = {}) {
+  async turn(agent: any, instruction: any, { phase, hideAgreed = false, group = null }: any = {}) {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}) });
     const transcript = this.unseenTranscript(agent, msg);
@@ -604,12 +624,12 @@ class Orchestrator extends EventEmitter {
       cwd: this.taskCwd || this.config.settings.workDir,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(agent, adapter) : [],
-      onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
-      onSession: (id) => { this.sessions[agent.id] = id; },
-      onText: (t) => { text = t; this.updateMessage(msg, { text: t }); },
-      onThinking: (t) => this.updateMessage(msg, { thinking: t }),
-      onActivity: (a) => {
-        const existing = msg.activities.find((x) => x.id === a.id);
+      onProc: (p: any) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
+      onSession: (id: any) => { this.sessions[agent.id] = id; },
+      onText: (t: any) => { text = t; this.updateMessage(msg, { text: t }); },
+      onThinking: (t: any) => this.updateMessage(msg, { thinking: t }),
+      onActivity: (a: any) => {
+        const existing = msg.activities.find((x: any) => x.id === a.id);
         if (existing) Object.assign(existing, a); else msg.activities.push({ ...a });
         this.emitMessage(msg);
       },
@@ -630,13 +650,13 @@ class Orchestrator extends EventEmitter {
 }
 
 // 「[使用者 → @Codex]」:讓每位成員都看得出這則訊息指定給誰
-function mentionLabel(m) {
-  const names = Array.isArray(m.mentions) ? m.mentions.map((x) => x && x.name).filter(Boolean) : [];
-  return names.length ? ` → ${names.map((n) => `@${n}`).join('、')}` : '';
+function mentionLabel(m: any) {
+  const names = Array.isArray(m.mentions) ? m.mentions.map((x: any) => x && x.name).filter(Boolean) : [];
+  return names.length ? ` → ${names.map((n: any) => `@${n}`).join('、')}` : '';
 }
 
 // 從紀錄還原訊息:補齊欄位;存檔時還在輸出中的訊息不可能再完成,標成中斷
-function restoreMessage(m) {
+function restoreMessage(m: any) {
   const kind = MESSAGE_KINDS.has(m.kind) ? m.kind : 'system';
   const msg = {
     ...m,
@@ -652,11 +672,11 @@ function restoreMessage(m) {
 }
 
 // ---------- 對話紀錄截斷 ----------
-const omitNotice = (n) => `…(已省略中間 ${n} 則訊息)…`;
+const omitNotice = (n: any) => `…(已省略中間 ${n} 則訊息)…`;
 const CLIP_NOTICE = '\n…(此則訊息過長,已截斷)…';
 
 // 單則訊息本身就超過預算時就地裁尾,避免一則訊息吃掉整個額度
-function clipEntry(text, max) {
+function clipEntry(text: any, max: any) {
   if (text.length <= max) return text;
   if (max <= CLIP_NOTICE.length) return CLIP_NOTICE.slice(0, Math.max(0, max));
   return text.slice(0, max - CLIP_NOTICE.length) + CLIP_NOTICE;
@@ -666,16 +686,16 @@ function clipEntry(text, max) {
 // pinned(任務敘述、分工結果)與最新一則一定保留,其餘從新到舊盡量保留;
 // 被裁掉的位置就地插入「已省略中間 N 則訊息」,不做靜默裁切。
 // limit <= 0 視為不限制。
-function truncateTranscript(entries, limit) {
-  const texts = entries.map((e) => e.text);
+function truncateTranscript(entries: any, limit: any) {
+  const texts = entries.map((e: any) => e.text);
   const full = texts.join(SEP);
   if (!Number.isFinite(limit) || limit <= 0 || full.length <= limit) return full;
 
   const budget = Math.max(0, limit - TRUNCATE_RESERVE);
   const last = entries.length - 1;
   // 最新一則等同釘選:成員至少要看得到上一位說了什麼
-  const items = entries.map((e, i) => ({ pinned: !!e.pinned || i === last, text: e.text }));
-  const cost = (t) => t.length + SEP.length;
+  const items = entries.map((e: any, i: any) => ({ pinned: !!e.pinned || i === last, text: e.text }));
+  const cost = (t: any) => t.length + SEP.length;
 
   // 第一步:決定保留哪些。釘選的必留,其餘從最新往回補,遇到放不下的就停,
   // 保留一段連續的最近紀錄而不是零散幾則。
@@ -692,12 +712,12 @@ function truncateTranscript(entries, limit) {
   // 第二步:必留的部分本身就超過預算時(例如任務敘述與分工結果都很長),
   // 在所有保留項目之間做 max-min 公平分配再各自裁尾。
   // 不能讓排在前面的項目吃光額度,否則最後的整體裁切會把最新一則整個擠掉。
-  const kept = items.map((_, i) => i).filter((i) => keep[i]);
-  const allowance = allocateBudget(kept.map((i) => cost(items[i].text)), budget);
+  const kept = items.map((_: any, i: any) => i).filter((i: any) => keep[i]);
+  const allowance = allocateBudget(kept.map((i: any) => cost(items[i].text)), budget);
   const shown = new Map();
-  kept.forEach((i, k) => shown.set(i, clipEntry(items[i].text, Math.max(0, allowance[k] - SEP.length))));
+  kept.forEach((i: any, k: any) => shown.set(i, clipEntry(items[i].text, Math.max(0, allowance[k] - SEP.length))));
 
-  const out = [];
+  const out: any[] = [];
   let dropped = 0;
   for (let i = 0; i < items.length; i++) {
     if (!keep[i]) { dropped++; continue; }
@@ -712,9 +732,9 @@ function truncateTranscript(entries, limit) {
 
 // max-min 公平分配:需求小的先拿滿,省下來的額度再平分給還不夠的,
 // 所以沒有任何一項會被歸零,總和也不會超過 budget。
-function allocateBudget(costs, budget) {
+function allocateBudget(costs: any, budget: any) {
   const out = new Array(costs.length).fill(0);
-  const order = costs.map((_, i) => i).sort((a, b) => costs[a] - costs[b]);
+  const order = costs.map((_: any, i: any) => i).sort((a: any, b: any) => costs[a] - costs[b]);
   let remaining = budget;
   let left = costs.length;
   for (const i of order) {
@@ -730,25 +750,25 @@ function allocateBudget(costs, budget) {
 // 兩份以上成果:每人審查下一位(環狀)。
 // 只有一份:從其他啟用成員裡挑一位(優先有執行成果的),讓單人執行也有品質關卡。
 // 整場只剩一名啟用成員時回空陣列,由呼叫端提示並略過。
-function pickReviewPairs(agents, reports) {
+function pickReviewPairs(agents: any, reports: any) {
   if (!Array.isArray(reports) || reports.length === 0) return [];
   if (reports.length >= 2) {
-    return reports.map((r, i) => ({ reviewer: r.agent, target: reports[(i + 1) % reports.length] }));
+    return reports.map((r: any, i: any) => ({ reviewer: r.agent, target: reports[(i + 1) % reports.length] }));
   }
   const target = reports[0];
-  const executed = new Set(reports.map((r) => r.agent.id));
-  const candidates = (agents || []).filter((a) => a && a.id !== target.agent.id);
-  const reviewer = candidates.find((a) => executed.has(a.id)) || candidates[0];
+  const executed = new Set(reports.map((r: any) => r.agent.id));
+  const candidates = (agents || []).filter((a: any) => a && a.id !== target.agent.id);
+  const reviewer = candidates.find((a: any) => executed.has(a.id)) || candidates[0];
   return reviewer ? [{ reviewer, target }] : [];
 }
 
 // ---------- git 變更 ----------
 // 讀工作目錄的 git 變更;不是 git repo、找不到 git、逾時都安靜回 null,絕不影響主流程。
-function gitStatus(cwd) {
-  return new Promise((resolve) => {
+function gitStatus(cwd: any) {
+  return new Promise((resolve: any) => {
     try {
       // --untracked-files=all:預設的 normal 模式會把整個未追蹤目錄收合成「?? dir/」,拿不到檔案清單
-      execFile('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      execFile('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err: any, stdout: any) => {
         resolve(err ? null : parsePorcelain(stdout));
       });
     } catch { resolve(null); }
@@ -756,7 +776,7 @@ function gitStatus(cwd) {
 }
 
 // 「XY path」→ Map(path → status);rename 的「old -> new」取新路徑
-function parsePorcelain(stdout) {
+function parsePorcelain(stdout: any) {
   const out = new Map();
   for (const line of String(stdout || '').split('\n')) {
     if (line.length < 4) continue;
@@ -775,13 +795,13 @@ function parsePorcelain(stdout) {
 // 並標出哪些檔案在執行前就已經是變更狀態,讓總結不會過度宣稱。
 // 附件暫存目錄是本 app 自己放的,不是成員改的檔案,一定要從變更報告排除,
 // 否則使用者上傳的圖會被當成「執行階段產生的變更」。
-const isRuntimePath = (file) => file === RUNTIME_DIR || file.startsWith(`${RUNTIME_DIR}/`);
+const isRuntimePath = (file: any) => file === RUNTIME_DIR || file.startsWith(`${RUNTIME_DIR}/`);
 
-function describeGitChanges(before, after) {
+function describeGitChanges(before: any, after: any) {
   if (!after || after.size === 0) return null;
-  const visible = [...after].filter(([file]) => !isRuntimePath(file));
+  const visible = [...after].filter(([file]: any) => !isRuntimePath(file));
   if (visible.length === 0) return null;
-  const lines = [];
+  const lines: any[] = [];
   for (const [file, status] of visible) {
     // -uall 展開未追蹤目錄後檔案數可能很多(例如工作目錄沒有 .gitignore),不能讓清單灌爆總結提示
     if (lines.length >= MAX_GIT_FILES) { lines.push(`- (另有 ${visible.length - MAX_GIT_FILES} 個變更檔案未列出)`); break; }
@@ -793,7 +813,7 @@ function describeGitChanges(before, after) {
 
 // ---------- JSON 解析 ----------
 // 從 start 的「{」往後找到配對的「}」,會正確跳過字串內的括號與跳脫字元
-function matchBrace(s, start) {
+function matchBrace(s: any, start: any) {
   let depth = 0;
   let inStr = false;
   let esc = false;
@@ -813,31 +833,31 @@ function matchBrace(s, start) {
 }
 
 // 掃描出所有「括號平衡」的候選片段逐一嘗試,模型在 JSON 前後多寫說明文字也不會壞
-function extractJson(text) {
+function extractJson(text: any) {
   if (!text) return null;
   const s = String(text).replace(/```(?:json)?/gi, '');
-  const candidates = [];
+  const candidates: any[] = [];
   for (let i = 0; i < s.length; i++) {
     if (s[i] !== '{') continue;
     const end = matchBrace(s, i);
     if (end > i) candidates.push(s.slice(i, end + 1));
   }
-  candidates.sort((a, b) => b.length - a.length); // 外層物件優先
-  const parsed = [];
+  candidates.sort((a: any, b: any) => b.length - a.length); // 外層物件優先
+  const parsed: any[] = [];
   for (const c of candidates) {
     try {
       const o = JSON.parse(c);
       if (o && typeof o === 'object' && !Array.isArray(o)) parsed.push(o);
     } catch {}
   }
-  return parsed.find((o) => Array.isArray(o.assignments)) || parsed[0] || null;
+  return parsed.find((o: any) => Array.isArray(o.assignments)) || parsed[0] || null;
 }
 
 // ---------- 成員比對 ----------
-const norm = (s) => String(s ?? '').toLowerCase().replace(/\s+/g, '').replace(/[「」『』"'`【】\[\]()()]/g, '');
+const norm = (s: any) => String(s ?? '').toLowerCase().replace(/\s+/g, '').replace(/[「」『』"'`【】\[\]()()]/g, '');
 
 // 先比對 A1/A2 代號,再退回正規化後的名稱,最後才做寬鬆的包含比對
-function resolveAgent(token, codes, agents) {
+function resolveAgent(token: any, codes: any, agents: any) {
   const raw = String(token ?? '').trim();
   if (!raw) return null;
   const byCode = codes.get(raw.toUpperCase());
@@ -845,10 +865,10 @@ function resolveAgent(token, codes, agents) {
   const n = norm(raw);
   if (!n) return null;
   for (const [code, a] of codes) if (norm(code) === n) return a;
-  const exact = agents.find((a) => norm(a.name) === n);
+  const exact = agents.find((a: any) => norm(a.name) === n);
   if (exact) return exact;
   if (n.length < 2) return null;
-  return agents.find((a) => {
+  return agents.find((a: any) => {
     const an = norm(a.name);
     return an.length >= 2 && (an.includes(n) || n.includes(an));
   }) || null;

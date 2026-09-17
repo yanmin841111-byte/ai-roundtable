@@ -11,8 +11,8 @@ process.env.CODEX_HOME = codexHome; process.env.CLAUDE_CONFIG_DIR = claudeHome;
 
 const M = require('../src/models');
 const R = require('../src/model-rules');
-let n = 0; const t = (name, fn) => { fn(); n++; console.log('ok -', name); };
-const lv = (...e) => e.map((effort) => ({ effort }));
+let n = 0; const t = (name: any, fn: any) => { fn(); n++; console.log('ok -', name); };
+const lv = (...e: any[]) => e.map((effort: any) => ({ effort }));
 
 t('兩邊都沒快取時退回內建清單', () => {
   assert.strictEqual(M.listModels('codex').source, 'fallback');
@@ -32,7 +32,7 @@ fs.writeFileSync(codexFile, JSON.stringify({ models: [
 t('Codex:排除隱藏與退役、依優先度排序、無效預設強度清空', () => {
   const r = M.listModels('codex');
   assert.strictEqual(r.source, 'cache');
-  assert.deepStrictEqual(r.models.map((m) => m.id), ['a', 'b', 'noprio']);
+  assert.deepStrictEqual(r.models.map((m: any) => m.id), ['a', 'b', 'noprio']);
   assert.strictEqual(r.models[0].defaultEffort, '');
   assert.strictEqual(r.models[1].defaultEffort, 'low');
 });
@@ -45,7 +45,7 @@ t('檔案內容變更後自動重讀', () => {
   const later = new Date(Date.now() + 5000);
   fs.writeFileSync(codexFile, JSON.stringify({ models: [{ slug: 'z', visibility: 'list', supported_reasoning_levels: lv('low') }] }));
   fs.utimesSync(codexFile, later, later);
-  assert.deepStrictEqual(M.listModels('codex').models.map((m) => m.id), ['z']);
+  assert.deepStrictEqual(M.listModels('codex').models.map((m: any) => m.id), ['z']);
 });
 
 t('Codex 快取壞掉時退回內建清單', () => {
@@ -55,8 +55,8 @@ t('Codex 快取壞掉時退回內建清單', () => {
   assert.strictEqual(M.listModels('codex').source, 'fallback');
 });
 
-const claudeCat = (models) => JSON.stringify({ catalog: { config: { models } } });
-const effortThinking = (ids, def) => ({ type: 'effort', effort_options: ids.map((id) => (id === def ? { id, badge: {} } : { id })) });
+const claudeCat = (models: any) => JSON.stringify({ catalog: { config: { models } } });
+const effortThinking = (ids: any, def: any) => ({ type: 'effort', effort_options: ids.map((id: any) => (id === def ? { id, badge: {} } : { id })) });
 const older = path.join(catDir, 'older.json'); const newer = path.join(catDir, 'newer.json');
 fs.writeFileSync(older, claudeCat([
   { id: 'claude-x-1', name: 'X 1', short_name: 'X', section: 'main', thinking: effortThinking(['low', 'high', 'max'], 'high') },
@@ -75,7 +75,7 @@ t('Claude:最新的檔案壞掉時改用較舊的檔案', () => {
 
 t('Claude:只取 main、別名轉小寫、非 effort 型視為不支援強度', () => {
   const r = M.listModels('claude');
-  assert.deepStrictEqual(r.models.map((m) => m.id), ['claude-x-1', 'claude-y']);
+  assert.deepStrictEqual(r.models.map((m: any) => m.id), ['claude-x-1', 'claude-y']);
   assert.deepStrictEqual(r.models[0].aliases, ['x']);
   assert.strictEqual(r.models[0].defaultEffort, 'high');
   assert.deepStrictEqual(r.models[1].efforts, []);

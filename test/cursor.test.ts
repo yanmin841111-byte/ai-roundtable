@@ -8,8 +8,8 @@ const { createCursorAdapter, parseCursorModels, describeCursorTool } = require('
 const { builtinAdapters } = require('../src/adapters/builtin');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-roundtable-cursor-'));
-const tests = [];
-const t = (name, fn) => tests.push({ name, fn });
+const tests: any[] = [];
+const t = (name: any, fn: any) => tests.push({ name, fn });
 
 // 假 CLI:把參數與 stdin 寫到 FAKE_LOG,再依 FAKE_MODE 輸出事件
 const fakeBin = path.join(tmp, 'cursor-agent');
@@ -50,22 +50,22 @@ process.stdin.on('end', () => {
 `);
 fs.chmodSync(fakeBin, 0o755);
 
-function makeCtx(extra = {}) {
-  const log = { texts: [], thinking: [], activities: [], sessions: [] };
+function makeCtx(extra: any = {}) {
+  const log: any = { texts: [], thinking: [], activities: [], sessions: [] };
   const ctx = {
     prompt: 'hello', systemPrompt: 'SYS', sessionId: null, cwd: tmp, timeoutMs: 15000,
-    onText: (x) => log.texts.push(x),
-    onThinking: (x) => log.thinking.push(x),
-    onActivity: (a) => log.activities.push(a),
-    onSession: (id) => log.sessions.push(id),
+    onText: (x: any) => log.texts.push(x),
+    onThinking: (x: any) => log.thinking.push(x),
+    onActivity: (a: any) => log.activities.push(a),
+    onSession: (id: any) => log.sessions.push(id),
     onProc: () => {},
     ...extra,
   };
   return { ctx, log };
 }
 
-function withEnv(env, fn) {
-  const prev = {};
+function withEnv(env: any, fn: any) {
+  const prev: Record<string, any> = {};
   for (const k of Object.keys(env)) { prev[k] = process.env[k]; process.env[k] = env[k]; }
   return Promise.resolve().then(fn).finally(() => {
     for (const k of Object.keys(env)) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; }
@@ -76,7 +76,7 @@ const logFile = path.join(tmp, 'log.json');
 const readLog = () => JSON.parse(fs.readFileSync(logFile, 'utf8'));
 
 t('內建清單包含 Cursor CLI', () => {
-  const cursor = builtinAdapters.find((a) => a.id === 'cursor');
+  const cursor = builtinAdapters.find((a: any) => a.id === 'cursor');
   assert.ok(cursor);
   assert.strictEqual(cursor.bin, 'cursor-agent');
   assert.strictEqual(cursor.supportsResume, true);
@@ -85,7 +85,7 @@ t('內建清單包含 Cursor CLI', () => {
 
 t('解析 --list-models 輸出', () => {
   const models = parseCursorModels('Available models\n\n\x1b[1mauto - Auto (default)\x1b[0m\ngpt-5.2 - GPT-5.2\ngpt-5.2 - dup\nLoading...\n');
-  assert.deepStrictEqual(models.map((m) => m.id), ['auto', 'gpt-5.2']);
+  assert.deepStrictEqual(models.map((m: any) => m.id), ['auto', 'gpt-5.2']);
   assert.strictEqual(models[0].label, 'Auto');
   assert.strictEqual(models[0].description, 'Cursor 預設模型');
   assert.deepStrictEqual(models[1].efforts, []);
@@ -119,14 +119,14 @@ t('第一回合:唯讀參數、角色設定接在提示詞前、段落與工具�
   assert.deepStrictEqual(log.sessions, ['sess-42']);
   assert.deepStrictEqual(r.usage, { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheWriteTokens: 0 });
   assert.ok(log.texts.includes('Running the command.'), '串流中要能看到片段');
-  assert.ok(log.texts.every((x) => x.split('Running the command.').length <= 2), '不能把片段與完整段落疊在一起');
+  assert.ok(log.texts.every((x: any) => x.split('Running the command.').length <= 2), '不能把片段與完整段落疊在一起');
 
-  const shell = log.activities.filter((a) => a.id === 't1');
+  const shell = log.activities.filter((a: any) => a.id === 't1');
   assert.strictEqual(shell[0].status, 'running');
   assert.strictEqual(shell[0].title, '執行指令:echo hi > out.txt');
   assert.strictEqual(shell[1].status, 'done');
   assert.strictEqual(shell[1].result, 'ok');
-  const read = log.activities.filter((a) => a.id === 't2');
+  const read = log.activities.filter((a: any) => a.id === 't2');
   assert.strictEqual(read[1].status, 'error');
   assert.strictEqual(read[1].result, 'File not found');
 }));
@@ -141,7 +141,7 @@ t('續接回合:帶 --resume、--force,不再送角色設定;強度會提示略�
   assert.ok(!args.includes('--mode'));
   assert.ok(!args.includes('--model'));
   assert.strictEqual(stdin, 'hello');
-  assert.ok(log.activities.some((a) => a.kind === 'note' && /high/.test(a.title)));
+  assert.ok(log.activities.some((a: any) => a.kind === 'note' && /high/.test(a.title)));
   assert.deepStrictEqual(log.sessions, [], 'session id 沒變時不重複回報');
 }));
 
@@ -161,14 +161,14 @@ t('模型清單:讀取前是 loading,讀取後來自 CLI;找不到指令時回�
   await adapter.refreshModels();
   const listed = adapter.listModels();
   assert.strictEqual(listed.source, 'cli');
-  assert.deepStrictEqual(listed.models.map((m) => m.id), ['auto', 'composer-2.5-fast', 'claude-opus-5-thinking-high']);
+  assert.deepStrictEqual(listed.models.map((m: any) => m.id), ['auto', 'composer-2.5-fast', 'claude-opus-5-thinking-high']);
 
   const missing = createCursorAdapter({ bin: path.join(tmp, 'nope') });
   await missing.refreshModels();
   const failed = missing.listModels();
   assert.strictEqual(failed.source, 'error');
   assert.ok(failed.error);
-  assert.deepStrictEqual(failed.models.map((m) => m.id), ['auto']);
+  assert.deepStrictEqual(failed.models.map((m: any) => m.id), ['auto']);
 });
 
 (async () => {
@@ -178,7 +178,7 @@ t('模型清單:讀取前是 loading,讀取後來自 CLI;找不到指令時回�
       await fn();
       passed++;
       console.log('ok -', name);
-    } catch (e) {
+    } catch (e: any) {
       console.log('FAIL -', name);
       console.log(e);
       process.exitCode = 1;

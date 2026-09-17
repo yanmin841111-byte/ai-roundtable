@@ -2,7 +2,7 @@
 const assert = require('assert');
 const { normalizeUsage, detectShape, SHAPES } = require('../src/usage');
 
-let n = 0; const t = (name, fn) => { fn(); n++; console.log('ok -', name); };
+let n = 0; const t = (name: any, fn: any) => { fn(); n++; console.log('ok -', name); };
 
 // 兩組真實樣本,取自 claude -p --output-format stream-json 的 result 事件
 // (第二組是同一個 session 用 --resume 接上的第二回合)
@@ -164,10 +164,10 @@ t('混合來源:null 不被當成 0,unknown 不計入', () => {
     normalizeUsage({ input_tokens: 9000, cached_input_tokens: 8000, output_tokens: 50 }, 'codex'),
     normalizeUsage({ tokens_used: 999 }),
   ];
-  const known = rows.filter((u) => u.shape !== 'unknown');
-  const sum = (key) => {
-    const vals = known.map((u) => u[key]).filter((v) => v != null);
-    return { total: vals.reduce((a, b) => a + b, 0), reported: vals.length };
+  const known = rows.filter((u: any) => u.shape !== 'unknown');
+  const sum = (key: any) => {
+    const vals = known.map((u: any) => u[key]).filter((v: any) => v != null);
+    return { total: vals.reduce((a: any, b: any) => a + b, 0), reported: vals.length };
   };
 
   assert.strictEqual(known.length, 2, 'unknown 不能進入總計');

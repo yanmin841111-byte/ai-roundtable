@@ -6,13 +6,18 @@ const path = require('path');
 const REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 
 class SecretStore {
-  constructor(userDataDir, safeStorage) {
+  file: any;
+  safeStorage: any;
+  values: any;
+  backupFile: any;
+
+  constructor(userDataDir: any, safeStorage: any) {
     this.file = path.join(userDataDir, 'secrets.json');
     this.safeStorage = safeStorage;
     this.values = this.load();
   }
 
-  assertRef(ref) {
+  assertRef(ref: any) {
     if (!REF_PATTERN.test(ref || '')) throw new Error('secretRef 格式不正確');
   }
 
@@ -25,7 +30,7 @@ class SecretStore {
   }
 
   load() {
-    let raw;
+    let raw: any;
     try { raw = fs.readFileSync(this.file, 'utf8'); } catch { return {}; } // 檔案不存在:還沒存過任何 key
     try {
       const parsed = JSON.parse(raw);
@@ -45,7 +50,7 @@ class SecretStore {
     try { fs.chmodSync(this.file, 0o600); } catch {}
   }
 
-  set(ref, value) {
+  set(ref: any, value: any) {
     this.assertRef(ref);
     if (typeof value !== 'string' || !value.trim()) throw new Error('API key 不可空白');
     this.requireEncryption();
@@ -55,7 +60,7 @@ class SecretStore {
     return this.status(ref);
   }
 
-  get(ref) {
+  get(ref: any) {
     this.assertRef(ref);
     const encoded = this.values[ref];
     if (!encoded) return '';
@@ -67,7 +72,7 @@ class SecretStore {
     }
   }
 
-  clear(ref) {
+  clear(ref: any) {
     this.assertRef(ref);
     const existed = Object.prototype.hasOwnProperty.call(this.values, ref);
     if (existed) {
@@ -77,7 +82,7 @@ class SecretStore {
     return { configured: false, source: null, hint: '' };
   }
 
-  status(ref, envName) {
+  status(ref: any, envName: any = undefined) {
     this.assertRef(ref);
     if (this.values[ref]) {
       const value = this.get(ref);
@@ -90,7 +95,7 @@ class SecretStore {
   }
 }
 
-function mask(value) {
+function mask(value: any) {
   const text = String(value || '');
   if (!text) return '';
   if (text.length <= 8) return `${text.slice(0, 2)}…${text.slice(-2)}`;

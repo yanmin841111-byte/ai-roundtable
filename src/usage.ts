@@ -17,7 +17,7 @@
 const SHAPES = ['anthropic', 'codex', 'openai', 'cursor'];
 
 // 只接受有限的數字;字串數字也收(有些 CLI 會輸出字串)
-function num(value) {
+function num(value: any) {
   if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -25,8 +25,8 @@ function num(value) {
 
 // 相加時 null 視為「沒有這一項」,但只要有任何一項有值,結果就有值;
 // 全部都沒有才回 null。
-function addParts(...values) {
-  let total = null;
+function addParts(...values: any[]) {
+  let total: any = null;
   for (const v of values) {
     const n = num(v);
     if (n == null) continue;
@@ -35,10 +35,10 @@ function addParts(...values) {
   return total;
 }
 
-const has = (o, k) => o[k] != null;
+const has = (o: any, k: any) => o[k] != null;
 
 // 依欄位特徵判斷慣例。只在簽名沒有歧義時回答,否則回 null 交給 unknown。
-function detectShape(raw) {
+function detectShape(raw: any) {
   if (!raw || typeof raw !== 'object') return null;
   if (has(raw, 'cache_read_input_tokens') || has(raw, 'cache_creation_input_tokens')) return 'anthropic';
   if (has(raw, 'prompt_tokens') || has(raw, 'completion_tokens')) return 'openai';
@@ -50,12 +50,12 @@ function detectShape(raw) {
   return null;
 }
 
-const unknown = (raw) => ({
+const unknown = (raw: any) => ({
   inputTokens: null, cachedInputTokens: null, cacheWriteTokens: null,
   outputTokens: null, costUsd: null, shape: 'unknown', raw: raw ?? null,
 });
 
-function normalizeUsage(raw, shape) {
+function normalizeUsage(raw: any, shape: any) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return unknown(raw ?? null);
   const kind = SHAPES.includes(shape) ? shape : detectShape(raw);
   if (!kind) return unknown(raw);

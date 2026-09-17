@@ -10,17 +10,17 @@ const { normalizeUsage } = require('../usage');
 
 let registry = new Registry();
 
-function setRegistry(r) { registry = r; }
+function setRegistry(r: any) { registry = r; }
 function getRegistry() { return registry; }
-function getAdapter(id) { return registry.get(id); }
+function getAdapter(id: any) { return registry.get(id); }
 
 // 成員實際能不能改檔案:成員設定允許,且轉接器支援
-function effectiveCanEdit(agent) {
+function effectiveCanEdit(agent: any) {
   const adapter = registry.get(agent.cli);
   return !!(agent.canEdit && adapter && adapter.supportsEdit);
 }
 
-async function runTurn(agent, ctx) {
+async function runTurn(agent: any, ctx: any) {
   const noop = () => {};
   ctx = { onText: noop, onThinking: noop, onActivity: noop, onSession: noop, onProc: noop, ...ctx };
   const adapter = registry.get(agent.cli);
@@ -33,7 +33,7 @@ async function runTurn(agent, ctx) {
     // 所有 usage 都在這個出口正規化,上層(orchestrator、介面、匯出)只會看到同一種形狀
     merged.usage = merged.usage ? normalizeUsage(merged.usage, adapter.usageShape) : null;
     return merged;
-  } catch (e) {
+  } catch (e: any) {
     return { text: '', thinking: '', sessionId: null, usage: null, error: `${adapter.label} 執行失敗:${e.message}` };
   }
 }

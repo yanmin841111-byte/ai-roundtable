@@ -45,7 +45,11 @@ function defaultConfig() {
 }
 
 class Store {
-  constructor(userDataDir) {
+  userDataDir: any;
+  file: any;
+  config: any;
+
+  constructor(userDataDir: any) {
     this.userDataDir = userDataDir;
     this.file = path.join(userDataDir, 'config.json');
     this.config = this.load();
@@ -59,7 +63,7 @@ class Store {
       return defaultConfig();
     }
   }
-  save(config) {
+  save(config: any) {
     this.config = config;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(config, null, 2));
