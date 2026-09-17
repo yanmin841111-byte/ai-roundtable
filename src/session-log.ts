@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { deleteConversation } from './attachments';
+import type { OkResult, SessionReadResult } from './ipc-types';
+
+type WriteSessionResult = { ok: true; file: string; id: string } | { ok: false; file: null; error: string };
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
@@ -99,7 +102,7 @@ function toEnvelope(parsed: any, fallbackDate: any) {
 // 寫入同一目錄的暫存檔後 rename，避免留下只寫了一半的 session。
 // 所有錯誤都轉成回傳值，呼叫端不需要為記錄失敗中止任務。
 // 帶 id 時覆寫同一份紀錄(同一段對話持續累積、載入歷史後繼續討論),否則新建一份。
-function writeSession(userDataDir: any, messages: any, { now, logger, conversationId, id }: any = {}) {
+function writeSession(userDataDir: any, messages: any, { now, logger, conversationId, id }: any = {}): WriteSessionResult {
   // 連檔名與 envelope 的組裝都要在 try 裡:呼叫端傳進壞掉的 now 或 userDataDir 時,
   // 這裡一樣只能回傳錯誤,絕不能讓記錄失敗把整個任務炸掉。
   let tmp: any = null;
@@ -182,7 +185,7 @@ function listSessions(userDataDir: any, { limit = LIST_LIMIT }: any = {}) {
   return { sessions };
 }
 
-function readSession(userDataDir: any, id: any) {
+function readSession(userDataDir: any, id: any): SessionReadResult {
   const full = resolveSessionPath(userDataDir, id);
   if (!full) return { ok: false, error: '無效的紀錄代號' };
   try {
@@ -195,7 +198,7 @@ function readSession(userDataDir: any, id: any) {
   }
 }
 
-function deleteSession(userDataDir: any, id: any) {
+function deleteSession(userDataDir: any, id: any): OkResult {
   const full = resolveSessionPath(userDataDir, id);
   if (!full) return { ok: false, error: '無效的紀錄代號' };
   try {

@@ -1,55 +1,66 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn, RendererApi } from './src/ipc-types';
 
-contextBridge.exposeInMainWorld('api', {
-  getConfig: () => ipcRenderer.invoke('config:get'),
-  saveConfig: (cfg: any) => ipcRenderer.invoke('config:save', cfg),
-  cliTypes: () => ipcRenderer.invoke('cli:types'),
-  checkCli: () => ipcRenderer.invoke('cli:check'),
-  pickDir: () => ipcRenderer.invoke('dialog:pickDir'),
-  pickExecutable: () => ipcRenderer.invoke('dialog:pickExecutable'),
-  openPath: (p: any) => ipcRenderer.invoke('shell:openPath', p),
-  snapshot: () => ipcRenderer.invoke('chat:snapshot'),
-  send: (text: any, mode: any, attachments: any) => ipcRenderer.invoke('chat:send', { text, mode, attachments }),
-  exportChat: () => ipcRenderer.invoke('chat:export'),
-  openSessions: () => ipcRenderer.invoke('chat:openSessions'),
-  stop: () => ipcRenderer.invoke('chat:stop'),
-  reset: () => ipcRenderer.invoke('chat:reset'),
-  resume: (sessionId: any) => ipcRenderer.invoke('chat:resume', sessionId),
+function invoke<C extends InvokeChannel>(channel: C, ...args: IpcArgs<C>): Promise<IpcReturn<C>> {
+  return ipcRenderer.invoke(channel, ...args);
+}
+
+function on<C extends EventChannel>(channel: C, fn: (payload: IpcEvents[C]) => void) {
+  ipcRenderer.on(channel, (_e, payload: IpcEvents[C]) => fn(payload));
+}
+
+const api: RendererApi = {
+  getConfig: () => invoke('config:get'),
+  saveConfig: (cfg) => invoke('config:save', cfg),
+  cliTypes: () => invoke('cli:types'),
+  checkCli: () => invoke('cli:check'),
+  pickDir: () => invoke('dialog:pickDir'),
+  pickExecutable: () => invoke('dialog:pickExecutable'),
+  openPath: (p) => invoke('shell:openPath', p),
+  snapshot: () => invoke('chat:snapshot'),
+  send: (text, mode, attachments) => invoke('chat:send', { text, mode, attachments }),
+  exportChat: () => invoke('chat:export'),
+  openSessions: () => invoke('chat:openSessions'),
+  stop: () => invoke('chat:stop'),
+  reset: () => invoke('chat:reset'),
+  resume: (sessionId) => invoke('chat:resume', sessionId),
   // 附件:主程序負責驗證、落地與上限,renderer 只拿 metadata 與縮圖 data URL
   attachments: {
-    list: () => ipcRenderer.invoke('attachments:list'),
-    pick: () => ipcRenderer.invoke('attachments:pick'),
+    list: () => invoke('attachments:list'),
+    pick: () => invoke('attachments:pick'),
     // items: [{ name, path }](拖放)或 [{ name, data: ArrayBuffer }]
-    add: (items: any) => ipcRenderer.invoke('attachments:add', { items }),
+    add: (items) => invoke('attachments:add', { items }),
     // Electron 32 起 File.path 已移除:拖放時用這個取本機路徑,
     // 就不必把整個檔案讀成 ArrayBuffer 再走一次 IPC
-    pathForFile: (file: any) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
-    remove: (id: any) => ipcRenderer.invoke('attachments:remove', { id }),
-    thumb: (meta: any) => ipcRenderer.invoke('attachments:thumb', meta),
+    pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
+    remove: (id) => invoke('attachments:remove', { id }),
+    thumb: (meta) => invoke('attachments:thumb', meta),
   },
   sessions: {
-    list: () => ipcRenderer.invoke('session:list'),
-    read: (id: any) => ipcRenderer.invoke('session:read', id),
-    remove: (id: any) => ipcRenderer.invoke('session:delete', id),
+    list: () => invoke('session:list'),
+    read: (id) => invoke('session:read', id),
+    remove: (id) => invoke('session:delete', id),
   },
   secrets: {
-    set: (ref: any, value: any) => ipcRenderer.invoke('secrets:set', { ref, value }),
-    status: (ref: any, envName: any) => ipcRenderer.invoke('secrets:status', { ref, envName }),
-    clear: (ref: any) => ipcRenderer.invoke('secrets:clear', { ref }),
-    test: (adapterId: any) => ipcRenderer.invoke('secrets:test', { adapterId }),
+    set: (ref, value) => invoke('secrets:set', { ref, value }),
+    status: (ref, envName) => invoke('secrets:status', { ref, envName }),
+    clear: (ref) => invoke('secrets:clear', { ref }),
+    test: (adapterId) => invoke('secrets:test', { adapterId }),
   },
   ext: {
-    list: () => ipcRenderer.invoke('ext:list'),
-    reload: () => ipcRenderer.invoke('ext:reload'),
-    install: (templateFile: any) => ipcRenderer.invoke('ext:install', templateFile),
-    read: (file: any) => ipcRenderer.invoke('ext:read', file),
-    write: (file: any, content: any, originalFile: any) => ipcRenderer.invoke('ext:write', { file, content, originalFile }),
-    remove: (file: any) => ipcRenderer.invoke('ext:delete', file),
-    openDir: () => ipcRenderer.invoke('ext:openDir'),
-    openDocs: () => ipcRenderer.invoke('ext:openDocs'),
+    list: () => invoke('ext:list'),
+    reload: () => invoke('ext:reload'),
+    install: (templateFile) => invoke('ext:install', templateFile),
+    read: (file) => invoke('ext:read', file),
+    write: (file, content, originalFile) => invoke('ext:write', { file, content, originalFile }),
+    remove: (file) => invoke('ext:delete', file),
+    openDir: () => invoke('ext:openDir'),
+    openDocs: () => invoke('ext:openDocs'),
   },
-  onMessage: (fn: any) => ipcRenderer.on('chat:message', (_e: any, m: any) => fn(m)),
-  onState: (fn: any) => ipcRenderer.on('chat:state', (_e: any, s: any) => fn(s)),
-  onReset: (fn: any) => ipcRenderer.on('chat:reset', () => fn()),
-  onSessionSaved: (fn: any) => ipcRenderer.on('session:saved', (_e: any, info: any) => fn(info)),
-});
+  onMessage: (fn) => on('chat:message', fn),
+  onState: (fn) => on('chat:state', fn),
+  onReset: (fn) => on('chat:reset', () => fn()),
+  onSessionSaved: (fn) => on('session:saved', fn),
+};
+
+contextBridge.exposeInMainWorld('api', api);

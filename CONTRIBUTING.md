@@ -58,7 +58,7 @@ Commit 訊息用英文祈使句開頭,第一行簡短說明做了什麼,例如 `
 - 主程序負責驗證與存取檔案,renderer 傳來的路徑、代號與數字一律不信任。
 - 註解說明「為什麼」,不重述程式碼在做什麼。
 - 測試是純 Node.js 腳本(`test/*.test.ts`),不依賴測試框架;放進 `test/` 並以 `.test.ts` 結尾就會被 `npm test` 執行。
-- 主程序與介面共用的 IPC 型別放在 `src/ipc-types.ts`,新增或修改 IPC 時一併更新 `preload.ts` 與 `renderer/api.d.ts`。
+- IPC 的參數與回傳型別集中在 `src/ipc-types.ts` 的 `IpcContract`;新增或修改通道時先改這裡,主程序的 `handle()` 與 `preload.ts` 的 `invoke()` 對不上就會編譯失敗。
 - 使用者的 JS 外掛(`adapters/templates/*.js`)在執行期由主程序載入,維持純 JavaScript,不經過建置。
 
 ## 擴充範本

@@ -350,7 +350,8 @@ async function openHistory(summary: SessionSummary): Promise<void> {
   historyErrors.delete(summary.id);
   try {
     const result = await window.api.sessions.read(summary.id);
-    if (!result || !result.ok || !result.session) throw new Error((result && result.error) || '紀錄不存在或無法讀取');
+    if (!result || !result.ok) throw new Error((result && result.error) || '紀錄不存在或無法讀取');
+    if (!result.session) throw new Error('紀錄不存在或無法讀取');
     const session = result.session;
     openHistoryId = summary.id;
     $('#history-modal-title').textContent = session.title || summary.title || '歷史對話';
@@ -1873,8 +1874,7 @@ async function loadAttachmentThumb(item: AttachmentMeta | PendingAttachment | nu
   if (kind !== 'image' && kind !== 'imageInline') return '';
   const api = attachmentsApi();
   if (api && typeof api.thumb === 'function' && (item.relPath || item.thumb || item.id)) {
-    const result = await api.thumb(item);
-    return typeof result === 'string' ? result : (result && (result.dataUrl || result.url)) || '';
+    return (await api.thumb(item)) || '';
   }
   if (item.file instanceof Blob) return readFileDataUrl(item.file);
   return '';
