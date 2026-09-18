@@ -148,6 +148,7 @@ export interface CliType {
   file?: string;
   description?: string;
   supportsEdit?: boolean;
+  capabilities?: { attachments?: string[]; attachmentsNeedCwd?: boolean };
   usesCustomCommand?: boolean;
   efforts?: string[];
   models?: Model[];

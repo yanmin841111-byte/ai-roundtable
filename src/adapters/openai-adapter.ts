@@ -9,6 +9,8 @@ import { findModel, resolveModelId, resolveEffort } from '../model-rules';
 import { normalizeModels, normalizeCapabilities } from './spec';
 import { FILE_TOOL_DEFINITIONS, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
 import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
+import { tx } from '../text';
+import type { TextLocale } from '../text';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
@@ -52,16 +54,16 @@ function joinUrl(base: any, p: any) {
   return base.replace(/\/+$/, '') + '/' + String(p).replace(/^\/+/, '');
 }
 
-function missingApiKeyMessage(spec: any) {
+function missingApiKeyMessage(spec: any, locale: TextLocale) {
   return spec.apiKeyEnv
-    ? `缺少 API key:請到「設定 → CLI 與擴充」填入,或設定環境變數 ${spec.apiKeyEnv}`
-    : '缺少 API key:請到「設定 → CLI 與擴充」填入並儲存';
+    ? tx(locale, 'api.missingKeyEnv', { env: spec.apiKeyEnv })
+    : tx(locale, 'api.missingKey');
 }
 
 // key 存在但被伺服器拒絕。這和「沒填 key」是不同的狀況,訊息要說得出差別,
 // 否則使用者會反覆去確認一個其實已經填好、只是過期或打錯的欄位。
-function invalidApiKeyMessage(spec: any) {
-  return `API key 被 ${spec.label || spec.id || '服務'} 拒絕:請到「設定 → CLI 與擴充」重新填入`;
+function invalidApiKeyMessage(spec: any, locale: TextLocale) {
+  return tx(locale, 'api.invalidKey', { service: spec.label || spec.id || tx(locale, 'api.service') });
 }
 
 function buildUserContent(prompt: string, attachments: RunAttachment[] | undefined, capabilities: AdapterCapabilities) {
@@ -78,7 +80,8 @@ function buildUserContent(prompt: string, attachments: RunAttachment[] | undefin
   return images.length ? [{ type: 'text', text: prompt }, ...images] : prompt;
 }
 
-function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Adapter {
+function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any = {}): Adapter {
+  const locale = (): TextLocale => getLocale?.() || 'zh-Hant';
   const doFetch: any = fetchImpl || ((...a: Parameters<typeof fetch>) => fetch(...a));
   const staticModels = spec.models === 'auto' ? null : normalizeModels(spec.models);
   const sessions = new Map(); // sessionId -> [{ role, content }]
@@ -133,7 +136,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
           pending: null,
         };
       } catch (e: any) {
-        fetched = { ...fetched, at: Date.now(), error: e.name === 'AbortError' ? '取得模型清單逾時' : e.message, pending: null };
+        fetched = { ...fetched, at: Date.now(), error: e.name === 'AbortError' ? tx(locale(), 'api.modelsTimeout') : e.message, pending: null };
       } finally {
         clearTimeout(timer);
       }
@@ -142,7 +145,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
   }
 
   async function testConnection() {
-    if (missingRequiredApiKey()) return { ok: false, state: 'unauthenticated' as const, error: missingApiKeyMessage(spec) };
+    if (missingRequiredApiKey()) return { ok: false, state: 'unauthenticated' as const, error: missingApiKeyMessage(spec, locale()) };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS);
     try {
@@ -152,13 +155,13 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
         // 401/403 表示 key 存在但無效——這是最常見的失敗。以前只回一個沒有 state 的錯誤,
         // 設定畫面因此對過期的 key 亮綠燈,使用者要送出任務、等模型跑完才會發現。
         if (res.status === 401 || res.status === 403) {
-          return { ok: false, state: 'unauthenticated' as const, error: `HTTP ${res.status} ${body}`, hint: invalidApiKeyMessage(spec) };
+          return { ok: false, state: 'unauthenticated' as const, error: `HTTP ${res.status} ${body}`, hint: invalidApiKeyMessage(spec, locale()) };
         }
         return { ok: false, error: `HTTP ${res.status} ${body}` };
       }
-      return { ok: true, state: 'ready' as const, version: `已連線 ${spec.baseUrl}` };
+      return { ok: true, state: 'ready' as const, version: tx(locale(), 'api.connected', { url: spec.baseUrl }) };
     } catch (e: any) {
-      const connectionError = e.name === 'AbortError' ? '測試連線逾時' : e.message;
+      const connectionError = e.name === 'AbortError' ? tx(locale(), 'api.connectionTimeout') : e.message;
       // 連不上就是連不上,有沒有 key 都一樣。過去有 key 的 adapter 會回一個沒有 state 的錯誤,
       // 再被 registry 正規化成 unauthenticated——離線被講成「尚未登入」,方向完全相反。
       return {
@@ -166,7 +169,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
         state: 'unreachable' as const,
         error: connectionError,
         hint: (typeof spec.unreachableHint === 'string' && spec.unreachableHint.trim())
-          || (hasCredentialSetting ? '連不上服務:請確認網路,或稍後再試' : '請確認服務已啟動並可連線'),
+          || tx(locale(), hasCredentialSetting ? 'api.networkHint' : 'api.localHint'),
       };
     } finally {
       clearTimeout(timer);
@@ -198,7 +201,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
     },
     refreshModels,
     check: async () => {
-      if (missingRequiredApiKey()) return { ok: false, state: 'unauthenticated', error: missingApiKeyMessage(spec) };
+      if (missingRequiredApiKey()) return { ok: false, state: 'unauthenticated', error: missingApiKeyMessage(spec, locale()) };
       return { ok: true, state: 'ready', version: `API ${spec.baseUrl}` };
     },
     testConnection,
@@ -208,11 +211,11 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
 
   async function runChat(agent: any, ctx: any) {
     if (missingRequiredApiKey()) {
-      return { text: '', thinking: '', sessionId: null, usage: null, error: missingApiKeyMessage(spec) };
+      return { text: '', thinking: '', sessionId: null, usage: null, error: missingApiKeyMessage(spec, ctx.locale || locale()) };
     }
     const models = currentModels();
     const model = resolveModelId(models, agent.model || spec.defaultModel || '');
-    if (!model) return { text: '', thinking: '', sessionId: null, usage: null, error: '沒有指定模型:請在成員設定選擇模型,或在擴充設定填 defaultModel' };
+    if (!model) return { text: '', thinking: '', sessionId: null, usage: null, error: tx(ctx.locale || locale(), 'api.noModel') };
     const eff = resolveEffort(models, model, agent.effort);
     if (eff.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: eff.note, status: 'done' });
 
@@ -227,7 +230,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
     let fileTools: FileToolSession | null = null;
     if (toolsEnabled) {
       try { fileTools = new FileToolSession(ctx.cwd); }
-      catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: `無法啟用檔案工具:${e.message}`, toolEvents: [] }; }
+      catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: tx(ctx.locale || locale(), 'api.fileToolsFailed', { error: e.message }), toolEvents: [] }; }
     }
     const deadline = Date.now() + timeoutMs;
 
@@ -298,9 +301,9 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
           onChunk(await res.json());
         }
       } catch (e: any) {
-        if (timedOut) out.error = `API 執行逾時(${formatTimeout(timeoutMs)})`;
-        else if (e.name === 'AbortError') out.error = out.error || '已停止';
-        else out.error = `無法連線到 ${spec.baseUrl}:${e.cause ? e.cause.message || e.cause.code : e.message}`;
+        if (timedOut) out.error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs) });
+        else if (e.name === 'AbortError') out.error = out.error || tx(ctx.locale || locale(), 'api.stopped');
+        else out.error = tx(ctx.locale || locale(), 'api.cannotConnect', { url: spec.baseUrl, error: e.cause ? e.cause.message || e.cause.code : e.message });
       } finally {
         clearTimeout(timer);
         handle.close();
@@ -325,7 +328,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
 
       // 每輪工具本身另有 20 次硬上限；API 往返也設上限，避免模型反覆呼叫失敗工具。
       for (let apiRound = 0; apiRound < 10; apiRound++) {
-        if (Date.now() >= deadline) { error = `API 執行逾時(${formatTimeout(timeoutMs)})`; break; }
+        if (Date.now() >= deadline) { error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs) }); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
         status = result.status;
         usage = result.usage || usage;
@@ -338,7 +341,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
         }
         if (result.toolCalls.length > fileTools.remainingCalls) {
           const call = result.toolCalls[0];
-          const toolResult = { ok: false, error: `這批工具呼叫會超過每回合 ${FILE_TOOL_MAX_CALLS} 次上限，整批未執行；請減少呼叫數` };
+          const toolResult = { ok: false, error: tx(ctx.locale || locale(), 'api.tooManyTools', { n: FILE_TOOL_MAX_CALLS }) };
           exchange.push({ role: 'assistant', content: result.text || null, tool_calls: [call] });
           const entry = toTranscriptEntry(call.id, call.function?.name || '', call.function?.arguments || '{}', toolResult);
           toolEvents.push(entry);
@@ -351,7 +354,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
         for (const call of result.toolCalls) {
           const name = call.function?.name || '';
           const args = call.function?.arguments || '{}';
-          ctx.onActivity({ id: call.id, kind: 'tool', title: `${name} 執行中`, status: 'running' });
+          ctx.onActivity({ id: call.id, kind: 'tool', title: tx(ctx.locale || locale(), 'api.toolRunning', { name }), status: 'running' });
           const toolResult = fileTools.execute(name, args);
           const entry = toTranscriptEntry(call.id, name, args, toolResult);
           toolEvents.push(entry);
@@ -365,7 +368,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
           exchange.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(toolResult) });
         }
       }
-      if (!error) error = '模型工具呼叫往返超過 10 次，已停止以避免無限循環';
+      if (!error) error = tx(ctx.locale || locale(), 'api.toolRoundsExceeded');
       return { text, thinking, usage, error, status, exchange, toolEvents };
     };
 
@@ -374,7 +377,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
     // 帶了圖片才失敗時改用純文字重送一次，否則每回合都會重送同一張圖、一直失敗。
     const imageCount = Array.isArray(userContent) ? userContent.filter((p: any) => p.type === 'image_url').length : 0;
     if (result.error && imageCount && [400, 415, 422].includes(result.status)) {
-      ctx.onActivity({ id: 'image-fallback', kind: 'note', title: `此模型不接受圖片(${result.error.slice(0, 120)}),已略過 ${imageCount} 張圖片改用純文字重送`, status: 'done' });
+      ctx.onActivity({ id: 'image-fallback', kind: 'note', title: tx(ctx.locale || locale(), 'api.imageFallback', { error: result.error.slice(0, 120), n: imageCount }), status: 'done' });
       // 第一輪可能已經改過檔案。那些稽核紀錄不能因為重試就消失:
       // 檔案已經落盤,少了紀錄就等於沒有人會去審它,而畫面看起來一切正常。
       const executedBeforeRetry = result.toolEvents || [];
@@ -396,17 +399,17 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret }: any = {}): Ada
 
 // 一鍵連接 Ollama 的底層探測。Renderer 不需知道端點、認證或模型 API；
 // Registry.quickSetupOllama 會把這份結果轉成可直接選擇與儲存的資料。
-async function discoverOllama({ fetchImpl, baseUrl = OLLAMA_DEFAULT_BASE_URL }: any = {}) {
+async function discoverOllama({ fetchImpl, baseUrl = OLLAMA_DEFAULT_BASE_URL, getLocale }: any = {}) {
   const adapter = createOpenAIAdapter({
     id: 'ollama-discovery',
     type: 'openai',
     label: 'Ollama',
     baseUrl,
     models: 'auto',
-    unreachableHint: '請先啟動 Ollama',
-  }, { fetchImpl });
-  const health = adapter.testConnection ? await adapter.testConnection() : { ok: false, error: '無法測試 Ollama 連線' };
-  if (!health.ok) return { ok: false, baseUrl, models: [], error: health.error || '無法連線到 Ollama', hint: health.hint || null };
+    unreachableHint: tx(getLocale?.() || 'zh-Hant', 'api.startOllama'),
+  }, { fetchImpl, getLocale });
+  const health = adapter.testConnection ? await adapter.testConnection() : { ok: false, error: tx(getLocale?.() || 'zh-Hant', 'api.ollamaTestFailed') };
+  if (!health.ok) return { ok: false, baseUrl, models: [], error: health.error || tx(getLocale?.() || 'zh-Hant', 'api.ollamaConnectFailed'), hint: health.hint || null };
   if (adapter.refreshModels) await adapter.refreshModels();
   const list = adapter.listModels ? adapter.listModels() : { models: [], source: 'none' };
   if (list.error) return { ok: false, baseUrl, models: [], error: list.error, hint: health.hint || null };

@@ -331,6 +331,7 @@ const ZH: Record<string, Entry> = {
   'attach.cannotFile': '無法附加檔案:{reason}',
   'attach.unknown': '無法附加檔案:發生未知錯誤',
   'attach.previewFailed': '無法讀取預覽',
+  'attach.imageUnavailable': '圖片內容無法提供給 {names}；這些成員只能讀取文字附件。',
 
   'usage.raw': '原始用量：{fields}',
   'usage.rawEmpty': '原始用量（無欄位）',
@@ -676,6 +677,7 @@ const EN: Record<string, Entry> = {
   'attach.cannotFile': 'Could not attach the file: {reason}',
   'attach.unknown': 'Could not attach the file: unknown error',
   'attach.previewFailed': 'Could not read the preview',
+  'attach.imageUnavailable': '{names} cannot receive image content; these members only support text attachments.',
 
   'usage.raw': 'Raw usage: {fields}',
   'usage.rawEmpty': 'Raw usage (no fields)',

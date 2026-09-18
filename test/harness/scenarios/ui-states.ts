@@ -26,6 +26,7 @@ async function main() {
     members: [
       missingCliMember({ id: 'g1', name: 'Gemini' }),
       scriptedMember({ id: 's1', name: '對照組' }),
+      missingCliMember({ id: 't1', name: '純文字', cli: 'deepseek' }),
     ],
     adapters: [
       path.join(REPO_ROOT, 'adapters', 'templates', 'gemini-cli.json'),
@@ -91,6 +92,20 @@ async function main() {
       const cli = g.$('#ext-cli-fields') as HTMLElement;
       g.check(cli.offsetHeight === 0, `連線類型是 API 時,CLI 專用欄位必須收起來(高度 ${cli.offsetHeight})`);
       await g.shot('03-api-editor');
+
+      // --- 圖片送往純文字 API 成員時,編輯區要在送出前提示 ---
+      g.$('#ext-editor-close').click();
+      g.$('#settings-close').click();
+      const input = g.$('#input') as HTMLTextAreaElement;
+      input.value = '@純文字 請看圖';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const image = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2])], 'sample.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(image);
+      g.$('.composer-box').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      await g.waitFor(() => /純文字/.test(g.text('#hint')) && /圖片內容無法提供/.test(g.text('#hint')), 5000, '圖片能力警告');
+      g.check(/圖片內容無法提供給 純文字/.test(g.text('#hint')), '圖片附件指向純文字成員時,送出前顯示能力警告');
+      await g.shot('04-image-warning');
 
       return { badges, rows: rows.map((x: any) => x.text.slice(0, 80)) };
     },

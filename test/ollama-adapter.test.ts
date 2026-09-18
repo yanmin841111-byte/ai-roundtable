@@ -187,6 +187,27 @@ test('maxHistoryMessages 與 unreachableHint 驗證設定型別', () => {
   assert.ok(hintErrors.some((error) => /unreachableHint.*字串/.test(error)));
 });
 
+test('API 錯誤跟隨目前介面語言，包含設定檢查與執行', async () => {
+  let locale = 'en';
+  const missing = createOpenAIAdapter({
+    id: 'cloud', type: 'openai', label: 'Cloud', baseUrl: 'https://api.example/v1',
+    apiKeyEnv: 'UNSET_LOCALE_TEST_KEY', models: ['m'],
+  }, { getLocale: () => locale });
+  assert.match((await missing.check()).error, /Missing API key/);
+  assert.match((await missing.run({ model: 'm' }, makeCtx({ locale: 'en' }))).error, /Missing API key/);
+  locale = 'zh-Hant';
+  assert.match((await missing.check()).error, /缺少 API key/);
+
+  const offline = createOpenAIAdapter({
+    id: 'local', type: 'openai', baseUrl: 'http://localhost:9999/v1', models: ['m'], stream: false,
+  }, { getLocale: () => 'en', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+  const health = await offline.testConnection();
+  assert.strictEqual(health.state, 'unreachable');
+  assert.match(health.hint, /running and reachable/);
+  const result = await offline.run({ model: 'm' }, makeCtx({ locale: 'en' }));
+  assert.match(result.error, /Cannot connect/);
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) {

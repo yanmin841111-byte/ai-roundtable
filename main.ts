@@ -151,6 +151,7 @@ app.whenReady().then(async () => {
     templatesDir: path.join(__dirname, 'adapters', 'templates'),
     getSecret: (ref: any) => secrets.get(ref),
     setSecret: (ref: any, value: any) => secrets.set(ref, value),
+    getLocale: () => resolveTextLocale(store.get().settings.uiLocale),
   });
   setRegistry(registry);
   // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等

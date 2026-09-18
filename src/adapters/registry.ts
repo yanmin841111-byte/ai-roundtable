@@ -10,6 +10,7 @@ import { canonicalModelId, createOpenAIAdapter, discoverOllama, validateOpenAISp
 import { kit } from './kit';
 import type { Adapter, ModelList, RegisteredAdapter } from './types';
 import type { CliHealth, CliStatus } from '../ipc-types';
+import type { TextLocale } from '../text';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -19,15 +20,17 @@ class Registry {
   fetchImpl: any;
   getSecret: any;
   setSecret: any;
+  getLocale: () => TextLocale;
   adapters: Map<string, RegisteredAdapter>;
   entries: any[];
 
-  constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret }: any = {}) {
+  constructor({ userDir, templatesDir, fetchImpl, getSecret, setSecret, getLocale }: any = {}) {
     this.userDir = userDir;
     this.templatesDir = templatesDir;
     this.fetchImpl = fetchImpl;
     this.getSecret = getSecret;
     this.setSecret = setSecret;
+    this.getLocale = getLocale || (() => 'zh-Hant');
     this.adapters = new Map();
     this.entries = []; // 使用者擴充的載入結果(含錯誤)
     this.reload();
@@ -80,7 +83,7 @@ class Registry {
       else if (type === 'openai') validateOpenAISpec(spec, errors);
       else errors.push('type 必須是 "cli" 或 "openai"(需要更多彈性時請改寫成 .js 外掛)');
       if (errors.length) throw new Error(errors.join(';'));
-      adapter = type === 'cli' ? createCliAdapter(spec) : createOpenAIAdapter(spec, { fetchImpl: this.fetchImpl, getSecret: this.getSecret });
+      adapter = type === 'cli' ? createCliAdapter(spec) : createOpenAIAdapter(spec, { fetchImpl: this.fetchImpl, getSecret: this.getSecret, getLocale: this.getLocale });
     } else {
       delete require.cache[require.resolve(full)];
       let mod = require(full);
@@ -205,7 +208,7 @@ class Registry {
     const baseUrl = typeof existingSpec.baseUrl === 'string' && existingSpec.baseUrl.trim()
       ? existingSpec.baseUrl.trim()
       : template.baseUrl;
-    const discovery = await discoverOllama({ fetchImpl: this.fetchImpl, baseUrl });
+    const discovery = await discoverOllama({ fetchImpl: this.fetchImpl, baseUrl, getLocale: this.getLocale });
     if (!discovery.ok) return { ...discovery, installed: false, recommendedModel: null };
 
     const recommendedModel = canonicalModelId(discovery.models, template.defaultModel)

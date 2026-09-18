@@ -6,6 +6,7 @@ import type { Activity, AgentConfig, AttachmentMeta, CliStatus, Model } from '..
 import type { NormalizedUsage } from '../usage';
 import type { StopHandle } from './process';
 import type { FileToolTranscriptEntry } from './file-tools';
+import type { TextLocale } from '../text';
 
 export type AdapterType = 'builtin' | 'cli' | 'openai' | 'js';
 
@@ -36,6 +37,7 @@ export interface TurnCallbacks {
 }
 
 export interface RunContext extends TurnCallbacks {
+  locale?: TextLocale;
   prompt: string;
   systemPrompt?: string;
   sessionId?: string | null;

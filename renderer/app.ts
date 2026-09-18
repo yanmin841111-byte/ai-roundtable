@@ -1501,6 +1501,14 @@ function updateComposerHint() {
   if (mentioned.length && running) text = t('hint.mentionRunning', { names });
   else if (mentioned.length) text = t('hint.mentionIdle', { names });
   else if (running) text = t('hint.running');
+  if (pendingAttachments.some((item) => item.kind === 'image')) {
+    const targets = mentioned.length ? mentioned : enabledAgents();
+    const unsupported = targets.filter((agent) => {
+      const modes = cliTypes[agent.cli]?.capabilities?.attachments || [];
+      return !modes.includes('imageInline') && !modes.includes('filePath');
+    });
+    if (unsupported.length) text = [text, t('attach.imageUnavailable', { names: joinNames(unsupported.map((a) => a.name)) })].filter(Boolean).join(' ');
+  }
   const hint = $('#hint');
   hint.textContent = text;
   hint.title = text;
@@ -2332,6 +2340,7 @@ function renderAttachChips() {
   });
   if (button) button.disabled = pendingAttachments.length >= attachLimits.maxFiles;
   hydrateAttachmentThumbs(row, pendingAttachments);
+  updateComposerHint();
 }
 
 async function removePendingAttachment(id: string | undefined): Promise<void> {
