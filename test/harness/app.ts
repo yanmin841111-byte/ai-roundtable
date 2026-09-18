@@ -97,7 +97,8 @@ const check = (cond, msg) => { if (!cond) throw new Error('失敗:' + msg); step
 const $ = (sel) => document.querySelector(sel);
 const text = (sel) => (($(sel) || {}).textContent || '').replace(/\\s+/g, ' ').trim();
 // 拍一張。主程序看到這行 console 就會存檔;等一下讓它拍完。
-const shot = async (name) => { console.log('__SHOT__ ' + name); await w(900); return name; };
+// 900ms 偶爾不夠:截圖在主程序非同步完成,劇本若緊接著關掉視窗,就會拍到關掉之後的畫面。
+const shot = async (name) => { console.log('__SHOT__ ' + name); await w(1500); return name; };
 const snapshot = () => api.snapshot();
 // 等某個條件成立。畫面很多東西是非同步填上去的,固定 sleep 不是等太久就是不夠。
 const waitFor = async (fn, ms = 15000, what = '條件') => {
@@ -266,7 +267,8 @@ export function report(name: string, r: HarnessResult): boolean {
   // 截圖複製到一個固定位置:暫存目錄跑完就會被清掉,但 UI 情境的重點就是那些圖。
   const shotNames = Object.keys(r.shots);
   if (shotNames.length) {
-    const dest = path.join(os.tmpdir(), 'ai-roundtable-shots', name.replace(/[^A-Za-z0-9._-]/g, '_'));
+    // 保留中文等文字:以前全換成底線,「等待狀態」和另一個四字情境都會變成 ____ 而互相覆蓋
+    const dest = path.join(os.tmpdir(), 'ai-roundtable-shots', name.replace(/[^\p{L}\p{N}._-]/gu, '_'));
     fs.rmSync(dest, { recursive: true, force: true });
     fs.mkdirSync(dest, { recursive: true });
     for (const [n, src] of Object.entries(r.shots)) fs.copyFileSync(src, path.join(dest, `${n}.png`));

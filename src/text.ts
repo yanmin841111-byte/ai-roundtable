@@ -212,6 +212,9 @@ const ZH: Record<string, Entry> = {
   'cli.customNotSet': '尚未設定自訂指令',
   'cli.customCommand': '自訂指令',
   'cli.unparsableJson': '無法解析 JSON 輸出:{detail}',
+  // 未登入:給一句照做就能修好的話。指令放在 {cmd},介面另有複製按鈕。
+  'cli.loginHint': '已安裝,但尚未登入。請開啟「終端機」,執行 {cmd} 並依畫面完成登入。',
+  'cli.notLoggedIn': '{name} 尚未登入,或登入已過期。請開啟「終端機」,執行 {cmd} 並依畫面完成登入後再試一次。',
   'act.run': '執行指令:{detail}',
   'act.read': '讀取檔案:{detail}',
   'act.edit': '編輯檔案:{detail}',
@@ -483,6 +486,8 @@ const EN: Record<string, Entry> = {
   'cli.customNotSet': 'No custom command has been set',
   'cli.customCommand': 'the command',
   'cli.unparsableJson': 'Could not parse the JSON output: {detail}',
+  'cli.loginHint': 'Installed, but not logged in. Open Terminal, run {cmd} and follow the prompts.',
+  'cli.notLoggedIn': '{name} is not logged in, or the login has expired. Open Terminal, run {cmd}, follow the prompts, then try again.',
   'act.run': 'Run command: {detail}',
   'act.read': 'Read file: {detail}',
   'act.edit': 'Edit file: {detail}',

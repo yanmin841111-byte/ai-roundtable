@@ -10,8 +10,9 @@ description: 啟動並驅動 AI Roundtable 這個 Electron app —— 要看某�
 ## 快速開始
 
 ```bash
-npm run harness:ui      # 設定壞掉時畫面說了什麼(全假成員,約 10 秒)
-npm run harness:live    # 真的本機模型改檔案(需要 ollama serve,約 1 分鐘)
+npm run harness:ui      # 燈號誠實度、英文介面、等待狀態(全假成員,約 30 秒)
+npm run harness:live    # 真的本機模型改檔案(需要 ollama serve,約 1~7 分鐘)
+npm run harness:login   # CLI 沒登入時的提示(需要裝有 claude 與 codex)
 ```
 
 寫新情境:複製 `test/harness/scenarios/ui-states.ts`,改劇本內容。

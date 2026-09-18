@@ -176,11 +176,25 @@ function checkCli(bin: string, args: readonly string[] | null = ['--version'], l
     r.ok ? { ok: true, version: r.out.trim().split('\n')[0] } : { ok: false, error: r.error || tx(locale, 'proc.notFound', { bin }) });
 }
 
-interface QuickResult { ok: boolean; out: string; error?: string }
+// out 是 stdout+stderr 合併(給 --version 這類只看文字的檢查);stdout 與 code 另外保留,
+// 登入檢查要靠它們判斷,不能被 stderr 的雜訊干擾。
+interface QuickResult { ok: boolean; out: string; stdout?: string; code?: number | null; error?: string }
+
+// 問 CLI「現在有沒有登入」。只有在 CLI 明確回報沒登入時才回 false;
+// 指令不存在(舊版 CLI 沒有這個子指令)、逾時、輸出看不懂都回 null。
+// 這個方向是刻意的:誤報「沒登入」會叫已經能用的人去重新登入,比沒偵測到更糟。
+// 依 ipc-types 的原則,判斷只看 exit code 與結構化輸出(JSON 欄位),不比對人讀的文案。
+function checkLogin(bin: string, args: readonly string[], decide: (r: { code: number | null | undefined; stdout: string }) => boolean | null): Promise<boolean | null> {
+  return runQuick(bin, args).then((r) => {
+    if (r.error) return null;
+    try { return decide({ code: r.code, stdout: r.stdout || '' }); } catch { return null; }
+  });
+}
 
 function runQuick(bin: string, args: readonly string[], locale: TextLocale = 'zh-Hant'): Promise<QuickResult> {
   return new Promise<QuickResult>((resolve) => {
     let out = '';
+    let stdout = '';
     let child: ChildProcess | undefined;
     let settled = false;
     const finish = (result: QuickResult) => {
@@ -194,10 +208,10 @@ function runQuick(bin: string, args: readonly string[], locale: TextLocale = 'zh
       finish({ ok: false, out, error: tx(locale, 'proc.checkTimeout') });
     }, CLI_CHECK_TIMEOUT_MS);
     try { child = attachProcessGroupKill(spawn(bin, args, { detached: true, env: process.env })); } catch (e) { return finish({ ok: false, out, error: String(e) }); }
-    child.stdout?.on('data', (d) => (out += d));
+    child.stdout?.on('data', (d) => { out += d; stdout += d; });
     child.stderr?.on('data', (d) => (out += d));
     child.on('error', (e: NodeJS.ErrnoException) => finish({ ok: false, out, error: e.code === 'ENOENT' ? tx(locale, 'proc.notFound', { bin }) : e.message }));
-    child.on('close', (code: number | null) => finish({ ok: code === 0, out }));
+    child.on('close', (code: number | null) => finish({ ok: code === 0, out, stdout, code }));
   });
 }
 
@@ -210,4 +224,4 @@ function createStopHandle(onKill: () => void): StopHandle {
   return handle;
 }
 
-export { DEFAULT_TURN_TIMEOUT_MS, truncate, formatTimeout, lineReader, parseJson, runProcess, checkCli, createStopHandle };
+export { DEFAULT_TURN_TIMEOUT_MS, truncate, formatTimeout, lineReader, parseJson, runProcess, checkCli, checkLogin, createStopHandle };

@@ -173,6 +173,8 @@ export interface CliStatus {
   error?: string;
   state?: CliState;
   hint?: string;
+  // CLI 未登入時,使用者要在終端機執行的指令(例如 claude auth login)。介面會提供複製按鈕。
+  loginCommand?: string;
 }
 
 // cli:check 給介面的正規化結果:state 一定有值,介面不必比對錯誤字串。
@@ -183,6 +185,7 @@ export interface CliHealth {
   error?: string;
   // 未登入時要顯示給使用者的指令,例如「請在終端機執行 codex login」
   hint?: string;
+  loginCommand?: string;
 }
 
 export interface ExtEntry {

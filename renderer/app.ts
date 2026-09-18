@@ -830,8 +830,8 @@ function renderExtensions() {
         : st.error || t('cli.missing')
       : type.bin ? t('ext.checking') : t('ext.noCheck');
     const subTitle = st && st.error && st.hint && st.error !== st.hint ? ` title="${escapeHtml(st.error)}"` : '';
-    // 目前只有 Codex 宣告 authCheck；待狀態契約提供獨立 command 欄位後可移除此窄幅對應。
-    const loginCommand = st?.state === 'unauthenticated' && type.id === 'codex' ? 'codex login' : '';
+    // 登入指令由後端的健康檢查提供(claude auth login、codex login…),不在介面寫死某一個 CLI。
+    const loginCommand = st?.state === 'unauthenticated' ? st.loginCommand || '' : '';
     const auth = loginCommand ? `<div class="cli-auth"><code class="cli-auth-command">${escapeHtml(loginCommand)}</code><button type="button" class="cli-copy" data-copy-login="${escapeHtml(loginCommand)}">${escapeHtml(t('cli.copyLogin'))}</button></div>` : '';
     const badges = [`<span class="badge">${escapeHtml(typeLabel(type.type))}</span>`];
     if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
@@ -1142,7 +1142,8 @@ function renderSidebar() {
       : health && health.state === 'missing'
         ? `<span class="badge bad" title="${escapeHtml(health.error || '')}">${escapeHtml(t('agent.notInstalled'))}</span>`
         : health && health.state === 'unauthenticated'
-          ? `<span class="badge warn" title="${escapeHtml(health.hint || health.error || '')}">${escapeHtml(t('agent.needsKey'))}</span>`
+          // 同樣是 unauthenticated:API 缺的是 key,CLI 缺的是登入。說錯的話使用者會去找不存在的東西。
+          ? `<span class="badge warn" title="${escapeHtml(health.hint || health.error || '')}">${escapeHtml(t(cliTypes[a.cli].type === 'openai' ? 'agent.needsKey' : 'agent.needsLogin'))}</span>`
           : health && health.state === 'unreachable'
             ? `<span class="badge warn" title="${escapeHtml(health.hint || health.error || '')}">${escapeHtml(t('agent.offline'))}</span>`
             : '';
@@ -1893,7 +1894,50 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   const usage = usageText(m.usage);
   shell.usage.hidden = !usage;
   setTextIfChanged(shell.usage, usage);
-  setTextIfChanged(shell.statusLine, t('msg.streaming'));
+  // 等待狀態。本機模型一回合要 1~3 分鐘,只有轉圈的話,使用者分不出它是在載入模型、
+  // 在思考、在跑工具,還是已經卡住——而最後一種才需要他去按停止。
+  const waitState = text ? 'streaming'
+    : m.thinking ? 'thinking'
+      : (m.activities || []).some((a) => a.status === 'running') ? 'tool' : 'waiting';
+  // 內容有變就算有進度。串流的文字、思考、工具動作任何一項長了都算。
+  const progress = `${(m.text || '').length}:${(m.thinking || '').length}:${(m.activities || []).length}`;
+  if (el.dataset.progress !== progress) { el.dataset.progress = progress; el.dataset.progressAt = String(Date.now()); }
+  el.dataset.waitState = waitState;
+  el.dataset.startedAt = String(Number(m.ts) || Date.now());
+  updateStatusLine(el);
+  if (m.status === 'running') ensureProgressTicker();
+}
+
+// 沒有新內容多久之後標示出來。本機模型第一個字可能要 30 秒以上(載入模型),
+// 太早提醒會讓人以為壞了。
+const STALE_AFTER_S = 60;
+let progressTimer: ReturnType<typeof setInterval> | undefined;
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function updateStatusLine(el: HTMLElement): void {
+  const line = el.querySelector<HTMLElement>('.bubble-status');
+  if (!line) return;
+  const now = Date.now();
+  const elapsed = formatElapsed(now - (Number(el.dataset.startedAt) || now));
+  const idle = Math.floor((now - (Number(el.dataset.progressAt) || now)) / 1000);
+  const stale = idle >= STALE_AFTER_S;
+  const label = t(`msg.wait.${el.dataset.waitState || 'streaming'}`);
+  line.textContent = stale ? `${label} · ${elapsed} · ${t('msg.stale', { n: idle })}` : `${label} · ${elapsed}`;
+  line.classList.toggle('stale', stale);
+}
+
+// 一個計時器更新所有進行中的泡泡;沒有進行中的就自己停掉,閒置時不耗電。
+function ensureProgressTicker(): void {
+  if (progressTimer) return;
+  progressTimer = setInterval(() => {
+    const running = document.querySelectorAll<HTMLElement>('#timeline .msg.streaming');
+    if (!running.length) { clearInterval(progressTimer); progressTimer = undefined; return; }
+    running.forEach(updateStatusLine);
+  }, 1000);
 }
 
 function ensureAgentShell(el: HTMLElement): AgentShell {

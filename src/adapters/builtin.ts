@@ -1,15 +1,51 @@
 // 內建轉接器:Claude Code、Codex CLI、Cursor CLI、自訂 shell 指令。
 // 每個轉接器都遵守 registry.js 描述的介面。
 
-import { runProcess, parseJson, truncate, checkCli } from './process';
+import { runProcess, parseJson, truncate, checkCli, checkLogin } from './process';
 import { listModels, resolveRunOptions } from '../models';
 import { createCursorAdapter } from './cursor';
-import type { AgentConfig } from '../ipc-types';
+import type { AgentConfig, CliStatus } from '../ipc-types';
 import type { Adapter, RunContext, RunResult } from './types';
 import { tx, type TextLocale } from '../text';
 
 // 錯誤訊息與工具動作標題會顯示在對話泡泡裡,跟著介面語言。
 const loc = (ctx: RunContext): TextLocale => ctx.locale || 'zh-Hant';
+
+// ---------- 登入狀態 ----------
+// 「指令存在」不等於「能用」:裝好了卻沒登入的 CLI,--version 一樣成功,設定畫面就亮綠燈,
+// 使用者要送出任務、等它失敗才知道。以下判斷都經過實測(未登入以空的設定目錄模擬):
+//   claude auth status:已登入 exit 0;未登入 exit 1,stdout 是 {"loggedIn": false, …}。
+//     舊版 CLI 沒有這個子指令時也是 exit 1,但 stdout 是空的——所以不能只看 exit code。
+//   codex login status:已登入 0、未登入 1、子指令不存在 2(clap 的用法錯誤)。
+// 判斷邏輯獨立成純函式,才能用實測取得的輸入做單元測試——
+// 特別是「舊版 CLI 沒有這個子指令」那條,在已經支援的機器上跑 harness 是測不到的。
+type LoginProbe = { code: number | null | undefined; stdout: string };
+function decideClaudeLogin({ code, stdout }: LoginProbe): boolean | null {
+  if (code === 0) return true;
+  const start = stdout.indexOf('{');
+  if (start < 0) return null;
+  const json = JSON.parse(stdout.slice(start));
+  return json && json.loggedIn === false ? false : null;
+}
+function decideCodexLogin({ code }: LoginProbe): boolean | null {
+  return code === 0 ? true : code === 1 ? false : null;
+}
+const claudeLoggedIn = () => checkLogin('claude', ['auth', 'status'], decideClaudeLogin);
+const codexLoggedIn = () => checkLogin('codex', ['login', 'status'], decideCodexLogin);
+
+// 指令在、而且沒有明確回報「沒登入」才算可用。沒登入時給一句照做就能修好的話。
+async function checkWithLogin(bin: string, locale: TextLocale | undefined, loggedIn: () => Promise<boolean | null>, loginCommand: string): Promise<CliStatus> {
+  const base = await checkCli(bin, undefined, locale);
+  if (!base.ok || (await loggedIn()) !== false) return base;
+  return { ok: false, state: 'unauthenticated', version: base.version, hint: tx(locale || 'zh-Hant', 'cli.loginHint', { cmd: loginCommand }), loginCommand };
+}
+
+// 執行到一半才發現沒登入(登入過期、或啟動後才登出)時的錯誤訊息。原始錯誤接在後面,
+// 需要回報問題時還查得到。
+function loginError(name: string, cmd: string, original: string | null, locale: TextLocale): string {
+  const friendly = tx(locale, 'cli.notLoggedIn', { name, cmd });
+  return original ? `${friendly}\n\n${truncate(original, 300)}` : friendly;
+}
 
 // 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
 function reportRunNote(ctx: RunContext, run: { note?: string | null }) {
@@ -35,6 +71,7 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
   let usage: any = null;
   let errorMsg: any = null;
   const toolNames: Record<string, any> = {};
+  let authFailed = false;
 
   const res = await runProcess('claude', args, { cwd: ctx.cwd, stdin: ctx.prompt, timeoutMs: ctx.timeoutMs, locale: loc(ctx) }, {
     onProc: ctx.onProc,
@@ -57,6 +94,9 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
         }
         return;
       }
+      // Claude Code 沒登入時,assistant 事件會帶 error: "authentication_failed"(實測)。
+      // 這是結構化的訊號,比比對「Not logged in」這串文字可靠。
+      if (ev.type === 'assistant' && ev.error === 'authentication_failed') authFailed = true;
       if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
         for (const block of ev.message.content) {
           if (block.type === 'tool_use') {
@@ -87,6 +127,7 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
   if (res.spawnError) errorMsg = tx(loc(ctx), 'cli.spawnFailed', { bin: 'claude', detail: res.stderr });
   else if (res.timedOut) errorMsg = res.error || `${tx(loc(ctx), 'cli.timedOut', { bin: 'claude' })}\n${truncate(res.stderr, 2000)}`;
   else if (res.code !== 0 && !text) errorMsg = errorMsg || `${tx(loc(ctx), 'cli.exitCode', { bin: 'claude', code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
+  if (authFailed) errorMsg = loginError('Claude Code', 'claude auth login', errorMsg, loc(ctx));
   return { text, thinking, sessionId, usage, error: errorMsg };
 }
 
@@ -171,6 +212,9 @@ async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult>
   if (res.spawnError) errorMsg = tx(loc(ctx), 'cli.spawnFailed', { bin: 'codex', detail: res.stderr });
   else if (res.timedOut) errorMsg = res.error || `${tx(loc(ctx), 'cli.timedOut', { bin: 'codex' })}\n${truncate(res.stderr, 2000)}`;
   else if (res.code !== 0 && !text) errorMsg = errorMsg || `${tx(loc(ctx), 'cli.exitCode', { bin: 'codex', code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
+  // Codex 沒登入時只會在重試十次後丟出一段 401 文字。與其比對那段文案,失敗時直接再問一次
+  // 登入狀態——同一個只看 exit code 的檢查,約 30ms,只在已經失敗時才付這個成本。
+  if (errorMsg && !res.spawnError && (await codexLoggedIn()) === false) errorMsg = loginError('Codex', 'codex login', errorMsg, loc(ctx));
   return { text, thinking: renderThinking(), sessionId, usage, error: errorMsg };
 }
 
@@ -209,7 +253,7 @@ const builtinAdapters: Adapter[] = [
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: true },
     efforts: CLAUDE_EFFORTS,
     listModels: () => listModels('claude'),
-    check: (opts) => checkCli('claude', undefined, opts?.locale),
+    check: (opts) => checkWithLogin('claude', opts?.locale, claudeLoggedIn, 'claude auth login'),
     usageShape: 'anthropic',
     run: runClaude,
   },
@@ -223,7 +267,7 @@ const builtinAdapters: Adapter[] = [
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
     efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     listModels: () => listModels('codex'),
-    check: (opts) => checkCli('codex', undefined, opts?.locale),
+    check: (opts) => checkWithLogin('codex', opts?.locale, codexLoggedIn, 'codex login'),
     usageShape: 'codex',
     run: runCodex,
   },
@@ -242,4 +286,4 @@ const builtinAdapters: Adapter[] = [
   },
 ];
 
-export { builtinAdapters };
+export { builtinAdapters, decideClaudeLogin, decideCodexLogin };
