@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Model abilities: whether an API member's model can call tools and see images, shown on the member card and in member settings. Ollama is checked automatically and model data from the endpoint is used as is; paid APIs send requests only when you press Test in member settings. A model known to lack tool calling is treated as a read-only member; a model known not to see images is no longer sent images, and the pre-send warning names it.
 - Changes works when the working folder is not a git repository (the default workspace is not): small text files are remembered in memory when a task starts, and Changes lists what changed since the latest task started, line by line.
 - The extension editor has a “Time limit per turn” field (in minutes), and an extension's timeout error says where to raise it.
+- Task result card: when a divide task finishes, one card shows each member's outcome and review verdict, the files this task changed (click to open them in Changes), and the time and tokens it took.
 - Failed @ direct replies can be retried with one click.
 - Long turns show what is happening, the elapsed time, and a notice when nothing has progressed for a while.
 - Claude Code and Codex that are installed but not logged in are detected, with the command to run to log in.
@@ -22,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- A visual refresh across the interface: cool-toned neutrals, brand-blue gradients and glows, a faint dot-grid background, a frosted top bar, thinner lines and tabular numerals; both the light and dark themes were retuned.
 - Once the lead's plan output (usually JSON) parses, it is folded away and only the plan card is shown; output that failed to parse stays fully visible.
 - System messages, errors and API adapter messages from the main process follow the interface language, and so do the file-tool descriptions, errors and memory placeholders the model reads, so an English meeting no longer gives the model mixed-language instructions.
 - Status lights turn green only when things actually work: cloud API keys are verified when settings open, unreachable endpoints show an actionable hint, and member cards flag CLIs that are missing or not logged in.

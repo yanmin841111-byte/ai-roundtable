@@ -8,15 +8,16 @@ import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapte
 import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
-import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, ReviewVerdict, ToolAuditEntry } from './ipc-types';
+import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, ReviewVerdict, TaskOutcome, TaskSummary, ToolAuditEntry } from './ipc-types';
 import type { Adapter, RunAttachment, Stoppable } from './adapters/types';
 import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
 import type { TextLocale } from './text';
 import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
 import { FileToolSession } from './adapters/file-tools';
+import { formatTimeout } from './adapters/process';
 import { snapshotDir, diffSnapshots } from './snapshot';
-import { captureBaseline } from './task-changes';
+import { captureBaseline, changesSince } from './task-changes';
 import type { TaskBaseline } from './task-changes';
 
 const AGREED = 'AGREED';
@@ -387,6 +388,48 @@ class Orchestrator extends EventEmitter {
     return true;
   }
 
+  // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
+  // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, reviews, fix, baseline }: {
+    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null;
+  }) {
+    const unresolved = new Set([...fix.unresolved.map((u) => u.agent.id), ...fix.fixFailed.map((f) => f.item.agent.id)]);
+    const outcomeOf = (report: ExecReport): TaskOutcome => {
+      if (failed.includes(report)) return 'failed';
+      const verdicts = reviews.filter((rv) => rv.target.agent.id === report.agent.id).map((rv) => reviewVerdict(rv.text, rv.error));
+      if (verdicts.includes('issues')) return unresolved.has(report.agent.id) ? 'unresolved' : 'repaired';
+      return verdicts.includes('pass') ? 'approved' : 'unreviewed';
+    };
+    const members = [...reports, ...failed].map((r) => ({
+      name: r.agent.name,
+      color: r.agent.color,
+      outcome: outcomeOf(r),
+      reviewers: reviews.filter((rv) => rv.target.agent.id === r.agent.id).map((rv) => rv.reviewer.name),
+    }));
+    let files: TaskSummary['files'] = [];
+    let moreFiles = 0;
+    if (baseline) {
+      const diff = await changesSince(baseline);
+      if (diff.ok) {
+        files = diff.files.slice(0, TASK_SUMMARY_FILES).map((f) => ({ path: f.path, status: f.status, added: f.added, removed: f.removed }));
+        moreFiles = diff.totalFiles - files.length;
+      }
+    }
+    const turns = this.messages.slice(startIndex).filter((m) => m.kind === 'agent' && m.status !== 'running');
+    const measured = turns.filter((m) => m.usage);
+    const sum = (key: 'inputTokens' | 'outputTokens' | 'costUsd') => measured.reduce((n, m) => n + (Number(m.usage?.[key]) || 0), 0);
+    const hasCost = measured.some((m) => typeof m.usage?.costUsd === 'number');
+    const summary: TaskSummary = {
+      startedAt,
+      endedAt: Date.now(),
+      members,
+      files,
+      moreFiles,
+      usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
+    };
+    this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
+  }
+
   answerText(question: PendingQuestion, answer: QuestionAnswer) {
     const name = quoteName(this.locale, question.agentName);
     if (answer.decision !== 'answered') return this.text('sys.askDeferred', { name });
@@ -469,11 +512,15 @@ class Orchestrator extends EventEmitter {
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
         if (!plan) { await this.summaryPhase(task, 'discuss', {}); return; }
+        const startedAt = Date.now();
+        const startIndex = this.messages.length;
         const gitBefore = await gitStatus(cwd);
         // 審查要看的改動:工作目錄在執行前後的快照差異(見 snapshotDir)
         const snapBefore = await snapshotDir(cwd);
-        // 不是 git repo:記下任務開始前的檔案內容,「檔案改動」才有東西可以比對(見 task-changes.ts)
-        if (!gitBefore && snapBefore) this.taskBaseline = await captureBaseline(cwd, snapBefore);
+        // 記下任務開始前的檔案內容(見 task-changes.ts):結果卡用它列出「這次任務」改了什麼。
+        // 不是 git repo 時,「檔案改動」也靠它比對;是 git repo 的話,那邊照舊相對上一次 commit。
+        const baseline = snapBefore ? await captureBaseline(cwd, snapBefore) : null;
+        if (!gitBefore) this.taskBaseline = baseline;
         // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
         if (this.stopped) return;
         const { reports, failed } = await this.executePhase(agents, plan);
@@ -488,6 +535,8 @@ class Orchestrator extends EventEmitter {
         const fix = await this.fixPhase(reviews);
         if (this.stopped) return;
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
+        if (this.stopped) return;
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, reviews, fix, baseline });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
         await this.summaryPhase(task, 'discuss', {});
@@ -1149,7 +1198,38 @@ function restoreMessage(m: any, locale: TextLocale = 'zh-Hant'): LiveMessage {
   const review = restoreReviewInfo(m.review);
   if (review) msg.review = review; else delete msg.review;
   if (m.rawPlan === true) msg.rawPlan = true; else delete msg.rawPlan;
+  const summary = restoreTaskSummary(m.taskSummary);
+  if (summary) msg.taskSummary = summary; else delete msg.taskSummary;
   return msg;
+}
+
+// 結果卡:形狀不對就不顯示卡片(純文字版照樣在 text 裡)
+const TASK_OUTCOMES = new Set(['approved', 'repaired', 'unresolved', 'unreviewed', 'failed']);
+const FILE_STATUSES = new Set(['added', 'modified', 'deleted', 'renamed']);
+function restoreTaskSummary(raw: any): TaskSummary | null {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.members) || !Array.isArray(raw.files) || !raw.usage || typeof raw.usage !== 'object') return null;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  const members = raw.members
+    .filter((m: any) => m && typeof m.name === 'string' && m.name && TASK_OUTCOMES.has(m.outcome))
+    .map((m: any) => ({ name: m.name, ...(typeof m.color === 'string' ? { color: m.color } : {}), outcome: m.outcome, reviewers: Array.isArray(m.reviewers) ? m.reviewers.filter((r: unknown) => typeof r === 'string') : [] }));
+  const files = raw.files
+    .filter((f: any) => f && typeof f.path === 'string' && f.path && FILE_STATUSES.has(f.status))
+    .slice(0, TASK_SUMMARY_FILES)
+    .map((f: any) => ({ path: f.path, status: f.status, added: num(f.added), removed: num(f.removed) }));
+  return {
+    startedAt: num(raw.startedAt),
+    endedAt: num(raw.endedAt),
+    members,
+    files,
+    moreFiles: num(raw.moreFiles),
+    usage: {
+      inputTokens: num(raw.usage.inputTokens),
+      outputTokens: num(raw.usage.outputTokens),
+      costUsd: typeof raw.usage.costUsd === 'number' && raw.usage.costUsd >= 0 ? raw.usage.costUsd : null,
+      turns: num(raw.usage.turns),
+      turnsWithUsage: num(raw.usage.turnsWithUsage),
+    },
+  };
 }
 
 // 紀錄檔可能被手動改過或來自舊版本:形狀不對就整個丟掉,介面不顯示,也不會壞掉
@@ -1310,6 +1390,27 @@ function withoutImages(adapter: Adapter | null): Adapter | null {
   const { modes, needCwd } = attachmentCapabilities(adapter);
   if (!modes.has('imageInline')) return adapter;
   return { ...adapter, capabilities: { attachments: [...modes].filter((m) => m !== 'imageInline'), attachmentsNeedCwd: needCwd } };
+}
+
+// 結果卡的純文字版:匯出成 Markdown、重開歷史紀錄時用
+const TASK_SUMMARY_FILES = 30;
+function taskSummaryText(summary: TaskSummary, locale: TextLocale): string {
+  const members = summary.members.map((m) => tx(locale, 'sys.taskSummary.member', {
+    name: m.name,
+    outcome: tx(locale, `sys.taskOutcome.${m.outcome}`),
+    reviewers: m.reviewers.length ? tx(locale, 'sys.taskSummary.reviewedBy', { names: joinNames(locale, m.reviewers) }) : '',
+  }));
+  const files = summary.files.map((f) => tx(locale, 'sys.taskSummary.file', { path: f.path, added: f.added, removed: f.removed }));
+  if (summary.moreFiles > 0) files.push(tx(locale, 'git.more', { n: summary.moreFiles }));
+  const u = summary.usage;
+  const usage = u.turnsWithUsage
+    ? tx(locale, 'sys.taskSummary.usage', { input: u.inputTokens.toLocaleString('en-US'), output: u.outputTokens.toLocaleString('en-US') }) + (u.costUsd != null ? ` · $${u.costUsd.toFixed(3)}` : '')
+    : '';
+  return [
+    tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : ''),
+    members.join('\n'),
+    files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
+  ].join('\n\n');
 }
 
 // 審查的結論。流程(要不要進修復回合、算不算審查過)與介面的徽章都用這一個判斷,兩邊不會各說各話

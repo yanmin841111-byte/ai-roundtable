@@ -313,6 +313,27 @@ export interface ChatMessage {
   // 主持人的分工輸出已經成功解析成下方的「分工結果」。原文(多半是一串 JSON)
   // 對使用者只是重複又難讀,介面收起來;解析失敗時不標,原文要留著讓人看出哪裡不對。
   rawPlan?: boolean;
+  // tag === 'task-summary':分工任務結束時的結果卡。text 是同一份資料的純文字版(匯出、歷史紀錄用)
+  taskSummary?: TaskSummary;
+}
+
+// 每位執行成員這次的結果,依流程實際走到哪裡決定:
+//   approved   審查者宣告沒問題
+//   repaired   審查提出問題,成員已經修復(修復後沒有再審查一次)
+//   unresolved 審查提出問題,但沒有修好(沒有改檔權限,或修復回合失敗)
+//   unreviewed 沒有人審查成功
+//   failed     執行階段就失敗了
+export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed';
+
+export interface TaskSummary {
+  startedAt: number;
+  endedAt: number;
+  members: Array<{ name: string; color?: string; outcome: TaskOutcome; reviewers: string[] }>;
+  // 這次任務改了哪些檔案(任務開始前後比對,不含使用者之前就有的改動)
+  files: Array<{ path: string; status: DiffFileStatus; added: number; removed: number }>;
+  moreFiles: number;
+  // 這次任務所有回合的用量加總。turnsWithUsage < turns 代表有些回合沒有回報用量,總數偏低
+  usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
 }
 
 // 審查者怎麼看到改動
