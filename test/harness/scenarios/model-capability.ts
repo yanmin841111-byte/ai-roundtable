@@ -57,7 +57,8 @@ async function once(locale: 'zh-Hant' | 'en') {
       await g.ready();
       const card = (id: string) => document.querySelector(`#agent-list .agent-card[data-agent-id="${id}"]`) as HTMLElement;
       const badges = (id: string) => Array.from(card(id).querySelectorAll('.badge')).map((b) => b.textContent);
-      await g.waitFor(() => badges('g').includes(H.zh ? '不支援工具' : 'no tools'), 10000);
+      // 兩位成員的能力各自非同步查回來:兩張卡片都等到,不能只等其中一張(CI 的機器慢,曾經因此失敗)
+      await g.waitFor(() => badges('g').includes(H.zh ? '不支援工具' : 'no tools') && badges('q').includes(H.zh ? '不能看圖' : 'no images'), 15000, '兩張卡片的能力徽章');
       g.check(badges('g').includes(H.zh ? '不支援工具' : 'no tools'), `Gemma 的卡片標出不支援工具(${badges('g').join(', ')})`);
       g.check(!badges('g').includes(H.zh ? '不能看圖' : 'no images'), 'Gemma 能看圖,不標');
       g.check(badges('q').includes(H.zh ? '不能看圖' : 'no images') && !badges('q').includes(H.zh ? '不支援工具' : 'no tools'), `Qwen 的卡片只標不能看圖(${badges('q').join(', ')})`);

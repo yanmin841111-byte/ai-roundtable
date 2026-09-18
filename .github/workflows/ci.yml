@@ -32,7 +32,7 @@ jobs:
           AI_ROUNDTABLE_SHOTS_DIR: ${{ runner.temp }}/harness-shots
       # 失敗時把截圖留下來,在 PR 的 Actions 頁面就能直接看到畫面長什麼樣
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: harness-screenshots
           path: ${{ runner.temp }}/harness-shots

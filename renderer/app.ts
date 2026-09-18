@@ -1305,11 +1305,13 @@ const modelCaps = new Map<string, ModelCapability | null>();
 const capsPending = new Set<string>();
 // 轉接器清單或健康狀態更新(改了擴充的端點、Ollama 晚一點才開)、按了「測試」之後,整批重問主程序。
 // 主程序有自己的快取,重問很便宜;不重問的話,卡片會一直停在舊的結果。
-// 世代編號讓清空之前發出、之後才回來的舊回應不會寫回快取。
+// 重問期間照舊顯示舊的結果,新的回來再換:先清空的話,每次健康檢查完成徽章都會閃一下。
+// 世代編號讓重問之前發出、之後才回來的舊回應不會蓋掉新的。
+const capsStale = new Set<string>();
 let capsGeneration = 0;
 function resetCapabilities(): void {
   capsGeneration++;
-  modelCaps.clear();
+  for (const key of modelCaps.keys()) capsStale.add(key);
 }
 const capKey = (cli: string, model: string) => `${cli}\n${model || ''}`;
 const isApiCli = (cli: string) => !!(cliTypes[cli] && cliTypes[cli].type === 'openai');
@@ -1317,11 +1319,16 @@ const isApiCli = (cli: string) => !!(cliTypes[cli] && cliTypes[cli].type === 'op
 function ensureCapability(cli: string, model: string, onDone: () => void): void {
   if (!isApiCli(cli)) return;
   const key = capKey(cli, model);
-  if (modelCaps.has(key) || capsPending.has(key)) return;
+  if ((modelCaps.has(key) && !capsStale.has(key)) || capsPending.has(key)) return;
   capsPending.add(key);
   const generation = capsGeneration;
+  const settle = (cap: ModelCapability | null) => {
+    if (generation !== capsGeneration) return; // 過期的回應:留著舊值,onDone 重畫時會再問一次
+    modelCaps.set(key, cap);
+    capsStale.delete(key);
+  };
   window.api.modelCapability({ adapterId: cli, model: model || '' })
-    .then((cap) => { if (generation === capsGeneration) modelCaps.set(key, cap); }, () => { if (generation === capsGeneration) modelCaps.set(key, null); })
+    .then(settle, () => settle(null))
     .finally(() => { capsPending.delete(key); onDone(); });
 }
 
@@ -1371,12 +1378,8 @@ function updateCapabilityRow(): void {
   if (wrap.hidden) return;
   const model = currentModel();
   const key = capKey(cli, model);
-  if (!modelCaps.has(key)) {
-    showCapability({ text: t('cap.checking'), source: '', effect: '' });
-    ensureCapability(cli, model, () => { updateCapabilityRow(); renderSidebar(); });
-    return;
-  }
-  showCapability(describeCapability(modelCaps.get(key) || null));
+  if (!modelCaps.has(key) || capsStale.has(key)) ensureCapability(cli, model, () => { updateCapabilityRow(); renderSidebar(); });
+  showCapability(modelCaps.has(key) ? describeCapability(modelCaps.get(key) || null) : { text: t('cap.checking'), source: '', effect: '' });
 }
 
 async function testCapability(): Promise<void> {
@@ -1398,6 +1401,7 @@ async function testCapability(): Promise<void> {
     // 主程序會把它們對應到同一筆剛測好的結果
     resetCapabilities();
     modelCaps.set(key, result);
+    capsStale.delete(key);
   } finally {
     btn.disabled = false;
     btn.textContent = t('cap.test');
