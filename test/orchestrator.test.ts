@@ -162,10 +162,21 @@ t('不支援 resume 的成員會套用上限並保留首尾', () => {
 
 t('支援 resume 且發言過的成員不套用截斷(只送新訊息,量本來就小)', () => {
   const { orc, me } = makeOrc('claude', 1500);
+  // 「發言過」在實際流程裡同時意味著有 lastSeen 與一個可續接的 session
   orc.lastSeen.me = 0;
+  orc.sessions.me = 's1';
   const out = orc.unseenTranscript(me, null);
   assert.ok(out.length > 1500, `實際 ${out.length}`);
   assert.ok(!out.includes(OMIT));
+});
+
+// 支援續接但手上沒有 session(例如上一回合在建立 session 前就失敗):CLI 沒有任何記憶,
+// 只送新訊息會讓成員失去整段前情。必須當成第一次發言,從頭送並套用上限。
+t('支援 resume 但沒有 session 時從頭看起,不能只送新訊息', () => {
+  const { orc, me } = makeOrc('claude', 1500);
+  orc.lastSeen.me = 2;
+  const out = orc.unseenTranscript(me, null);
+  assert.ok(out.includes('任務內容'), '必須包含原本的任務');
 });
 
 t('支援 resume 但第一次發言的成員(例如剛載入歷史對話)從頭看起並套用上限', () => {

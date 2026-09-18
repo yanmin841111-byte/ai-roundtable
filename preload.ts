@@ -23,6 +23,7 @@ const api: RendererApi = {
   openSessions: () => invoke('chat:openSessions'),
   stop: () => invoke('chat:stop'),
   answerQuestion: (answer) => invoke('chat:answer', answer),
+  retry: (messageId) => invoke('chat:retry', messageId),
   getDiff: () => invoke('diff:changes'),
   quickSetupOllama: (model) => invoke('ollama:quickSetup', model ? { model } : {}),
   reset: () => invoke('chat:reset'),

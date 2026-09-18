@@ -75,6 +75,9 @@ const ZH: Record<string, Entry> = {
   'sys.noIssues': '交叉審查沒有發現問題,略過修復回合。',
   'sys.unresolved': '「{names}」沒有修改檔案的權限,審查意見將直接帶入總結。',
   'sys.fixFailed': '**修復失敗**,以下成員的審查意見仍未處理:\n{list}',
+  'sys.retryBusy': '目前有任務進行中,請等它結束再重試。',
+  'sys.retryNotAllowed': '這則訊息無法重試(只有最近一次失敗的指定回覆可以重試)。',
+  'sys.unfinishedOnSave': '這則訊息在儲存時尚未完成',
 
   // ---------- 對話紀錄 ----------
   'transcript.new': '【新訊息】',
@@ -355,6 +358,9 @@ const EN: Record<string, Entry> = {
   'sys.noIssues': 'Cross-review found no issues. Skipping the repair round.',
   'sys.unresolved': '{names} cannot edit files. The review comments go straight into the summary.',
   'sys.fixFailed': '**Repair failed.** Review comments for these members remain unaddressed:\n{list}',
+  'sys.retryBusy': 'A task is running. Wait for it to finish before retrying.',
+  'sys.retryNotAllowed': 'This message cannot be retried (only the latest failed direct reply can be).',
+  'sys.unfinishedOnSave': 'This message had not finished when it was saved',
 
   'transcript.new': '[New messages]',
   'transcript.sofar': '[Conversation so far]',

@@ -552,3 +552,7 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 
 /* 成員卡的徽章可能同時有「主持人」「未安裝」「唯讀」,要能換行不擠壞版面 */
 .agent-name { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+/* 失敗的指定回覆:重試鍵緊跟在錯誤訊息下方,是出錯時最直接的下一步 */
+.retry-btn { margin-top: 8px; color: var(--danger); border-color: var(--danger-border); background: transparent; }
+.retry-btn:hover { background: var(--danger-soft); border-color: var(--danger); }

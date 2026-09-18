@@ -32,6 +32,7 @@ interface AgentShell {
   error: CachedEl;
   // 舊的訊息節點可能還沒有這個元素,所以允許 null
   unreviewed: HTMLElement | null;
+  retry: HTMLButtonElement | null;
   usage: CachedEl;
   statusLine: CachedEl;
 }
@@ -1643,6 +1644,8 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   let placed: { node: HTMLElement; isNewNode: boolean } | null = null;
   if (!el) {
     el = document.createElement('div');
+    // 讓每則訊息在 DOM 上可以被定位(除錯與 harness 都用得到);元素本身仍以 msgEls 為準
+    el.dataset.msgId = m.id;
     msgEls.set(m.id, el);
     placed = placeMessage(el, m);
     if (animate) {
@@ -1875,6 +1878,17 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
+  if (shell.retry) {
+    const retry = shell.retry;
+    retry.hidden = !m.retryable;
+    retry.textContent = t('msg.retry');
+    retry.onclick = async () => {
+      retry.disabled = true;
+      const result = await window.api.retry(m.id);
+      // 成功時 orchestrator 會把 retryable 清掉,按鈕隨下一次渲染消失;失敗才需要在這裡復原
+      if (!result.ok) { retry.disabled = false; retry.title = result.error || ''; }
+    };
+  }
   if (shell.unreviewed) {
     shell.unreviewed.hidden = !m.unreviewed;
     if (m.unreviewed && !shell.unreviewed.dataset.built) {
@@ -1957,6 +1971,11 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     body.className = 'body';
     const error = document.createElement('div');
     error.className = 'error-text';
+    // 失敗的 @ 指定回覆可以一鍵重試;能不能重試由 orchestrator 決定(message.retryable)
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'small retry-btn';
+    retry.hidden = true;
     // 「沒有人審查過這次改動」是這個產品最不希望被忽略的訊號,不能只靠標頭一個小徽章。
     const unreviewed = document.createElement('div');
     unreviewed.className = 'unreviewed-note';
@@ -1966,7 +1985,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
     statusLine.textContent = t('msg.streaming');
-    bubble.append(head, thinking, activities, body, error, unreviewed, usage, statusLine);
+    bubble.append(head, thinking, activities, body, error, retry, unreviewed, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
@@ -1985,6 +2004,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     body: el.querySelector<CachedEl>('.body')!,
     error: el.querySelector<CachedEl>('.error-text')!,
     unreviewed: el.querySelector<HTMLElement>('.unreviewed-note'),
+    retry: el.querySelector<HTMLButtonElement>('.retry-btn'),
     usage: el.querySelector<CachedEl>('.usage')!,
     statusLine: el.querySelector<CachedEl>('.bubble-status')!,
   };

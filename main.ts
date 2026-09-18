@@ -323,6 +323,7 @@ app.whenReady().then(async () => {
   });
   // 只轉交;id 驗證與 first-answer-wins 都在 orchestrator,IPC 層不保留任何狀態
   handle('chat:answer', (answer) => orchestrator.answerQuestion(answer));
+  handle('chat:retry', (messageId) => orchestrator.retry(messageId));
   // 工作目錄目前的檔案改動。唯讀:只讀 git 的輸出,不碰使用者的版本控制狀態。
   // collectChanges 全程非同步——在主程序同步跑 git 會凍結整個視窗。
   handle('diff:changes', () => collectChanges(store.get().settings.workDir));

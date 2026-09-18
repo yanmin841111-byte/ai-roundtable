@@ -20,6 +20,7 @@ export const IPC_CHANNELS = {
   chatReset: 'chat:reset',
   chatResume: 'chat:resume',
   chatAnswer: 'chat:answer',
+  chatRetry: 'chat:retry',
   diffChanges: 'diff:changes',
   ollamaQuickSetup: 'ollama:quickSetup',
   chatMessage: 'chat:message',
@@ -293,6 +294,8 @@ export interface ChatMessage {
   // 介面必須明講,否則使用者會把「跑完了」當成「有人看過了」。
   // 由 orchestrator 在執行階段結束時填入(工具呼叫層接線時)。
   unreviewed?: boolean;
+  // 失敗的 @ 指定回覆可以重試。由 orchestrator 決定並寫進訊息,介面只照旗標顯示按鈕。
+  retryable?: boolean;
 }
 
 // ---------- 選項式提問 ----------
@@ -506,6 +509,7 @@ export interface IpcContract {
   'chat:reset': { args: []; result: void };
   'chat:resume': { args: [sessionId: string]; result: ResumeResult };
   'chat:answer': { args: [answer: QuestionAnswer]; result: void };
+  'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
   'diff:changes': { args: []; result: DiffResult };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   'attachments:list': { args: []; result: AttachmentsResult };
@@ -563,6 +567,7 @@ export interface RendererApi {
   resume(sessionId: string): Promise<ResumeResult>;
   // 回答成員的提問。id 驗證與 first-answer-wins 都在 orchestrator,這裡只負責轉交。
   answerQuestion(answer: QuestionAnswer): Promise<void>;
+  retry(messageId: string): Promise<{ ok: boolean; error?: string }>;
   // 工作目錄目前的檔案改動;唯讀,不提供套用或還原
   getDiff(): Promise<DiffResult>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定

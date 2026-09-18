@@ -230,6 +230,8 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 對外操作 ----------
   async userMessage(text: string, mode: string, attachments: AttachmentMeta[] = []) {
+    // 有了新訊息,之前失敗的回合就不再是「最近一次」,前情與附件也不同了,不再提供重試
+    this.clearRetryable();
     const list = Array.isArray(attachments) ? attachments : [];
     const mentioned = findMentions(text, this.agents);
     // metadata 跟著訊息走,歷史對話重開才看得到附件;絕不放 base64 內容
@@ -260,6 +262,38 @@ class Orchestrator extends EventEmitter {
       : this.runTask(text, mode || this.config.settings.mode);
     run.catch((e: unknown) => this.system(this.text('sys.error', { message: e instanceof Error ? e.message : String(e) }), { level: 'error' }));
     return msg;
+  }
+
+  // ---------- 重試 ----------
+  // 只開放給 @ 指定回覆。分工流程裡的回合失敗之後,流程已經往下走了(失敗的成果不進審查、
+  // 總結會提到它),事後單獨重跑一個執行回合會繞過審查閘門與「尚未審查」標記——
+  // 那正是這個產品最不能出錯的地方。指定回覆是單一回合,不牽涉後續階段,重跑是乾淨的。
+  // 也只開放給最後一次任務裡的失敗:之後的訊息會改變前情與附件,重跑的就不是同一件事。
+  async retry(messageId: string): Promise<{ ok: boolean; error?: string }> {
+    if (this.running) return { ok: false, error: this.text('sys.retryBusy') };
+    const idx = this.messages.findIndex((m) => m.id === messageId);
+    const msg = this.messages[idx];
+    const agent = msg && this.agents.find((a) => a.id === msg.agentId);
+    if (!msg || !msg.retryable || !agent) return { ok: false, error: this.text('sys.retryNotAllowed') };
+    let lastUser = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) if (this.messages[i].kind === 'user') { lastUser = i; break; }
+    if (lastUser < 0 || idx < lastUser) return { ok: false, error: this.text('sys.retryNotAllowed') };
+    this.clearRetryable();
+    const run = this.runExclusive(async () => {
+      // runExclusive 預設最後一則是使用者訊息;重試時要指回觸發這次指定的那一則,
+      // 任務敘述才會被釘在對話紀錄裡,截斷時不會先丟掉。
+      this.taskStartIndex = lastUser;
+      await this.directedPhase([agent]);
+    });
+    run.catch((e: unknown) => this.system(this.text('sys.error', { message: e instanceof Error ? e.message : String(e) }), { level: 'error' }));
+    return { ok: true };
+  }
+
+  // 一定要 flush:這是一次性的狀態改變,不是串流片段。沒 flush 的更新會排進計時器,
+  // 而 runExclusive 結束時會清掉所有計時器——回合跑得比送出間隔快時(例如重試立刻成功),
+  // 這筆更新就被丟掉,畫面上舊訊息的重試鍵永遠不會收起來。
+  clearRetryable() {
+    for (const m of this.messages) if (m.retryable) this.updateMessage(m, { retryable: false }, true);
   }
 
   // ---------- 選項式提問 ----------
@@ -393,7 +427,7 @@ class Orchestrator extends EventEmitter {
     this.clearEmitTimers();
     clearRuntime(this.config.settings.workDir, this.conversationId);
     this.conversationId = conversationId && CONVERSATION_ID.test(conversationId) ? conversationId : newConversationId();
-    this.messages = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object').map(restoreMessage);
+    this.messages = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m === 'object').map((m) => restoreMessage(m, this.locale));
     this.attachments = [];
     this.staged = [];
     this.attachmentsSeen.clear();
@@ -866,7 +900,10 @@ class Orchestrator extends EventEmitter {
   // 這裡要加上字元上限,否則長討論會直接撞上模型的 context 上限。
   unseenTranscript(agent: AgentConfig, current: LiveMessage) {
     const seen = this.lastSeen[agent.id];
-    const resumable = !!getAdapter(agent.cli)?.supportsResume;
+    // 真的有 session 可以續接,才能只送新訊息。只看 adapter 支不支援續接不夠:
+    // 回合失敗在建立 session 之前(例如 CLI 沒登入)時,CLI 手上什麼都沒有,
+    // 只送新訊息等於讓成員失去整段前情——包括原本的任務。與 turn() 判斷續接的條件一致。
+    const resumable = !!(getAdapter(agent.cli)?.supportsResume && this.sessions[agent.id]);
     // 可續接且發言過的成員只需要新訊息;第一次發言(含剛載入的歷史對話)要從頭看起
     const incremental = resumable && seen != null;
     const from = incremental ? seen : 0;
@@ -928,8 +965,10 @@ class Orchestrator extends EventEmitter {
     });
     if (result.sessionId) this.sessions[agent.id] = result.sessionId;
     text = result.text || text;
-    this.lastSeen[agent.id] = startIdx;
     const error = result.error || null;
+    // 只有成功的回合才算「看過了」。失敗代表成員沒有真正收到這些內容,
+    // 下一回合(或重試)必須重送,否則它會在不知道前情的狀況下回答。
+    if (!error) this.lastSeen[agent.id] = startIdx;
     // 顯示、對話紀錄與所有下游提示詞都不留 [ASK] 區塊:問題由卡片呈現,留著會同一個問題出現兩次;
     // 被節流或非討論階段的 [ASK] 走同一條路徑剝掉,對成員來說就是「問了但沒被受理」。
     const display = stripAsk(text);
@@ -939,6 +978,8 @@ class Orchestrator extends EventEmitter {
       usage: result.usage,
       status: error ? 'error' : 'done',
       error,
+      // 只有 @ 指定回覆可以重試,理由見 retry()
+      ...(error && isPhaseInfo(phase) && phase.code === 'direct' ? { retryable: true } : {}),
     }, true); // 回合結束一定要 flush,不能讓最後一次更新卡在節流裡
     return { text: display, raw: text, error, toolEvents: toAuditEntries((result as { toolEvents?: unknown }).toolEvents) };
   }
@@ -977,7 +1018,7 @@ function mentionLabel(m: ChatMessage, locale: TextLocale = 'zh-Hant') {
 }
 
 // 從紀錄還原訊息:補齊欄位;存檔時還在輸出中的訊息不可能再完成,標成中斷
-function restoreMessage(m: any): LiveMessage {
+function restoreMessage(m: any, locale: TextLocale = 'zh-Hant'): LiveMessage {
   const kind: ChatMessage['kind'] = MESSAGE_KINDS.has(m.kind) ? m.kind : 'system';
   const msg: LiveMessage = {
     ...m,
@@ -988,7 +1029,9 @@ function restoreMessage(m: any): LiveMessage {
     activities: Array.isArray(m.activities) ? m.activities : [],
     status: m.status === 'error' ? 'error' : 'done',
   };
-  if (m.status === 'running') { msg.status = 'error'; msg.error = m.error || '這則訊息在儲存時尚未完成'; }
+  if (m.status === 'running') { msg.status = 'error'; msg.error = m.error || tx(locale, 'sys.unfinishedOnSave'); }
+  // 載入的歷史對話不提供重試:附件與 CLI 的 session 都已經跟當時不同,重跑的不是同一件事
+  msg.retryable = false;
   return msg;
 }
 
