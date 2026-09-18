@@ -4,6 +4,15 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { tx } from '../text';
+import type { TextLocale } from '../text';
+
+// 錯誤先用字串代號丟出,由 execute 依這個回合的語言翻成文字:底層的檢查不必各自知道語言。
+// 這些訊息模型會讀(決定下一步怎麼做),工具紀錄裡使用者也看得到,所以要跟著介面語言。
+class ToolError extends Error {
+  constructor(readonly key: string, readonly params: Record<string, string | number> = {}) { super(key); }
+}
+const fail = (key: string, params?: Record<string, string | number>) => new ToolError(key, params);
 
 export const FILE_TOOL_MAX_BYTES = 256 * 1024;
 export const FILE_TOOL_MAX_READ_CHARS = 64 * 1024;
@@ -49,18 +58,21 @@ export interface FileToolTranscriptEntry {
   result: Omit<FileToolResult, 'content'>;
 }
 
-export const FILE_TOOL_DEFINITIONS = [
+// 工具說明是模型讀的:跟著這個回合的語言,英文會議裡才不會混進中文的工具說明
+export function fileToolDefinitions(locale: TextLocale = 'zh-Hant') {
+  const d = (key: string) => tx(locale, key);
+  return [
   {
     type: 'function',
     function: {
       name: 'read_file',
-      description: '讀取工作目錄內的 UTF-8 文字檔。修改既有檔案前必須先呼叫，並把 sha256 傳給寫入工具。',
+      description: d('ft.def.read'),
       parameters: {
         type: 'object', additionalProperties: false, required: ['path'],
         properties: {
-          path: { type: 'string', description: '相對於工作目錄的路徑' },
-          offset: { type: 'integer', minimum: 0, description: '從第幾個字元開始，預設 0' },
-          limit: { type: 'integer', minimum: 1, maximum: FILE_TOOL_MAX_READ_CHARS, description: '最多回傳字元數' },
+          path: { type: 'string', description: d('ft.def.path') },
+          offset: { type: 'integer', minimum: 0, description: d('ft.def.offset') },
+          limit: { type: 'integer', minimum: 1, maximum: FILE_TOOL_MAX_READ_CHARS, description: d('ft.def.limit') },
         },
       },
     },
@@ -69,15 +81,15 @@ export const FILE_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: '建立小型文字檔，或在 sha256 未改變時整檔覆寫。既有檔案必須提供 expectedSha256；新檔必須 createOnly=true。',
+      description: d('ft.def.write'),
       parameters: {
         type: 'object', additionalProperties: false, required: ['path', 'content', 'reason'],
         properties: {
-          path: { type: 'string', description: '相對於工作目錄的路徑' },
-          content: { type: 'string', description: '完整 UTF-8 文字內容，上限 256KB' },
+          path: { type: 'string', description: d('ft.def.path') },
+          content: { type: 'string', description: d('ft.def.content') },
           expectedSha256: { type: 'string', pattern: '^[a-fA-F0-9]{64}$' },
-          createOnly: { type: 'boolean', description: '建立新檔時必須為 true；檔案已存在就失敗' },
-          reason: { type: 'string', minLength: 1, maxLength: 500, description: '本次修改目的，會進入審查紀錄' },
+          createOnly: { type: 'boolean', description: d('ft.def.createOnly') },
+          reason: { type: 'string', minLength: 1, maxLength: 500, description: d('ft.def.reason') },
         },
       },
     },
@@ -86,23 +98,26 @@ export const FILE_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'replace_text',
-      description: '以精確文字做局部替換。預設要求 oldText 只出現一次；多處替換必須明確指定 replaceAll=true。',
+      description: d('ft.def.replace'),
       parameters: {
         type: 'object', additionalProperties: false, required: ['path', 'oldText', 'newText', 'expectedSha256'],
         properties: {
-          path: { type: 'string', description: '相對於工作目錄的路徑' },
-          oldText: { type: 'string', minLength: REPLACE_TEXT_MIN_CHARS, description: '至少 24 個字元的精確原文' },
-          newText: { type: 'string', description: '替換後文字' },
+          path: { type: 'string', description: d('ft.def.path') },
+          oldText: { type: 'string', minLength: REPLACE_TEXT_MIN_CHARS, description: d('ft.def.oldText') },
+          newText: { type: 'string', description: d('ft.def.newText') },
           expectedSha256: { type: 'string', pattern: '^[a-fA-F0-9]{64}$' },
-          replaceAll: { type: 'boolean', description: '明確允許替換全部匹配；預設 false' },
+          replaceAll: { type: 'boolean', description: d('ft.def.replaceAll') },
         },
       },
     },
   },
 ] as const;
+}
 
 // 審查回合只給讀取工具:定義裡沒有寫入工具,模型就不會以為自己該改檔。
-export const FILE_TOOL_READ_DEFINITIONS = FILE_TOOL_DEFINITIONS.filter((d) => d.function.name === 'read_file');
+export function fileToolReadDefinitions(locale: TextLocale = 'zh-Hant') {
+  return fileToolDefinitions(locale).filter((d) => d.function.name === 'read_file');
+}
 
 function sha256(data: Buffer | string): string {
   return crypto.createHash('sha256').update(data).digest('hex');
@@ -141,11 +156,11 @@ const AUTO_EXEC_ROOT_PREFIXES = ['lefthook.'];
 function assertNotAutoExecuted(root: string, target: string): void {
   const parts = path.relative(root, target).split(path.sep).filter(Boolean);
   const dirHit = parts.find((part) => AUTO_EXEC_DIR_NAMES.has(part.toLowerCase()));
-  if (dirHit) throw new Error(`不可寫入 ${dirHit} 底下的檔案:這裡的內容會被自動執行`);
+  if (dirHit) throw fail('ft.autoExecDir', { dir: dirHit });
   if (parts.length === 1) {
     const name = parts[0].toLowerCase();
     if (AUTO_EXEC_ROOT_FILES.has(name) || AUTO_EXEC_ROOT_PREFIXES.some((p) => name.startsWith(p))) {
-      throw new Error(`不可寫入 ${parts[0]}:這個檔案會被自動執行`);
+      throw fail('ft.autoExecFile', { file: parts[0] });
     }
   }
 }
@@ -153,21 +168,21 @@ function assertNotAutoExecuted(root: string, target: string): void {
 // 已經帶執行位元的檔案改了就是改了執行中的程式。atomicWrite 會保留原權限,
 // 所以覆寫一個 0755 的 shell script 等同直接換掉一支會被跑起來的指令。
 function assertNotExecutable(mode: number, relPath: string): void {
-  if (mode & 0o111) throw new Error(`不可寫入 ${relPath}:這個檔案帶有執行權限`);
+  if (mode & 0o111) throw fail('ft.executable', { file: relPath });
 }
 
 function assertNotVcsInternal(root: string, candidate: string): void {
   if (!isInside(root, candidate)) return;
   const parts = path.relative(root, candidate).split(path.sep).filter(Boolean);
   if (parts.some((part) => VCS_INTERNAL_NAMES.has(part.toLowerCase()))) {
-    throw new Error('不可讀取或修改版本控制內部檔案（.git、.hg、.svn）');
+    throw fail('ft.vcs');
   }
 }
 
 function assertPlainRelativePath(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error('path 必須是非空白相對路徑');
-  if (path.isAbsolute(value)) throw new Error('path 必須是相對於工作目錄的路徑');
-  if (value.includes('\0')) throw new Error('path 不可包含 NUL');
+  if (typeof value !== 'string' || !value.trim()) throw fail('ft.pathEmpty');
+  if (path.isAbsolute(value)) throw fail('ft.pathAbsolute');
+  if (value.includes('\0')) throw fail('ft.pathNul');
   return value;
 }
 
@@ -190,25 +205,25 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 function decodeUtf8(buffer: Buffer): string {
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-    if (text.includes('\0')) throw new Error('只允許 UTF-8 文字檔，不可包含 NUL');
+    if (text.includes('\0')) throw fail('ft.textNul');
     return text;
   }
-  catch { throw new Error('只允許有效的 UTF-8 文字檔'); }
+  catch { throw fail('ft.textInvalid'); }
 }
 
 function validateTextContent(value: unknown): { text: string; buffer: Buffer } {
-  if (typeof value !== 'string') throw new Error('content 必須是字串');
-  if (hasUnpairedSurrogate(value)) throw new Error('content 必須是有效的 UTF-8 文字');
-  if (value.includes('\0')) throw new Error('content 不可包含 NUL');
+  if (typeof value !== 'string') throw fail('ft.contentString');
+  if (hasUnpairedSurrogate(value)) throw fail('ft.contentUtf8');
+  if (value.includes('\0')) throw fail('ft.contentNul');
   const buffer = Buffer.from(value, 'utf8');
-  if (buffer.length > FILE_TOOL_MAX_BYTES) throw new Error(`檔案內容超過 ${FILE_TOOL_MAX_BYTES} bytes 上限`);
+  if (buffer.length > FILE_TOOL_MAX_BYTES) throw fail('ft.contentTooBig', { max: FILE_TOOL_MAX_BYTES });
   return { text: value, buffer };
 }
 
 function readSmallUtf8(file: string): { buffer: Buffer; text: string; mode: number } {
   const stat = fs.statSync(file);
-  if (!stat.isFile()) throw new Error('只允許一般檔案');
-  if (stat.size > FILE_TOOL_MAX_BYTES) throw new Error(`檔案超過 ${FILE_TOOL_MAX_BYTES} bytes 上限`);
+  if (!stat.isFile()) throw fail('ft.notRegular');
+  if (stat.size > FILE_TOOL_MAX_BYTES) throw fail('ft.fileTooBig', { max: FILE_TOOL_MAX_BYTES });
   const buffer = fs.readFileSync(file);
   return { buffer, text: decodeUtf8(buffer), mode: stat.mode & 0o7777 };
 }
@@ -303,15 +318,18 @@ export class FileToolSession {
   // 審查者只需要「看」,不該能改。工具定義只給 read_file 還不夠——模型仍可能照記憶
   // 呼叫 write_file,所以在這裡再擋一次,不靠模型守規矩。
   readonly readOnly: boolean;
+  // 錯誤訊息的語言
+  readonly locale: TextLocale;
   private calls = 0;
   private outputChars = 0;
 
-  constructor(workDir: string, { readOnly = false }: { readOnly?: boolean } = {}) {
-    if (!workDir || !fs.existsSync(workDir)) throw new Error('工作目錄不存在');
+  constructor(workDir: string, { readOnly = false, locale = 'zh-Hant' }: { readOnly?: boolean; locale?: TextLocale } = {}) {
+    if (!workDir || !fs.existsSync(workDir)) throw new Error(tx(locale, 'ft.noWorkdir'));
     const root = fs.realpathSync.native(workDir);
-    if (!fs.statSync(root).isDirectory()) throw new Error('工作目錄不是資料夾');
+    if (!fs.statSync(root).isDirectory()) throw new Error(tx(locale, 'ft.workdirNotDir'));
     this.root = root;
     this.readOnly = readOnly;
+    this.locale = locale;
   }
 
   get remainingCalls(): number {
@@ -321,7 +339,7 @@ export class FileToolSession {
   private candidate(input: unknown): string {
     const rel = assertPlainRelativePath(input);
     const candidate = path.resolve(this.root, rel);
-    if (!isInside(this.root, candidate)) throw new Error('路徑超出工作目錄');
+    if (!isInside(this.root, candidate)) throw fail('ft.outside');
     assertNotVcsInternal(this.root, candidate);
     return candidate;
   }
@@ -329,9 +347,9 @@ export class FileToolSession {
   private existingPath(input: unknown, { rejectFinalSymlink = false }: { rejectFinalSymlink?: boolean } = {}): string {
     const candidate = this.candidate(input);
     const lst = fs.lstatSync(candidate);
-    if (rejectFinalSymlink && lst.isSymbolicLink()) throw new Error('不允許透過符號連結寫入');
+    if (rejectFinalSymlink && lst.isSymbolicLink()) throw fail('ft.symlinkWrite');
     const real = fs.realpathSync.native(candidate);
-    if (!isInside(this.root, real)) throw new Error('符號連結指向工作目錄外');
+    if (!isInside(this.root, real)) throw fail('ft.symlinkOutside');
     assertNotVcsInternal(this.root, real);
     return real;
   }
@@ -339,9 +357,9 @@ export class FileToolSession {
   private newPath(input: unknown): string {
     const candidate = this.candidate(input);
     const parent = path.dirname(candidate);
-    if (!fs.existsSync(parent)) throw new Error('新檔案的父資料夾不存在');
+    if (!fs.existsSync(parent)) throw fail('ft.noParent');
     const realParent = fs.realpathSync.native(parent);
-    if (!isInside(this.root, realParent)) throw new Error('符號連結指向工作目錄外');
+    if (!isInside(this.root, realParent)) throw fail('ft.symlinkOutside');
     const target = path.join(realParent, path.basename(candidate));
     assertNotVcsInternal(this.root, target);
     return target;
@@ -358,7 +376,7 @@ export class FileToolSession {
     }
     const size = JSON.stringify(candidate).length;
     if (this.outputChars + size > FILE_TOOL_MAX_OUTPUT_CHARS) {
-      if (!(committed && candidate.ok)) return { ok: false, error: '本回合工具輸出已達上限' };
+      if (!(committed && candidate.ok)) return { ok: false, error: tx(this.locale, 'ft.outputFull') };
       // 連精簡後的結果都放不下:照實記帳並回報成功，超出軟上限也好過謊報未修改。
     }
     this.outputChars += size;
@@ -367,29 +385,30 @@ export class FileToolSession {
 
   execute(name: unknown, rawArgs: unknown): FileToolResult {
     this.calls++;
-    if (this.calls > FILE_TOOL_MAX_CALLS) return { ok: false, error: `本回合工具呼叫不可超過 ${FILE_TOOL_MAX_CALLS} 次` };
+    if (this.calls > FILE_TOOL_MAX_CALLS) return { ok: false, error: tx(this.locale, 'ft.tooManyCalls', { n: FILE_TOOL_MAX_CALLS }) };
     try {
       if (typeof rawArgs === 'string' && rawArgs.length > FILE_TOOL_MAX_ARGUMENT_CHARS) {
-        throw new Error(`工具參數超過 ${FILE_TOOL_MAX_ARGUMENT_CHARS} 字元上限`);
+        throw fail('ft.argsTooBig', { max: FILE_TOOL_MAX_ARGUMENT_CHARS });
       }
       if ((name === 'write_file' || name === 'replace_text')
         && this.outputChars + MUTATION_RESULT_RESERVE_CHARS > FILE_TOOL_MAX_OUTPUT_CHARS) {
-        throw new Error('本回合工具輸出額度不足，未修改檔案');
+        throw fail('ft.outputReserve');
       }
       let args: any = rawArgs;
       if (typeof rawArgs === 'string') {
         try { args = JSON.parse(rawArgs); }
-        catch { throw new Error('工具參數不是有效 JSON'); }
+        catch { throw fail('ft.argsJson'); }
       }
-      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('工具參數必須是物件');
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw fail('ft.argsObject');
       if (name === 'read_file') return this.finish(this.readFile(args));
-      if (this.readOnly && (name === 'write_file' || name === 'replace_text')) throw new Error('這個回合只能讀取檔案,不能修改');
+      if (this.readOnly && (name === 'write_file' || name === 'replace_text')) throw fail('ft.readOnly');
       // 這兩個工具回傳時檔案已經寫入,結果必須標成 committed。
       if (name === 'write_file') return this.finish(this.writeFile(args), true);
       if (name === 'replace_text') return this.finish(this.replaceText(args), true);
-      return this.finish({ ok: false, error: `不支援的工具:${String(name)}` });
+      return this.finish({ ok: false, error: tx(this.locale, 'ft.unknownTool', { name: String(name) }) });
     } catch (error) {
-      return this.finish({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof ToolError ? tx(this.locale, error.key, error.params) : error instanceof Error ? error.message : String(error);
+      return this.finish({ ok: false, error: message });
     }
   }
 
@@ -398,8 +417,8 @@ export class FileToolSession {
     const { buffer, text } = readSmallUtf8(target);
     const offset = args.offset == null ? 0 : args.offset;
     const limit = args.limit == null ? FILE_TOOL_MAX_READ_CHARS : args.limit;
-    if (!Number.isInteger(offset) || offset < 0) throw new Error('offset 必須是非負整數');
-    if (!Number.isInteger(limit) || limit < 1 || limit > FILE_TOOL_MAX_READ_CHARS) throw new Error(`limit 必須是 1–${FILE_TOOL_MAX_READ_CHARS} 的整數`);
+    if (!Number.isInteger(offset) || offset < 0) throw fail('ft.offset');
+    if (!Number.isInteger(limit) || limit < 1 || limit > FILE_TOOL_MAX_READ_CHARS) throw fail('ft.limit', { max: FILE_TOOL_MAX_READ_CHARS });
     const end = Math.min(text.length, offset + limit);
     const currentSha = sha256(buffer);
     return {
@@ -418,13 +437,13 @@ export class FileToolSession {
     const candidate = this.candidate(rel);
     const exists = fs.existsSync(candidate);
     const createOnly = args.createOnly === true;
-    if (typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 500) throw new Error('reason 必須是 1–500 字元');
+    if (typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 500) throw fail('ft.reason');
     const { text, buffer } = validateTextContent(args.content);
-    if (exists && createOnly) throw new Error('createOnly=true，但檔案已存在');
-    if (!exists && !createOnly) throw new Error('建立新檔案必須指定 createOnly=true');
+    if (exists && createOnly) throw fail('ft.createExists');
+    if (!exists && !createOnly) throw fail('ft.createNeedsFlag');
 
     if (!exists) {
-      if (args.expectedSha256 != null && args.expectedSha256 !== '') throw new Error('建立新檔案不可提供 expectedSha256');
+      if (args.expectedSha256 != null && args.expectedSha256 !== '') throw fail('ft.createNoSha');
       const target = this.newPath(rel);
       assertNotAutoExecuted(this.root, target);
       atomicWrite(target, buffer, 0o644, true);
@@ -433,15 +452,15 @@ export class FileToolSession {
       return { ok: true, path: path.relative(this.root, target), ...stats, newSha256: newSha, shaAfter: newSha, reason: args.reason.trim() };
     }
 
-    if (typeof args.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(args.expectedSha256)) throw new Error('覆寫既有檔案前必須提供 read_file 回傳的 expectedSha256');
+    if (typeof args.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(args.expectedSha256)) throw fail('ft.overwriteNeedsSha');
     const target = this.existingPath(rel, { rejectFinalSymlink: true });
     assertNotAutoExecuted(this.root, target);
     const before = readSmallUtf8(target);
     assertNotExecutable(before.mode, path.relative(this.root, target));
-    if (sha256(before.buffer) !== args.expectedSha256.toLowerCase()) throw new Error('檔案已被其他成員修改，sha256 不符；請重新 read_file');
+    if (sha256(before.buffer) !== args.expectedSha256.toLowerCase()) throw fail('ft.shaMismatch');
     const verify = () => {
       const current = readSmallUtf8(target);
-      if (sha256(current.buffer) !== args.expectedSha256.toLowerCase()) throw new Error('寫入前檔案又被修改，請重新 read_file');
+      if (sha256(current.buffer) !== args.expectedSha256.toLowerCase()) throw fail('ft.changedBeforeWrite');
     };
     atomicWrite(target, buffer, before.mode, false, verify);
     const stats = countChangedLines(before.text, text);
@@ -458,22 +477,22 @@ export class FileToolSession {
   }
 
   private replaceText(args: any): FileToolResult {
-    if (typeof args.oldText !== 'string' || Array.from(args.oldText).length < REPLACE_TEXT_MIN_CHARS || !args.oldText.trim()) throw new Error(`oldText 至少需要 ${REPLACE_TEXT_MIN_CHARS} 個非空白文字字元`);
-    if (typeof args.newText !== 'string') throw new Error('newText 必須是字串');
-    if (hasUnpairedSurrogate(args.oldText) || hasUnpairedSurrogate(args.newText) || args.oldText.includes('\0') || args.newText.includes('\0')) throw new Error('替換文字必須是有效且不含 NUL 的 UTF-8');
-    if (CONTROL_CHARS.test(args.oldText) || CONTROL_CHARS.test(args.newText)) throw new Error('替換文字不可包含控制字元(tab、換行、歸位除外)');
-    if (typeof args.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(args.expectedSha256)) throw new Error('replace_text 必須提供 read_file 回傳的 expectedSha256');
+    if (typeof args.oldText !== 'string' || Array.from(args.oldText).length < REPLACE_TEXT_MIN_CHARS || !args.oldText.trim()) throw fail('ft.oldTextShort', { n: REPLACE_TEXT_MIN_CHARS });
+    if (typeof args.newText !== 'string') throw fail('ft.newTextString');
+    if (hasUnpairedSurrogate(args.oldText) || hasUnpairedSurrogate(args.newText) || args.oldText.includes('\0') || args.newText.includes('\0')) throw fail('ft.replaceUtf8');
+    if (CONTROL_CHARS.test(args.oldText) || CONTROL_CHARS.test(args.newText)) throw fail('ft.controlChars');
+    if (typeof args.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(args.expectedSha256)) throw fail('ft.replaceNeedsSha');
     const target = this.existingPath(args.path, { rejectFinalSymlink: true });
     assertNotAutoExecuted(this.root, target);
     const before = readSmallUtf8(target);
     assertNotExecutable(before.mode, path.relative(this.root, target));
-    if (sha256(before.buffer) !== args.expectedSha256.toLowerCase()) throw new Error('檔案已被其他成員修改，sha256 不符；請重新 read_file');
+    if (sha256(before.buffer) !== args.expectedSha256.toLowerCase()) throw fail('ft.shaMismatch');
 
     let count = 0;
     let at = 0;
     while ((at = before.text.indexOf(args.oldText, at)) >= 0) { count++; at += args.oldText.length; }
-    if (!count) throw new Error('找不到 oldText，未修改檔案');
-    if (count > 1 && args.replaceAll !== true) throw new Error(`oldText 出現 ${count} 次；請提供更長的唯一內容，或明確設定 replaceAll=true`);
+    if (!count) throw fail('ft.notFound');
+    if (count > 1 && args.replaceAll !== true) throw fail('ft.multiple', { n: count });
     // 兩個分支都用 split/join:String.replace 會把 newText 裡的 $&、$`、$'、$$ 當成
     // 替換樣式展開,寫進磁碟的內容就會跟稽核紀錄的 newText 不一致——那等於讓成員把
     // 自己沒寫出來的內容搬進檔案,而 reviewer 只看得到字面上的 "$'"。
@@ -482,7 +501,7 @@ export class FileToolSession {
     const validated = validateTextContent(afterText);
     const verify = () => {
       const current = readSmallUtf8(target);
-      if (sha256(current.buffer) !== args.expectedSha256.toLowerCase()) throw new Error('寫入前檔案又被修改，請重新 read_file');
+      if (sha256(current.buffer) !== args.expectedSha256.toLowerCase()) throw fail('ft.changedBeforeWrite');
     };
     atomicWrite(target, validated.buffer, before.mode, false, verify);
     const stats = countChangedLines(before.text, afterText);
@@ -501,12 +520,12 @@ export class FileToolSession {
   }
 }
 
-export function toTranscriptEntry(toolCallId: string, name: string, args: unknown, result: FileToolResult): FileToolTranscriptEntry {
+export function toTranscriptEntry(toolCallId: string, name: string, args: unknown, result: FileToolResult, locale: TextLocale = 'zh-Hant'): FileToolTranscriptEntry {
   let parsed: any = args;
   if (typeof args === 'string') try { parsed = JSON.parse(args); } catch { parsed = {}; }
   const summary = result.ok
-    ? `${name} ${result.path || parsed?.path || ''} 完成${result.added != null ? ` (+${result.added}/-${result.removed || 0})` : ''}`
-    : `${name} ${parsed?.path || ''} 失敗:${result.error || '未知錯誤'}`;
+    ? tx(locale, 'ft.summaryOk', { name, path: result.path || parsed?.path || '', counts: result.added != null ? ` (+${result.added}/-${result.removed || 0})` : '' })
+    : tx(locale, 'ft.summaryFail', { name, path: parsed?.path || '', error: result.error || tx(locale, 'ft.unknownError') });
   const { content: _content, ...safeResult } = result;
   return { toolCallId, name, path: result.path || parsed?.path, ok: result.ok, summary, result: safeResult };
 }

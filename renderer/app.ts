@@ -181,7 +181,7 @@ async function init() {
   $<HTMLButtonElement>('#ext-pick-bin').onclick = pickExtensionExecutable;
   $<HTMLButtonElement>('#ext-key-clear').onclick = clearExtensionSecret;
   $<HTMLButtonElement>('#ext-key-test').onclick = testExtensionConnection;
-  for (const id of ['#ext-id', '#ext-label', '#ext-type', '#ext-bin', '#ext-args', '#ext-base-url', '#ext-api-env', '#ext-models']) {
+  for (const id of ['#ext-id', '#ext-label', '#ext-type', '#ext-bin', '#ext-args', '#ext-base-url', '#ext-api-env', '#ext-models', '#ext-timeout']) {
     $(id).addEventListener('input', syncExtBasicToJson);
   }
   $<HTMLSelectElement>('#ext-type').addEventListener('change', updateExtTypeFields);
@@ -350,7 +350,7 @@ async function loadDiff(): Promise<void> {
       body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}</div>`;
       return;
     }
-    renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '');
+    renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '', result.source === 'task' ? result.since : undefined);
   } catch (error) {
     body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.failed') + '\n' + cleanIpcError(error))}</div>`;
   } finally {
@@ -359,7 +359,7 @@ async function loadDiff(): Promise<void> {
   }
 }
 
-function renderDiff(files: DiffFile[], dir: string, totalFiles: number, prefix = ''): void {
+function renderDiff(files: DiffFile[], dir: string, totalFiles: number, prefix = '', taskSince?: number): void {
   const body = $<HTMLDivElement>('#diff-body');
   const summary = $<HTMLDivElement>('#diff-summary');
   body.innerHTML = '';
@@ -371,7 +371,9 @@ function renderDiff(files: DiffFile[], dir: string, totalFiles: number, prefix =
   const head = capped
     ? t('diff.summaryCapped', { shown: files.length, total: totalFiles, added, removed })
     : t('diff.summary', { files: files.length, added, removed });
-  summary.textContent = totalFiles ? `${head}　·　${t('diff.dirLabel', { dir })}` : t('diff.dirLabel', { dir });
+  // 不是 git repo 時比對的基準是「最近一次任務開始前」,不是上一次 commit:要講清楚,不然數字會被誤讀
+  const since = taskSince ? `　·　${t('diff.taskSince', { time: new Date(taskSince).toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' }) })}` : '';
+  summary.textContent = (totalFiles ? `${head}　·　${t('diff.dirLabel', { dir })}` : t('diff.dirLabel', { dir })) + since;
   if (!files.length) {
     body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.clean'))}</div>`;
     return;
@@ -451,8 +453,8 @@ function diffFileEl(file: DiffFile): HTMLElement {
 }
 
 function fillDiffLines(el: HTMLElement, file: DiffFile): void {
-  if (file.binary) {
-    el.innerHTML = `<div class="diff-note">${escapeHtml(t('diff.binary'))}</div>`;
+  if (file.binary || file.unavailable) {
+    el.innerHTML = `<div class="diff-note">${escapeHtml(t(file.unavailable ? `diff.unavailable.${file.unavailable}` : 'diff.binary'))}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
@@ -1018,8 +1020,15 @@ function fillExtBasic(spec: ExtSpec | null | undefined): void {
   $<HTMLInputElement>('#ext-models').dataset.original = JSON.stringify(spec.models == null ? [] : spec.models);
   $<HTMLInputElement>('#ext-models').value = spec.models === 'auto' ? 'auto' : Array.isArray(spec.models) ? spec.models.map((model) => typeof model === 'string' ? model : model.id).filter(Boolean).join(', ') : '';
   $('#ext-models-help').textContent = Array.isArray(spec.models) && spec.models.some((model) => model && typeof model === 'object') ? t('extEditor.modelsKept') : '';
+  // 以分鐘顯示;JSON 裡是 timeoutMs。記下顯示的值:使用者沒動這個欄位時,不能因為顯示時四捨五入就改掉原本的設定
+  const timeout = typeof spec.timeoutMs === 'number' && spec.timeoutMs > 0 ? spec.timeoutMs / 60000 : 0;
+  const timeoutField = $<HTMLInputElement>('#ext-timeout');
+  timeoutField.value = timeout ? String(Math.round(timeout * 10) / 10) : '';
+  timeoutField.dataset.shown = timeoutField.value;
   updateExtTypeFields();
 }
+
+const TIMEOUT_MAX_MINUTES = 600;
 
 function updateExtTypeFields() {
   const api = $<HTMLSelectElement>('#ext-type').value === 'openai';
@@ -1047,6 +1056,15 @@ function syncExtBasicToJson() {
     try { original = JSON.parse($<HTMLInputElement>('#ext-models').dataset.original || '[]'); } catch {}
     const byId = new Map((Array.isArray(original) ? original : []).filter((item) => item && typeof item === 'object').map((item) => [item.id, item]));
     spec.models = ids.map((id) => byId.get(id) || id);
+  }
+  // 使用者改了這個欄位才寫:留空或不是正數就回到預設(不寫這個欄位);其餘限制在 1~600 分鐘,
+  // 太大的值會超過計時器上限、讓每個回合立刻逾時,太小的會四捨五入成 0、存檔時被驗證擋下
+  const timeoutField = $<HTMLInputElement>('#ext-timeout');
+  if (timeoutField.value !== timeoutField.dataset.shown) {
+    const minutes = Number(timeoutField.value);
+    if (timeoutField.value.trim() && Number.isFinite(minutes) && minutes > 0) spec.timeoutMs = Math.round(Math.min(Math.max(minutes, 1), TIMEOUT_MAX_MINUTES) * 60000);
+    else delete spec.timeoutMs;
+    timeoutField.dataset.shown = timeoutField.value; // 現在的 JSON 就是這個欄位的值;之後沒再改它就不動
   }
   if (!spec.capabilities) spec.capabilities = { attachments: spec.type === 'openai' ? ['textInline'] : ['filePath'], attachmentsNeedCwd: false };
   editingExtSpec = spec;
@@ -1648,7 +1666,9 @@ function updateComposerHint() {
     const targets = mentioned.length ? mentioned : enabledAgents();
     const unsupported = targets.filter((agent) => {
       const modes = cliTypes[agent.cli]?.capabilities?.attachments || [];
-      return !modes.includes('imageInline') && !modes.includes('filePath');
+      // 範本會送圖,但已知這個模型不能看圖,一樣收不到
+      const images = modes.includes('imageInline') && modelCaps.get(capKey(agent.cli, agent.model))?.images !== false;
+      return !images && !modes.includes('filePath');
     });
     if (unsupported.length) text = [text, t('attach.imageUnavailable', { names: joinNames(unsupported.map((a) => a.name)) })].filter(Boolean).join(' ');
   }

@@ -44,6 +44,11 @@ export interface StopHandle extends EventEmitter {
 
 // 單一模型回合的預設上限；模型下載等背景工作應自行管理生命週期與續傳，不套用此值。
 const DEFAULT_TURN_TIMEOUT_MS = 20 * 60 * 1000;
+// setTimeout 的上限(約 24.8 天)。超過的值會被當成 1 ms,回合立刻逾時——手改 JSON 填了超大的值也不能這樣
+const MAX_TIMER_MS = 2_147_483_647;
+function clampTimeout(ms: number): number {
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TIMER_MS) : DEFAULT_TURN_TIMEOUT_MS;
+}
 const DEFAULT_KILL_GRACE_MS = 5000;
 const CLI_CHECK_TIMEOUT_MS = 5000;
 
@@ -107,7 +112,8 @@ function attachProcessGroupKill(child: ChildProcess): ChildProcess {
 
 // 啟動行程並逐行回呼 stdout。
 // 回傳 { code, stderr, timedOut, error, spawnError }
-function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, env, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, killGraceMs = DEFAULT_KILL_GRACE_MS, locale = 'zh-Hant' }: RunProcessOptions = {}, cb: RunProcessCallbacks = {}): Promise<ProcessResult> {
+function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, env, timeoutMs: requestedTimeout = DEFAULT_TURN_TIMEOUT_MS, killGraceMs = DEFAULT_KILL_GRACE_MS, locale = 'zh-Hant' }: RunProcessOptions = {}, cb: RunProcessCallbacks = {}): Promise<ProcessResult> {
+  const timeoutMs = requestedTimeout > 0 ? clampTimeout(requestedTimeout) : requestedTimeout;
   return new Promise<ProcessResult>((resolve) => {
     let child: ChildProcess;
     let settled = false;
@@ -224,4 +230,4 @@ function createStopHandle(onKill: () => void): StopHandle {
   return handle;
 }
 
-export { DEFAULT_TURN_TIMEOUT_MS, truncate, formatTimeout, lineReader, parseJson, runProcess, checkCli, checkLogin, createStopHandle };
+export { DEFAULT_TURN_TIMEOUT_MS, clampTimeout, truncate, formatTimeout, lineReader, parseJson, runProcess, checkCli, checkLogin, createStopHandle };

@@ -87,6 +87,18 @@ async function once(locale: 'zh-Hant' | 'en') {
       await g.waitFor(() => !badges('g').includes(H.zh ? '不支援工具' : 'no tools'), 10000, '卡片更新');
       g.check(!badges('g').includes(H.zh ? '不支援工具' : 'no tools'), `測試之後卡片跟著更新(${badges('g').join(', ')})`);
 
+      // 送出前的圖片提醒也要看模型能力:範本會送圖,但 Qwen 的模型不能看圖;Gemma 可以
+      const input = document.querySelector('#input') as HTMLTextAreaElement;
+      input.value = H.zh ? '請看圖' : 'Look at this';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const image = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2])], 'sample.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(image);
+      (document.querySelector('.composer-box') as HTMLElement).dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      await g.waitFor(() => /Qwen/.test(g.text('#hint')), 5000, '圖片能力警告');
+      const hint = g.text('#hint');
+      g.check(new RegExp(H.zh ? '圖片內容無法提供給 Qwen' : 'Qwen cannot receive image content').test(hint) && !/Gemma/.test(hint), `送出前提醒只點名看不到圖的 Qwen(${hint})`);
+
       const leaks = g.hiddenLeaks();
       g.check(leaks.length === 0, `沒有帶 hidden 卻仍佔版面的元素(${leaks.join(', ') || '無'})`);
       return { cap: capText() };

@@ -11,7 +11,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - API members (Ollama and the cloud API templates) can read and edit files through three restricted file tools. They are offered only when the template opts in, the member allows editing, and another member can review the change; every call is recorded in the transcript so the reviewer sees what actually happened.
 - In cross-review every reviewer sees the actual changes, in a way that fits it: CLI members open the files themselves; API members with file tools get a read-only `read_file` plus the file contents inline; everyone else gets the contents inline. Changes come from a snapshot of the working folder before and after execution, so git is not required.
 - Review messages show a verdict badge (approved, issues raised, review failed) and what the reviewer looked at; clicking a file name opens Changes on that file.
-- Model abilities: whether an API member's model can call tools and see images, shown on the member card and in member settings. Ollama is checked automatically and model data from the endpoint is used as is; paid APIs send requests only when you press Test in member settings. A model known to lack tool calling is treated as a read-only member.
+- Model abilities: whether an API member's model can call tools and see images, shown on the member card and in member settings. Ollama is checked automatically and model data from the endpoint is used as is; paid APIs send requests only when you press Test in member settings. A model known to lack tool calling is treated as a read-only member; a model known not to see images is no longer sent images, and the pre-send warning names it.
+- Changes works when the working folder is not a git repository (the default workspace is not): small text files are remembered in memory when a task starts, and Changes lists what changed since the latest task started, line by line.
+- The extension editor has a “Time limit per turn” field (in minutes), and an extension's timeout error says where to raise it.
 - Failed @ direct replies can be retried with one click.
 - Long turns show what is happening, the elapsed time, and a notice when nothing has progressed for a while.
 - Claude Code and Codex that are installed but not logged in are detected, with the command to run to log in.
@@ -21,7 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Once the lead's plan output (usually JSON) parses, it is folded away and only the plan card is shown; output that failed to parse stays fully visible.
-- System messages, errors and API adapter messages from the main process follow the interface language.
+- System messages, errors and API adapter messages from the main process follow the interface language, and so do the file-tool descriptions, errors and memory placeholders the model reads, so an English meeting no longer gives the model mixed-language instructions.
 - Status lights turn green only when things actually work: cloud API keys are verified when settings open, unreachable endpoints show an actionable hint, and member cards flag CLIs that are missing or not logged in.
 - Paths in Changes are always relative to the repository root.
 

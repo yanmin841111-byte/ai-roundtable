@@ -345,6 +345,7 @@
               <label class="field"><span data-i18n="extEditor.apiKey">API key</span><span class="row"><input id="ext-api-key" type="password" autocomplete="new-password" data-i18n-placeholder="extEditor.apiKeyPlaceholder" placeholder="填入後不會寫入擴充 JSON" /><span id="ext-key-status" class="badge" data-i18n="extEditor.keyUnset">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button" data-i18n="extEditor.keyClear">清除</button><button id="ext-key-test" class="ghost small" type="button" data-i18n="extEditor.keyTest">測試連線</button></span><small class="hint" data-i18n="extEditor.keyHint">貼在這裡就好。key 存進系統安全儲存,不會寫進擴充 JSON;也可以改用上方進階選項的環境變數。</small></label>
             </div>
             <label class="field"><span><span data-i18n="extEditor.models">模型</span> <small data-i18n="extEditor.modelsHint">以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
+            <label class="field"><span><span data-i18n="extEditor.timeout">每回合逾時上限</span> <small data-i18n="extEditor.timeoutUnit">分鐘</small></span><input id="ext-timeout" type="number" min="1" max="600" step="1" inputmode="numeric" data-i18n-placeholder="extEditor.timeoutPlaceholder" placeholder="預設 20" /><small class="hint" data-i18n="extEditor.timeoutHint">成員一回合最多跑多久。本機大模型第一次載入、或任務很大時可能需要更久;留空就是預設的 20 分鐘。</small></label>
           </div>
         </section>
         <section id="ext-advanced" role="tabpanel" hidden>

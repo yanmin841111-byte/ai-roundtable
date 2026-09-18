@@ -3,11 +3,11 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
-import { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } from './process';
+import { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS, clampTimeout } from './process';
 import { renderDeep } from './template';
 import { findModel, resolveModelId, resolveEffort } from '../model-rules';
 import { normalizeModels, normalizeCapabilities } from './spec';
-import { FILE_TOOL_DEFINITIONS, FILE_TOOL_READ_DEFINITIONS, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
+import { fileToolDefinitions, fileToolReadDefinitions, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
 import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
 import { tx } from '../text';
 import type { TextLocale } from '../text';
@@ -20,6 +20,11 @@ const PROBE_TIMEOUT_MS = 90000;
 const PROBE_TOOL = { type: 'function', function: { name: 'ping', description: 'Reply to a ping.', parameters: { type: 'object', properties: {} } } };
 // 1x1 的紅色 PNG
 const PROBE_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+// 逾時了:說出上限,並告訴使用者在哪裡調高——只說「逾時」的話,他不知道這是可以改的
+function timeoutMessage(loc: TextLocale, timeoutMs: number): string {
+  return `${tx(loc, 'api.runTimeout', { duration: formatTimeout(timeoutMs, loc) })} ${tx(loc, 'ext.timeoutHint')}`;
+}
 
 // 模型清單附帶的能力資料(OpenRouter:supported_parameters、architecture.input_modalities)。
 // 沒有這些欄位就回 null——一般 OpenAI 相容端點的清單只有 id。
@@ -312,7 +317,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     const vars = { model, effort: eff.effort || '', agentName: agent.name || '' };
     const effortBody = spec.effortBody || { reasoning_effort: '{effort}' };
     const stream = spec.stream !== false;
-    const timeoutMs = spec.timeoutMs || ctx.timeoutMs || DEFAULT_TURN_TIMEOUT_MS;
+    const timeoutMs = clampTimeout(spec.timeoutMs || ctx.timeoutMs || DEFAULT_TURN_TIMEOUT_MS);
     const reasoningFields = spec.reasoningFields || ['reasoning_content', 'reasoning'];
 
     // 寫入工具要三重閘門全開;唯讀工具(審查回合)只要端點支援工具呼叫就好——
@@ -322,7 +327,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     const toolsEnabled = writeTools || readTools;
     let fileTools: FileToolSession | null = null;
     if (toolsEnabled) {
-      try { fileTools = new FileToolSession(ctx.cwd, { readOnly: !writeTools }); }
+      try { fileTools = new FileToolSession(ctx.cwd, { readOnly: !writeTools, locale: ctx.locale || locale() }); }
       catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: tx(ctx.locale || locale(), 'api.fileToolsFailed', { error: e.message }), toolEvents: [] }; }
     }
     const deadline = Date.now() + timeoutMs;
@@ -334,7 +339,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         model,
         messages,
         stream,
-        ...(fileTools ? { tools: fileTools.readOnly ? FILE_TOOL_READ_DEFINITIONS : FILE_TOOL_DEFINITIONS, tool_choice: 'auto' } : {}),
+        ...(fileTools ? { tools: fileTools.readOnly ? fileToolReadDefinitions(fileTools.locale) : fileToolDefinitions(fileTools.locale), tool_choice: 'auto' } : {}),
         ...(stream && spec.streamUsage !== false ? { stream_options: { include_usage: true } } : {}),
       };
 
@@ -394,7 +399,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           onChunk(await res.json());
         }
       } catch (e: any) {
-        if (timedOut) out.error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs, ctx.locale || locale()) });
+        if (timedOut) out.error = timeoutMessage(ctx.locale || locale(), timeoutMs);
         else if (e.name === 'AbortError') out.error = out.error || tx(ctx.locale || locale(), 'api.stopped');
         else out.error = tx(ctx.locale || locale(), 'api.cannotConnect', { url: spec.baseUrl, error: e.cause ? e.cause.message || e.cause.code : e.message });
       } finally {
@@ -424,7 +429,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       // 整個審查被丟掉。讀檔不會改變任何東西,仍受工具次數上限與回合逾時約束。
       const maxApiRounds = fileTools && fileTools.readOnly ? FILE_TOOL_MAX_CALLS + 2 : 10;
       for (let apiRound = 0; apiRound < maxApiRounds; apiRound++) {
-        if (Date.now() >= deadline) { error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs, ctx.locale || locale()) }); break; }
+        if (Date.now() >= deadline) { error = timeoutMessage(ctx.locale || locale(), timeoutMs); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
         status = result.status;
         usage = result.usage || usage;
@@ -439,7 +444,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           const call = result.toolCalls[0];
           const toolResult = { ok: false, error: tx(ctx.locale || locale(), 'api.tooManyTools', { n: FILE_TOOL_MAX_CALLS }) };
           exchange.push({ role: 'assistant', content: result.text || null, tool_calls: [call] });
-          const entry = toTranscriptEntry(call.id, call.function?.name || '', call.function?.arguments || '{}', toolResult);
+          const entry = toTranscriptEntry(call.id, call.function?.name || '', call.function?.arguments || '{}', toolResult, ctx.locale || locale());
           toolEvents.push(entry);
           ctx.onActivity({ id: call.id, kind: 'tool', title: entry.summary, detail: JSON.stringify(entry.result), status: 'error' });
           exchange.push({ role: 'tool', tool_call_id: call.id, name: call.function?.name || '', content: JSON.stringify(toolResult) });
@@ -452,7 +457,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           const args = call.function?.arguments || '{}';
           ctx.onActivity({ id: call.id, kind: 'tool', title: tx(ctx.locale || locale(), 'api.toolRunning', { name }), status: 'running' });
           const toolResult = fileTools.execute(name, args);
-          const entry = toTranscriptEntry(call.id, name, args, toolResult);
+          const entry = toTranscriptEntry(call.id, name, args, toolResult, ctx.locale || locale());
           toolEvents.push(entry);
           ctx.onActivity({
             id: call.id,
@@ -512,7 +517,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       // 修復回合沒有工具可以重讀,成員只能從記憶裡看到自己寫了什麼。
       const exchange = readTools && !writeTools ? collapseToolTurn(result.exchange, result.text) : result.exchange;
       const turn = forgetEphemeral(exchange, ctx.ephemeral, tx(ctx.locale || locale(), 'api.ephemeralDropped'));
-      sessions.set(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory))));
+      sessions.set(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory), ctx.locale || locale()), ctx.locale || locale()));
       ctx.onSession(sessionId);
     }
     return { text: result.text, thinking: result.thinking, sessionId, usage: result.usage, error: result.error, toolEvents: result.toolEvents };
@@ -561,16 +566,16 @@ function trimHistory(history: any[], max: number) {
 // 讀檔結果一則可能就幾十 KB。存進歷史的話,之後的每一個回合都會整包重送。
 // 之後需要時可以重讀,所以存進歷史時只留路徑與雜湊,把檔案內容拿掉;寫入的呼叫(成員自己寫的內容)不動。
 const TOOL_HISTORY_MAX_CHARS = 2000;
-function compactHistoryTools(history: any[]) {
+function compactHistoryTools(history: any[], loc: TextLocale = 'zh-Hant') {
   return history.map((m) => {
     if (!m || m.role !== 'tool' || typeof m.content !== 'string' || m.content.length <= TOOL_HISTORY_MAX_CHARS) return m;
     try {
       const result = JSON.parse(m.content);
       if (result && typeof result.content === 'string') {
-        return { ...m, content: JSON.stringify({ ...result, content: `(已讀取 ${result.content.length} 字元;內容已從記憶中移除,需要時請重新讀取)` }) };
+        return { ...m, content: JSON.stringify({ ...result, content: tx(loc, 'api.readDropped', { n: result.content.length }) }) };
       }
     } catch {}
-    return { ...m, content: `${m.content.slice(0, TOOL_HISTORY_MAX_CHARS)}…(已截短)` };
+    return { ...m, content: `${m.content.slice(0, TOOL_HISTORY_MAX_CHARS)}${tx(loc, 'api.toolTruncated')}` };
   });
 }
 
@@ -588,7 +593,7 @@ function forgetEphemeral(exchange: any[], ephemeral: string | undefined, placeho
 
 // 對話記憶裡只保留最近一則帶圖訊息的影像資料，更早的換成文字佔位。
 // 否則每張 base64 圖片會在記憶中留到 maxHistory 則，並在之後每一回合重送。
-function compactHistoryImages(history: any) {
+function compactHistoryImages(history: any, loc: TextLocale = 'zh-Hant') {
   let keptLatest = false;
   for (let i = history.length - 1; i >= 0; i--) {
     const content = history[i].content;
@@ -596,7 +601,7 @@ function compactHistoryImages(history: any) {
     if (!keptLatest) { keptLatest = true; continue; }
     const count = content.filter((p: any) => p && p.type === 'image_url').length;
     const text = content.filter((p: any) => p && p.type === 'text').map((p: any) => p.text).join('\n');
-    history[i] = { ...history[i], content: `${text}\n\n(先前回合附上的 ${count} 張圖片已從記憶中移除)` };
+    history[i] = { ...history[i], content: `${text}\n\n${tx(loc, 'api.imagesDropped', { n: count })}` };
   }
   return history;
 }

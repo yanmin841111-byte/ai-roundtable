@@ -93,6 +93,32 @@ async function main() {
       g.check(cli.offsetHeight === 0, `連線類型是 API 時,CLI 專用欄位必須收起來(高度 ${cli.offsetHeight})`);
       await g.shot('03-api-editor');
 
+      // --- 每回合逾時上限:以分鐘編輯,對應 JSON 的 timeoutMs;留空就是預設,不寫這個欄位 ---
+      const timeout = g.$('#ext-timeout') as HTMLInputElement;
+      const specNow = () => JSON.parse((g.$('#ext-content') as HTMLTextAreaElement).value);
+      g.check(timeout.offsetHeight > 0 && timeout.value === '', `編輯器有逾時上限欄位,範本沒設定時留空(值「${timeout.value}」)`);
+      timeout.value = '45';
+      timeout.dispatchEvent(new Event('input', { bubbles: true }));
+      g.check(specNow().timeoutMs === 45 * 60000, `填 45 分鐘寫成 timeoutMs ${specNow().timeoutMs}`);
+      timeout.value = '';
+      timeout.dispatchEvent(new Event('input', { bubbles: true }));
+      g.check(!('timeoutMs' in specNow()), '清空就拿掉 timeoutMs,回到預設');
+      const content = g.$('#ext-content') as HTMLTextAreaElement;
+      content.value = JSON.stringify({ ...specNow(), timeoutMs: 90 * 60000 }, null, 2);
+      content.dispatchEvent(new Event('blur'));
+      g.check(timeout.value === '90', `JSON 裡的 timeoutMs 以分鐘顯示(${timeout.value})`);
+      // 太大的值會超過計時器上限、讓每個回合立刻逾時:限制在 600 分鐘
+      timeout.value = '40000';
+      timeout.dispatchEvent(new Event('input', { bubbles: true }));
+      g.check(specNow().timeoutMs === 600 * 60000, `超過上限的值限制在 600 分鐘(${specNow().timeoutMs})`);
+      // 沒動這個欄位時,不能因為顯示四捨五入就改掉原本的設定(45000 ms 顯示成 0.8 分鐘)
+      content.value = JSON.stringify({ ...specNow(), timeoutMs: 45000 }, null, 2);
+      content.dispatchEvent(new Event('blur'));
+      const label = g.$('#ext-label') as HTMLInputElement;
+      label.value = `${label.value} `;
+      label.dispatchEvent(new Event('input', { bubbles: true }));
+      g.check(specNow().timeoutMs === 45000, `改其他欄位時,原本的逾時設定不變(${specNow().timeoutMs})`);
+
       // --- 圖片送往純文字 API 成員時,編輯區要在送出前提示 ---
       g.$('#ext-editor-close').click();
       g.$('#settings-close').click();

@@ -148,7 +148,8 @@ async function runCli(spec: any, { format, rules, models }: any, agent: AgentCon
   let error = state.error;
   const l = ctx.locale || 'zh-Hant';
   if (res.spawnError) error = tx(l, 'cli.spawnFailed', { bin: spec.bin, detail: truncate(res.stderr, 1000) });
-  else if (res.timedOut) error = res.error || tx(l, 'cli.timedOut', { bin: spec.bin });
+  // 擴充的逾時可以在設定裡調高;說出來,不然使用者只知道「逾時」,不知道這是可以改的
+  else if (res.timedOut) error = `${res.error || tx(l, 'cli.timedOut', { bin: spec.bin })} ${tx(l, 'ext.timeoutHint')}`;
   else if (!okCodes.includes(res.code) && !state.text) error = error || `${tx(l, 'cli.exitCode', { bin: spec.bin, code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
   return { text: state.text, thinking: state.thinking, sessionId: state.sessionId, usage: state.usage, error };
 }

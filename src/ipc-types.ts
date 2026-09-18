@@ -475,6 +475,11 @@ export interface DiffFile {
   removed: number;
   // 二進位檔沒有逐行內容,只顯示檔名與狀態
   binary?: boolean;
+  // 工作目錄不是 git repo 時,沒有逐行比對的原因:
+  //   not-kept  任務開始前沒有保存原始內容(超過單檔或總量上限)
+  //   too-large 檔案現在超過單檔上限
+  //   too-many  改動的檔案太多,比對時間用完
+  unavailable?: 'not-kept' | 'too-large' | 'too-many';
   // 超過行數上限時只帶前段內容,truncated 為 true,介面要說明「僅顯示前 N 行」
   truncated?: boolean;
   lines: DiffLine[];
@@ -485,7 +490,8 @@ export type DiffResult =
   // 否則會把「只顯示前 N 個」呈現成精確的總數與完整增刪統計。
   // files 的路徑一律相對於 repo 根目錄;prefix 是工作目錄在 repo 裡的位置(例如 "web/",在根目錄時是空字串),
   // 介面拿相對於工作目錄的路徑(審查訊息裡的檔名)來找檔案時要先接上它。
-  | { ok: true; dir: string; files: DiffFile[]; totalFiles: number; prefix: string }
+  // source:'git' 是相對上一次 commit;'task' 是工作目錄不是 git repo 時,相對最近一次任務開始前(since 是那個時間)
+  | { ok: true; dir: string; files: DiffFile[]; totalFiles: number; prefix: string; source?: 'git' | 'task'; since?: number }
   // reason 是給介面判斷要顯示哪一種說明,不是直接給使用者看的文字
   | { ok: false; reason: 'no-workdir' | 'not-a-repo' | 'failed'; detail?: string };
 

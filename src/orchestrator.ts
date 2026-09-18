@@ -15,6 +15,9 @@ import { tx, resolveTextLocale, joinNames, quoteName } from './text';
 import type { TextLocale } from './text';
 import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
 import { FileToolSession } from './adapters/file-tools';
+import { snapshotDir, diffSnapshots } from './snapshot';
+import { captureBaseline } from './task-changes';
+import type { TaskBaseline } from './task-changes';
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
@@ -132,6 +135,8 @@ class Orchestrator extends EventEmitter {
   attachmentsSeen: Set<string>;
   messages: LiveMessage[];
   sessions: Record<string, string>;
+  // 工作目錄不是 git repo 時,最近一次任務開始前的檔案內容。「檔案改動」拿它比對;只在記憶體,不寫檔
+  taskBaseline: TaskBaseline | null;
   lastSeen: Record<string, number>;
   procs: Set<Stoppable>;
   running: boolean;
@@ -161,6 +166,7 @@ class Orchestrator extends EventEmitter {
     this.attachmentsSeen = new Set(); // 已經看過完整附件區塊的 agentId
     this.messages = [];
     this.sessions = {};   // agentId -> session id
+    this.taskBaseline = null;
     this.lastSeen = {};   // agentId -> 該成員上次發言時的訊息數
     this.procs = new Set();
     this.running = false;
@@ -466,6 +472,8 @@ class Orchestrator extends EventEmitter {
         const gitBefore = await gitStatus(cwd);
         // 審查要看的改動:工作目錄在執行前後的快照差異(見 snapshotDir)
         const snapBefore = await snapshotDir(cwd);
+        // 不是 git repo:記下任務開始前的檔案內容,「檔案改動」才有東西可以比對(見 task-changes.ts)
+        if (!gitBefore && snapBefore) this.taskBaseline = await captureBaseline(cwd, snapBefore);
         // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
         if (this.stopped) return;
         const { reports, failed } = await this.executePhase(agents, plan);
@@ -778,7 +786,7 @@ class Orchestrator extends EventEmitter {
   // 回傳附上的內容、因為數量或長度上限而沒附上的檔案,以及讀不到的檔案
   inlineReviewContent(files: string[], cwd: string): { text: string; omitted: string[]; unreadable: string[] } {
     let session: FileToolSession;
-    try { session = new FileToolSession(cwd, { readOnly: true }); } catch { return { text: '', omitted: files, unreadable: [] }; }
+    try { session = new FileToolSession(cwd, { readOnly: true, locale: this.locale }); } catch { return { text: '', omitted: files, unreadable: [] }; }
     let budget = REVIEW_INLINE_TOTAL_CHARS;
     const blocks: string[] = [];
     const omitted: string[] = [];
@@ -1037,7 +1045,9 @@ class Orchestrator extends EventEmitter {
     const transcript = this.unseenTranscript(agent, msg);
     const adapter = getAdapter(agent.cli);
     const resumable = !!(adapter?.supportsResume && this.sessions[agent.id]);
-    const attachmentBlock = this.attachmentPrompt(agent, adapter, resumable);
+    // 已知這位成員的模型不能看圖:附件照「不收圖片」的成員處理,區塊裡照實說它看不到,圖片也不送
+    const noImages = knownCapability(agent)?.images === false;
+    const attachmentBlock = this.attachmentPrompt(agent, noImages ? withoutImages(adapter) : adapter, resumable);
     const prompt = [
       transcript ? (resumable ? this.text('transcript.new') : this.text('transcript.sofar')) + '\n' + transcript : '',
       attachmentBlock,
@@ -1055,7 +1065,7 @@ class Orchestrator extends EventEmitter {
       readOnlyFileTools,
       ephemeral,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
-      attachments: attachmentBlock ? this.attachmentsFor(adapter) : [],
+      attachments: attachmentBlock ? this.attachmentsFor(adapter).filter((a) => !(noImages && a.kind === 'image')) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
       onSession: (id) => { this.sessions[agent.id] = id; },
       onText: (t) => { text = t; this.updateMessage(msg, { text: t }); },
@@ -1293,6 +1303,15 @@ function reviewAccess(adapter: Adapter | null | undefined, reviewer: AgentConfig
   return 'inline';
 }
 
+// 同一個 adapter,拿掉「收圖片」這項能力。已知不能看圖的模型用它:以前圖片照樣送出、被端點拒絕,
+// 再靠重送拿掉——每次多等一輪,附件區塊還跟它說「圖片已附上」。
+function withoutImages(adapter: Adapter | null): Adapter | null {
+  if (!adapter) return adapter;
+  const { modes, needCwd } = attachmentCapabilities(adapter);
+  if (!modes.has('imageInline')) return adapter;
+  return { ...adapter, capabilities: { attachments: [...modes].filter((m) => m !== 'imageInline'), attachmentsNeedCwd: needCwd } };
+}
+
 // 審查的結論。流程(要不要進修復回合、算不算審查過)與介面的徽章都用這一個判斷,兩邊不會各說各話
 function reviewVerdict(text: string | null | undefined, error: string | null | undefined): ReviewVerdict {
   if (error || !(text || '').trim()) return 'failed';
@@ -1319,57 +1338,6 @@ function reviewFiles(target: ExecReport, changed: string[] | null): string[] {
   if (rest.length * said.length > MENTION_SCAN_BUDGET) return [...own, ...rest];
   const hit = new Set(rest.filter((f) => said.includes(f) || (path.basename(f).length >= 3 && said.includes(path.basename(f)))));
   return [...own, ...rest.filter((f) => hit.has(f)), ...rest.filter((f) => !hit.has(f))];
-}
-
-// ---------- 工作目錄快照 ----------
-// 審查要看的改動 = 執行階段前後,工作目錄裡大小或修改時間變了的檔案(含新增與刪除)。
-// 直接看檔案,不經過 git。前幾版用 git status 前後比對,每一輪 code review 都再找到一個盲點:
-// 不是 git repo(預設工作區就不是)、被 .gitignore 忽略、巢狀 repo、成員自己 commit、
-// 任務前就改過的檔案、中文路徑被跳脫、工作目錄是子資料夾、改到工作目錄外面……
-// 快照只看工作目錄本身,這些情況都不存在。只 stat 不讀內容而且非同步:十萬個檔案約 0.5 秒。
-const SNAPSHOT_MAX_FILES = 100000;
-// 版本控制、相依套件、框架快取與 app 自己的暫存:量大,也不是審查的對象。
-// dist、build、vendor 這類名字不略過:有些專案的原始碼就放在裡面。
-const SNAPSHOT_SKIP = new Set(['.git', '.hg', '.svn', 'node_modules', 'bower_components', '.venv', 'venv', '__pycache__', '.tox',
-  '.next', '.nuxt', '.gradle', 'Pods', '.DS_Store', RUNTIME_DIR]);
-// 依 Cache Directory Tagging 規範標記自己是快取的目錄(例如 Rust 的 target/)也略過
-const CACHE_TAG = 'CACHEDIR.TAG';
-type Snapshot = Map<string, string>;
-
-// 相對路徑(以 / 分隔)→「大小:修改時間」。超過上限或工作目錄本身讀不到時回 null(拿不到),
-// 不回一份不完整的快照假裝完整。讀不到的子資料夾直接略過:成員以同一個使用者身分執行,
-// 那裡它一樣讀不到。符號連結不跟隨,避免繞出工作目錄或繞成迴圈。
-async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES): Promise<Snapshot | null> {
-  const out: Snapshot = new Map();
-  let over = false;
-  const walk = async (rel: string): Promise<void> => {
-    let entries: fs.Dirent[];
-    try { entries = await fs.promises.readdir(rel ? path.join(cwd, rel) : cwd, { withFileTypes: true }); }
-    catch (e) { if (!rel) throw e; return; }
-    if (rel && entries.some((e) => e.name === CACHE_TAG && e.isFile())) return;
-    const files: string[] = [];
-    const dirs: string[] = [];
-    for (const e of entries) {
-      if (SNAPSHOT_SKIP.has(e.name)) continue;
-      const child = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) dirs.push(child);
-      else if (e.isFile()) files.push(child);
-    }
-    if (out.size + files.length > maxFiles) { over = true; return; }
-    const stats = await Promise.all(files.map((f) => fs.promises.stat(path.join(cwd, f)).catch(() => null)));
-    files.forEach((f, i) => { const st = stats[i]; if (st) out.set(f, `${st.size}:${st.mtimeMs}`); });
-    for (const d of dirs) { if (over) return; await walk(d); }
-  };
-  try { await walk(''); } catch { return null; }
-  return over ? null : out;
-}
-
-// 兩份快照都在才比得出來,任何一份拿不到就是拿不到
-function diffSnapshots(before: Snapshot | null, after: Snapshot | null): string[] | null {
-  if (!before || !after) return null;
-  const out: string[] = [];
-  for (const file of new Set([...before.keys(), ...after.keys()])) if (before.get(file) !== after.get(file)) out.push(file);
-  return out.sort();
 }
 
 // ---------- git 變更 ----------

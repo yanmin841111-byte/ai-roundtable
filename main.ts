@@ -8,11 +8,11 @@ import { Orchestrator } from './src/orchestrator';
 import { Registry, setRegistry } from './src/adapters';
 import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } from './src/session-log';
 import * as attachments from './src/attachments';
-import { collectChanges } from './src/diff';
 import { SecretStore } from './src/secrets';
 import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn } from './src/ipc-types';
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 import { CapabilityStore, setCapabilityStore } from './src/capabilities';
+import { workdirChanges } from './src/task-changes';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -328,9 +328,9 @@ app.whenReady().then(async () => {
   // 只轉交;id 驗證與 first-answer-wins 都在 orchestrator,IPC 層不保留任何狀態
   handle('chat:answer', (answer) => orchestrator.answerQuestion(answer));
   handle('chat:retry', (messageId) => orchestrator.retry(messageId));
-  // 工作目錄目前的檔案改動。唯讀:只讀 git 的輸出,不碰使用者的版本控制狀態。
-  // collectChanges 全程非同步——在主程序同步跑 git 會凍結整個視窗。
-  handle('diff:changes', () => collectChanges(store.get().settings.workDir));
+  // 工作目錄目前的檔案改動。唯讀:不碰使用者的版本控制狀態,全程非同步(同步跑會凍結整個視窗)。
+  // 是 git repo 就相對上一次 commit;不是的話,相對最近一次任務開始前記下的內容
+  handle('diff:changes', () => workdirChanges(store.get().settings.workDir, orchestrator.taskBaseline));
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
   handle('ollama:quickSetup', async (payload) => {

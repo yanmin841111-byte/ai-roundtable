@@ -191,7 +191,7 @@ export async function collectChanges(workDir: string): Promise<DiffResult> {
 
     files.sort((a, b) => a.path.localeCompare(b.path));
     // totalFiles 一定是真實總數:介面靠它才知道自己看到的是不是全部
-    return { ok: true, dir: workDir, files: files.slice(0, MAX_FILES), totalFiles: files.length, prefix };
+    return { ok: true, dir: workDir, files: files.slice(0, MAX_FILES), totalFiles: files.length, prefix, source: 'git' };
   } catch (e: any) {
     return { ok: false, reason: 'failed', detail: e?.message || String(e) };
   }

@@ -204,6 +204,40 @@ test('已知不能呼叫工具的模型:當唯讀成員,審查時直接附上內
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// 已知不能看圖:以前圖片照樣送出、被端點拒絕,再靠重送拿掉——每次多等一輪,
+// 附件區塊還跟它說「影像已隨訊息附上」。現在直接照「不收圖片」的成員處理。
+test('已知不能看圖的模型:不送圖片,附件區塊照實說它看不到;不知道的照舊送', async () => {
+  const A = require('../src/attachments');
+  const store = new CapabilityStore();
+  setCapabilityStore(store);
+  store.set(capabilityKey('api', 'http://x/v1', 'gemma3'), { model: 'gemma3', images: false, source: 'ollama', at: 1 });
+  const seen: Record<string, any> = {};
+  adapters.setRegistry({ get: (id: string) => (id === 'api' ? {
+    id: 'api', type: 'openai', supportsEdit: false, supportsResume: false, endpoint: 'http://x/v1',
+    capabilities: { attachments: ['textInline', 'imageInline'] }, resolveModel: (m: string) => m || 'gemma3',
+    run: async (agent: any, ctx: any) => { seen[agent.name] = ctx; return { text: '看了' }; },
+  } : null) });
+  const member = (id: string, name: string, model: string) => ({ id, name, cli: 'api', model, enabled: true, canEdit: false, color: '#000', persona: '', effort: '', customCommand: '' });
+  const agents = [member('g', 'Gemma', 'gemma3'), member('q', 'Qwen', 'qwen3')];
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-capimg-ud-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-capimg-wd-'));
+  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: work, maxRounds: 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: 'g' };
+  const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: userData });
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02]);
+  const { added } = A.addAttachments(userData, orc.conversationId, [{ name: 'shot.png', data: png }]);
+  assert.strictEqual(added.length, 1, '前提:圖片附件建立成功');
+  const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
+  await orc.userMessage('@Gemma @Qwen 看這張圖', 'divide', added);
+  await done;
+  assert.ok(seen.Gemma && seen.Qwen, '兩位都有回覆');
+  assert.ok(!seen.Gemma.attachments.some((a: any) => a.kind === 'image'), '不能看圖的不送圖片');
+  assert.match(seen.Gemma.prompt, /你無法讀取 shot\.png/, '附件區塊照實說它看不到');
+  assert.doesNotMatch(seen.Gemma.prompt, /影像已隨訊息附上/);
+  assert.ok(seen.Qwen.attachments.some((a: any) => a.kind === 'image'), '不知道的照舊送');
+  assert.match(seen.Qwen.prompt, /影像已隨訊息附上/);
+  for (const d of [userData, work]) fs.rmSync(d, { recursive: true, force: true });
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }
