@@ -33,6 +33,7 @@ The code is TypeScript. `npm start` builds into `dist/` and then launches Electr
 | `npm run build` | Compile the main process with `tsc`, bundle the interface with esbuild, copy static files to `dist/` |
 | `npm run smoke:dist` | Confirm the CommonJS output in `dist/` loads |
 | `npm run e2e` | Build, then launch the real Electron app and run a full roundtable, attachments, @-mentions and history with fake members (`test/e2e/`); no CLI needs to be installed |
+| `npm run harness:ui` | Build, then run the interface scenarios (`test/harness/scenarios/`) to check that status lights, badges, review verdicts, model abilities and the like tell the truth, keeping screenshots; fake members only, about 1–2 minutes, also run in CI |
 
 Handy environment variables and flags during development:
 
@@ -42,11 +43,12 @@ Handy environment variables and flags during development:
 | `AI_ROUNDTABLE_ADAPTERS_DIR` | Use a different extensions folder, handy while developing an extension |
 | `AI_ROUNDTABLE_DEBUG=1` | Print the interface's console messages to the terminal |
 | `AI_ROUNDTABLE_SHOT=<png>` | Take a screenshot after launch; with `AI_ROUNDTABLE_SHOT_JS` you can run a snippet of JS in the interface first (for example to insert demo messages) |
+| `AI_ROUNDTABLE_SHOTS_DIR` | Where `harness:ui` stores its screenshots (default: `ai-roundtable-shots/` in the system temp folder) |
 
 ## Sending a pull request
 
 1. Branch from `main`; one PR per change.
-2. Add tests for behaviour changes. Run `npm run typecheck` and `npm test` before sending, and `npm run e2e` when the flow or the interface changed.
+2. Add tests for behaviour changes. Run `npm run typecheck` and `npm test` before sending, and `npm run e2e` and `npm run harness:ui` when the flow or the interface changed.
 3. Attach screenshots for interface changes, checked in both the light and the dark theme.
 4. When a user-visible feature or setting changes, update `README.md`, `docs/` and the "Unreleased" section of `CHANGELOG.md` (and their English counterparts).
 5. In the PR description, say what changed, why, and how you verified it.

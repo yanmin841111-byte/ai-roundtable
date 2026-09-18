@@ -11,9 +11,24 @@ import { FILE_TOOL_DEFINITIONS, FILE_TOOL_READ_DEFINITIONS, FILE_TOOL_MAX_CALLS,
 import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
 import { tx } from '../text';
 import type { TextLocale } from '../text';
+import type { ModelCapability } from '../ipc-types';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
+// 模型能力的實際測試:本機大模型第一次載入可能要半分鐘以上
+const PROBE_TIMEOUT_MS = 90000;
+const PROBE_TOOL = { type: 'function', function: { name: 'ping', description: 'Reply to a ping.', parameters: { type: 'object', properties: {} } } };
+// 1x1 的紅色 PNG
+const PROBE_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+// 模型清單附帶的能力資料(OpenRouter:supported_parameters、architecture.input_modalities)。
+// 沒有這些欄位就回 null——一般 OpenAI 相容端點的清單只有 id。
+function capabilityFromListing(m: any): { tools?: boolean; images?: boolean } | null {
+  const params = Array.isArray(m && m.supported_parameters) ? m.supported_parameters.map(String) : null;
+  const inputs = Array.isArray(m && m.architecture && m.architecture.input_modalities) ? m.architecture.input_modalities.map(String) : null;
+  if (!params && !inputs) return null;
+  return { ...(params ? { tools: params.includes('tools') } : {}), ...(inputs ? { images: inputs.includes('image') } : {}) };
+}
 const SECRET_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 type OpenAIHealthAdapter = Adapter & { probeConnectionOnCheck: boolean };
 
@@ -123,10 +138,18 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         if (!res.ok) throw new Error(`HTTP ${res.status} ${truncate(await res.text(), 200)}`);
         const data = await res.json();
         const filter = spec.modelFilter ? new RegExp(spec.modelFilter) : null;
-        const ids = (Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [])
+        const listing = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+        const ids = listing
           .map((m: any) => (typeof m === 'string' ? m : m.id || m.name))
           .filter((id: any) => typeof id === 'string' && (!filter || filter.test(id)))
           .sort();
+        // 有些端點(例如 OpenRouter)在模型清單裡就附了能力資料,不用另外花錢測
+        const caps = new Map<string, { tools?: boolean; images?: boolean }>();
+        for (const m of listing) {
+          const id = m && typeof m === 'object' ? (m.id || m.name) : null;
+          const cap = typeof id === 'string' ? capabilityFromListing(m) : null;
+          if (cap) caps.set(id, cap);
+        }
         fetched = {
           models: normalizeModels(ids.map((id: any) => ({
             ...withLatestAlias(id),
@@ -135,6 +158,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           at: Date.now(),
           error: null,
           pending: null,
+          caps,
         };
       } catch (e: any) {
         fetched = { ...fetched, at: Date.now(), error: e.name === 'AbortError' ? tx(locale(), 'api.modelsTimeout') : e.message, pending: null };
@@ -206,9 +230,73 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       return { ok: true, state: 'ready', version: `API ${spec.baseUrl}` };
     },
     testConnection,
+    endpoint: spec.baseUrl,
+    resolveModel: (model: string) => resolveModelId(currentModels(), model || spec.defaultModel || ''),
+    modelCapability,
     run: (agent: any, ctx: any) => runChat(agent, ctx),
   };
   return adapter;
+
+  // ---------- 模型能力 ----------
+  // 順序:實際測試(使用者按了才做)> 端點附帶的模型資料 > Ollama 的回報。
+  // 付費端點不自動測:每開一次 app 就打一輪付費請求是不能接受的。
+  async function modelCapability(model: string, { live = false }: { live?: boolean } = {}): Promise<ModelCapability | null> {
+    if (!model) return null;
+    if (live) return liveCapability(model);
+    if (!staticModels) await refreshModels();
+    const meta = fetched.caps && fetched.caps.get(model);
+    if (meta) return { model, ...meta, source: 'metadata', at: Date.now() };
+    return ollamaCapability(model);
+  }
+
+  // Ollama 的 POST /api/show 直接回報 capabilities(["completion", "tools", "vision"…]),免費而且精確。
+  // 需要 key 的雲端端點不可能是本機 Ollama,不去打它。
+  async function ollamaCapability(model: string): Promise<ModelCapability | null> {
+    if (hasCredentialSetting) return null;
+    const root = String(spec.baseUrl || '').replace(/\/v1\/?$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS);
+    try {
+      const res = await doFetch(joinUrl(root, '/api/show'), { method: 'POST', headers: headers(), body: JSON.stringify({ model }), signal: controller.signal });
+      if (!res.ok) { await res.text().catch(() => ''); return null; }
+      const data = await res.json();
+      if (!Array.isArray(data && data.capabilities)) return null;
+      const caps = data.capabilities.map(String);
+      return { model, tools: caps.includes('tools'), images: caps.includes('vision'), source: 'ollama', at: Date.now() };
+    } catch {
+      return null; // 不是 Ollama,或連不上:就是不知道
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // 實際測試:先送一個最簡單的請求確認端點與模型本身能用,再分別帶工具、帶圖片各送一次。
+  // 沒有基準請求的話,任何 400(例如參數不合)都會被誤判成「不支援工具」。
+  async function liveCapability(model: string): Promise<ModelCapability> {
+    const at = Date.now();
+    if (missingRequiredApiKey()) return { model, source: 'probe', at, error: missingApiKeyMessage(spec, locale()) };
+    const post = async (extra: any) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+      try {
+        const body = { ...renderDeep(spec.body || {}, { model, effort: '', agentName: '' }), model, stream: false, ...extra };
+        const res = await doFetch(joinUrl(spec.baseUrl, spec.path || '/chat/completions'), { method: 'POST', headers: headers(), body: JSON.stringify(body), signal: controller.signal });
+        const text = await res.text().catch(() => '');
+        return { ok: res.ok, status: res.status, text };
+      } catch (e: any) {
+        return { ok: false, status: 0, text: e.name === 'AbortError' ? tx(locale(), 'api.connectionTimeout') : e.message };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const base = await post({ messages: [{ role: 'user', content: 'Reply with OK.' }] });
+    if (!base.ok) return { model, source: 'probe', at, error: base.status ? `HTTP ${base.status} ${truncate(base.text, 160)}` : base.text };
+    // 2xx 就是收下了;被 4xx 拒絕才算不支援。其他狀況(5xx、逾時)不下結論
+    const decide = (r: { ok: boolean; status: number }, rejects: number[]) => (r.ok ? true : rejects.includes(r.status) ? false : undefined);
+    const tools = decide(await post({ messages: [{ role: 'user', content: 'Call the ping tool.' }], tools: [PROBE_TOOL], tool_choice: 'auto' }), [400, 404, 422]);
+    const images = decide(await post({ messages: [{ role: 'user', content: [{ type: 'text', text: 'What color is this image? Answer in one word.' }, { type: 'image_url', image_url: { url: PROBE_PIXEL } }] }] }), [400, 415, 422]);
+    return { model, source: 'probe', at, ...(tools !== undefined ? { tools } : {}), ...(images !== undefined ? { images } : {}) };
+  }
 
   async function runChat(agent: any, ctx: any) {
     if (missingRequiredApiKey()) {

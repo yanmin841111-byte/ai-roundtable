@@ -24,3 +24,16 @@ jobs:
       - run: npm run build
       - run: npm run smoke:dist
       - run: node --import tsx test/e2e/run.ts
+      # 介面測試:全假成員、結果固定,會實際開 Electron 視窗(macOS runner 有視窗伺服器)。
+      # 驗的是畫面有沒有說實話:燈號、徽章、審查結論、模型能力……單元測試看不到這些。
+      - run: npm run harness:ui
+        timeout-minutes: 15
+        env:
+          AI_ROUNDTABLE_SHOTS_DIR: ${{ runner.temp }}/harness-shots
+      # 失敗時把截圖留下來,在 PR 的 Actions 頁面就能直接看到畫面長什麼樣
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-screenshots
+          path: ${{ runner.temp }}/harness-shots
+          if-no-files-found: ignore

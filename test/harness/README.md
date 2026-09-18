@@ -67,13 +67,14 @@ console.log(r.numstat());            // git 的說法
 ## 現成情境
 
 ```bash
-npm run harness:ui      # 全假成員,約 1 分鐘,結果固定,可進 CI。包含六個情境:
+npm run harness:ui      # 全假成員,約 1 分鐘,結果固定,可進 CI。包含七個情境:
                         #   ui-states          設定壞掉時燈號與徽章有沒有說實話
                         #   i18n-en            英文介面下,主程序產生的錯誤是不是英文
                         #   waiting            長回合時有沒有顯示階段、經過時間與停滯警示
                         #   retry              失敗的 @ 指定回覆能重試;分工流程裡失敗的回合不行
                         #   review-visibility  審查訊息顯示結論徽章與「看了哪些檔案」,點檔名跳到檔案改動(中英各一次)
                         #   plan-output        分工原文(JSON)收起來,只留分工結果卡片(中英各一次)
+                        #   model-capability   API 成員的模型能力顯示在卡片與編輯視窗;按「測試」才送請求(假端點,中英各一次)
 npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正在跑
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過
 ```

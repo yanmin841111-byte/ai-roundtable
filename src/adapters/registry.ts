@@ -11,6 +11,8 @@ import { kit } from './kit';
 import type { Adapter, ModelList, RegisteredAdapter } from './types';
 import type { CliHealth, CliStatus } from '../ipc-types';
 import { tx, type TextLocale } from '../text';
+import { capabilityKey, capabilityStore } from '../capabilities';
+import type { ModelCapability } from '../ipc-types';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -185,6 +187,41 @@ class Registry {
       return [a.id, normalized];
     }));
     return Object.fromEntries(results.filter(([, r]: any) => r));
+  }
+
+  // 成員所用模型的能力(API 成員)。先看快取,沒有才問 adapter;live 代表使用者按了「測試」,
+  // 一定重新實測。結果寫回快取,orchestrator 與 effectiveCanEdit 之後查得到。
+  async modelCapability(adapterId: string, model: string, live = false): Promise<ModelCapability | null> {
+    const adapter = this.get(adapterId);
+    if (!adapter || adapter.type !== 'openai' || typeof adapter.modelCapability !== 'function') return null;
+    // 先確保模型清單載入(有快取,很便宜):沒載入時 gemma3 不會被對應成 gemma3:latest,
+    // 結果會存在一個流程之後查不到的名字下
+    if (adapter.refreshModels) await adapter.refreshModels();
+    const resolved = adapter.resolveModel ? adapter.resolveModel(model || '') : model;
+    if (!resolved) return null;
+    const key = capabilityKey(adapterId, adapter.endpoint, resolved);
+    const store = capabilityStore();
+    const cached = store.get(key);
+    if (cached && !live) return cached;
+    const found = await adapter.modelCapability(resolved, { live });
+    if (!found) return cached || null;
+    // 測試沒能下結論的項目,保留原本知道的。整個沒結論(例如端點剛好在忙、key 還沒設)就不覆蓋:
+    // 以前一次失敗的測試會把「不能呼叫工具」洗成「不知道」並存檔,成員又拿到寫入工具、又被拒絕。
+    // 這次的錯誤照樣帶回給介面顯示,但不存。
+    if (found.tools === undefined && found.images === undefined) {
+      return { ...(cached || { model: resolved, source: found.source, at: found.at }), ...(found.error ? { error: found.error } : {}) };
+    }
+    const tools = found.tools ?? cached?.tools;
+    const images = found.images ?? cached?.images;
+    const merged: ModelCapability = {
+      model: resolved,
+      source: found.source,
+      at: found.at,
+      ...(tools !== undefined ? { tools } : {}),
+      ...(images !== undefined ? { images } : {}),
+    };
+    store.set(key, merged);
+    return merged;
   }
 
   // 一鍵連接 Ollama：不帶 model 時只偵測並列出模型；帶 model 時套用內建範本並完成儲存。

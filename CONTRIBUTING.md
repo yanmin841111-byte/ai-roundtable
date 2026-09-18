@@ -33,6 +33,7 @@ npm test
 | `npm run build` | `tsc` 編譯主程序、esbuild 打包介面、複製靜態檔到 `dist/` |
 | `npm run smoke:dist` | 確認 `dist/` 的 CommonJS 輸出可以正常載入 |
 | `npm run e2e` | 建置後啟動真正的 Electron app,用假成員跑完整圓桌、附件、@ 指定與歷史紀錄(`test/e2e/`),不需要安裝任何 CLI |
+| `npm run harness:ui` | 建置後逐一跑介面情境(`test/harness/scenarios/`),檢查燈號、徽章、審查結論、模型能力等畫面有沒有說實話,並留下截圖;全假成員,約 1~2 分鐘,CI 也會跑 |
 
 開發時好用的環境變數與參數:
 
@@ -42,11 +43,12 @@ npm test
 | `AI_ROUNDTABLE_ADAPTERS_DIR` | 指定擴充資料夾,方便開發擴充 |
 | `AI_ROUNDTABLE_DEBUG=1` | 把介面的 console 訊息印到終端機 |
 | `AI_ROUNDTABLE_SHOT=<png>` | 啟動後截圖到指定檔案;搭配 `AI_ROUNDTABLE_SHOT_JS` 可先在介面執行一段 JS(例如塞入示範訊息) |
+| `AI_ROUNDTABLE_SHOTS_DIR` | `harness:ui` 的截圖存放位置(預設在系統暫存目錄的 `ai-roundtable-shots/`) |
 
 ## 送 pull request
 
 1. 從 `main` 開新分支,一個 PR 只處理一件事。
-2. 行為有改動就補測試,送出前跑 `npm run typecheck` 與 `npm test`,全部通過才送;動到流程或介面時再跑 `npm run e2e`。
+2. 行為有改動就補測試,送出前跑 `npm run typecheck` 與 `npm test`,全部通過才送;動到流程或介面時再跑 `npm run e2e` 與 `npm run harness:ui`。
 3. 介面有改動時附上截圖,淺色與深色主題都檢查一次。
 4. 使用者看得到的功能或設定有變,一併更新 `README.md`、`docs/` 與 `CHANGELOG.md` 的「未發布」段落,以及對應的英文版(`*.en.md`)。
 5. PR 說明寫清楚改了什麼、為什麼、怎麼驗證。

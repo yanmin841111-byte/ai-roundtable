@@ -6,6 +6,7 @@ import { normalizeUsage } from '../usage';
 import type { AgentConfig } from '../ipc-types';
 import type { RunContext, TurnCallbacks, TurnResult } from './types';
 import { tx } from '../text';
+import { capabilityKey, capabilityStore } from '../capabilities';
 import type { TextLocale } from '../text';
 
 let registry = new Registry();
@@ -15,9 +16,23 @@ function getRegistry() { return registry; }
 function getAdapter(id: string) { return registry.get(id); }
 
 // 成員實際能不能改檔案:成員設定允許,且轉接器支援
-function effectiveCanEdit(agent: Pick<AgentConfig, 'cli' | 'canEdit'>) {
+function effectiveCanEdit(agent: Pick<AgentConfig, 'cli' | 'canEdit'> & Partial<Pick<AgentConfig, 'model'>>) {
   const adapter = registry.get(agent.cli);
-  return !!(agent.canEdit && adapter && adapter.supportsEdit);
+  // 已知不能呼叫工具的模型改不了檔:給它寫入工具只會換來一個被拒絕的請求,整個執行回合失敗。
+  // 當成唯讀成員,分工與審查都會照這個安排(審查時附上內容,而不是叫它自己讀檔)。
+  return !!(agent.canEdit && adapter && adapter.supportsEdit && knownCapability(agent)?.tools !== false);
+}
+
+// 這位成員所用模型已知的能力;不知道就回 undefined。只查快取,不會發出任何請求。
+// 模型清單還沒載入時名稱對應不完整(gemma3 還沒變成 gemma3:latest),所以完整名稱與原本的寫法都查。
+function knownCapability(agent: Pick<AgentConfig, 'cli'> & Partial<Pick<AgentConfig, 'model'>>) {
+  const adapter = registry.get(agent.cli);
+  if (!adapter || typeof adapter.resolveModel !== 'function') return undefined;
+  const store = capabilityStore();
+  const raw = agent.model || '';
+  const resolved = adapter.resolveModel(raw);
+  return (resolved ? store.get(capabilityKey(adapter.id, adapter.endpoint, resolved)) : undefined)
+    ?? (raw && raw !== resolved ? store.get(capabilityKey(adapter.id, adapter.endpoint, raw)) : undefined);
 }
 
 type TurnInput = Omit<RunContext, keyof TurnCallbacks> & Partial<TurnCallbacks> & { locale?: TextLocale };
@@ -46,4 +61,4 @@ async function runTurn(agent: AgentConfig, input: TurnInput): Promise<TurnResult
   }
 }
 
-export { runTurn, getAdapter, getRegistry, setRegistry, effectiveCanEdit, Registry };
+export { runTurn, getAdapter, getRegistry, setRegistry, effectiveCanEdit, knownCapability, Registry };

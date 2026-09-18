@@ -268,7 +268,9 @@ export function report(name: string, r: HarnessResult): boolean {
   const shotNames = Object.keys(r.shots);
   if (shotNames.length) {
     // 保留中文等文字:以前全換成底線,「等待狀態」和另一個四字情境都會變成 ____ 而互相覆蓋
-    const dest = path.join(os.tmpdir(), 'ai-roundtable-shots', name.replace(/[^\p{L}\p{N}._-]/gu, '_'));
+    // CI 用 AI_ROUNDTABLE_SHOTS_DIR 指到一個會上傳的資料夾:失敗時,截圖就是最直接的證據
+    const root = process.env.AI_ROUNDTABLE_SHOTS_DIR || path.join(os.tmpdir(), 'ai-roundtable-shots');
+    const dest = path.join(root, name.replace(/[^\p{L}\p{N}._-]/gu, '_'));
     fs.rmSync(dest, { recursive: true, force: true });
     fs.mkdirSync(dest, { recursive: true });
     for (const [n, src] of Object.entries(r.shots)) fs.copyFileSync(src, path.join(dest, `${n}.png`));

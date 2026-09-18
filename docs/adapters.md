@@ -236,6 +236,8 @@ ollama serve
 
 工具不會只因範本或成員勾選「允許修改檔案」就送給模型。三個條件必須同時成立：範本明確啟用 `supportsEdit` 與 `fileTools.enabled`、成員允許改檔、divide 流程存在另一位合格 reviewer。orchestrator 只有在事前確認 reviewer 可用時才傳入 `RunContext.fileToolsEnabled: true`；同一位執行者不能審自己的改動。工具成功與失敗會以 `tool-audit` 系統訊息進入 transcript，讓 reviewer 看到實際操作而不只看模型的文字報告；完整 `read_file` 內容不會重複寫入。事前有人可審不代表事後一定成功，若審查逾時、崩潰或空白，執行訊息會標示「尚未審查」，使用者應開啟紅綠 diff 自行確認。
 
+**模型能力。**範本支援工具，不代表成員選的模型支援（同一個 Ollama 範本可以選到會呼叫工具的 qwen，也可以選到不會的 gemma3）。app 會用免費的來源確認：Ollama 的 `POST /api/show` 直接回報 `capabilities`；端點的模型清單若附帶能力資料（例如 OpenRouter 的 `supported_parameters` 與 `architecture.input_modalities`）就直接採用。付費端點不會自動發出對話請求：使用者在成員設定按「測試」時才送出 3 個很小的請求（先確認基準請求成功，再分別帶工具、帶圖片），結果存在 `model-capabilities.json`。已知不能呼叫工具的模型會被當成唯讀成員（`effectiveCanEdit` 為 false），審查時直接附上檔案內容而不送工具。
+
 交叉審查回合是例外：審查者若是啟用檔案工具的 API 範本，會拿到**唯讀**的 `read_file`（`RunContext.readOnlyFileTools`）。讀取不改變任何東西，所以不需要成員允許改檔，也不需要 reviewer 閘門；即使模型自己呼叫 `write_file` 或 `replace_text` 也會被擋下。範本支援工具不代表成員選的模型支援，因此要審的檔案內容 orchestrator 一律同時附在提示詞裡；端點以 HTTP 400、404 或 422 拒絕帶工具的請求時，adapter 會不帶工具重送一次，並告訴模型這次沒有工具可用。附上的內容只用於那一回合，存進對話記憶時會換成一行說明。
 
 遠端 API 成員與本機 Ollama 走同一條路徑：模型只送出工具參數，實際的路徑解析與寫檔一律在使用者機器上由 app 執行，因此同一組沙箱限制（工作目錄邊界、`.git` 等版控內部封鎖、寫入前的 SHA-256 檢查）對遠端供應商同樣成立。反過來說，工具參數此時來自遠端模型，必須當成不可信輸入看待——沙箱是唯一的邊界，不要依賴模型自己守規矩。

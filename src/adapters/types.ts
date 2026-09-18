@@ -2,7 +2,7 @@
 // orchestrator 與主程序只透過這份介面使用它們。
 
 import type { ChildProcess } from 'child_process';
-import type { Activity, AgentConfig, AttachmentMeta, CliStatus, Model } from '../ipc-types';
+import type { Activity, AgentConfig, AttachmentMeta, CliStatus, Model, ModelCapability } from '../ipc-types';
 import type { NormalizedUsage } from '../usage';
 import type { StopHandle } from './process';
 import type { FileToolTranscriptEntry } from './file-tools';
@@ -97,6 +97,12 @@ export interface Adapter {
   // locale:健康檢查的錯誤訊息會顯示在設定畫面,要跟著介面語言。檢查時沒有 RunContext,所以另外傳。
   check?(opts?: { locale?: TextLocale }): Promise<CliStatus>;
   testConnection?(): Promise<CliStatus>;
+  // OpenAI 相容 adapter:成員設定的模型名稱 → 實際送出的模型 id(沒指定時是範本預設值)
+  resolveModel?(model: string): string;
+  // OpenAI 相容 adapter 的端點;模型能力的快取依它區分
+  endpoint?: string;
+  // OpenAI 相容 adapter:查模型能力。live 為 true 才送出實際的對話請求(付費 API 會產生費用)
+  modelCapability?(model: string, opts?: { live?: boolean }): Promise<ModelCapability | null>;
   run(agent: AgentConfig, ctx: RunContext): Promise<RunResult>;
 }
 

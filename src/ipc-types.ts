@@ -139,6 +139,17 @@ export interface AppConfig {
   settings: AppSettings;
 }
 
+// API 成員所用模型的能力。true / false 是確定的(Ollama 回報、端點提供的模型資料,或實際測過);
+// 欄位不存在代表不知道。CLI 成員沒有這份資料:讀檔與圖片由 CLI 自己處理。
+export interface ModelCapability {
+  model: string;      // 實際使用的模型 id(成員沒指定時是範本的預設模型)
+  tools?: boolean;    // 能不能呼叫工具:改檔、審查時自己讀檔都靠它
+  images?: boolean;   // 能不能看圖
+  source: 'ollama' | 'metadata' | 'probe';
+  at: number;         // 取得的時間(ms)
+  error?: string;     // 實際測試沒能完成時的原因
+}
+
 // ---------- 轉接器(CLI 與擴充) ----------
 export interface CliType {
   id: string;
@@ -549,6 +560,8 @@ export interface IpcContract {
   'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
   'diff:changes': { args: []; result: DiffResult };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
+  // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
+  'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
   'attachments:list': { args: []; result: AttachmentsResult };
   'attachments:pick': { args: []; result: AttachmentsResult };
   'attachments:add': { args: [payload: { items: AttachmentInput[] }]; result: AttachmentsResult };
@@ -609,6 +622,7 @@ export interface RendererApi {
   getDiff(): Promise<DiffResult>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
   quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
+  modelCapability(payload: { adapterId: string; model: string; live?: boolean }): Promise<ModelCapability | null>;
   attachments: {
     list(): Promise<AttachmentsResult>;
     pick(): Promise<AttachmentsResult>;

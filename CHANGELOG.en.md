@@ -6,7 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- API members (Ollama and the cloud API templates) can read and edit files through three restricted file tools. They are offered only when the template opts in, the member allows editing, and another member can review the change; every call is recorded in the transcript so the reviewer sees what actually happened.
+- In cross-review every reviewer sees the actual changes, in a way that fits it: CLI members open the files themselves; API members with file tools get a read-only `read_file` plus the file contents inline; everyone else gets the contents inline. Changes come from a snapshot of the working folder before and after execution, so git is not required.
+- Review messages show a verdict badge (approved, issues raised, review failed) and what the reviewer looked at; clicking a file name opens Changes on that file.
+- Model abilities: whether an API member's model can call tools and see images, shown on the member card and in member settings. Ollama is checked automatically and model data from the endpoint is used as is; paid APIs send requests only when you press Test in member settings. A model known to lack tool calling is treated as a read-only member.
+- Failed @ direct replies can be retried with one click.
+- Long turns show what is happening, the elapsed time, and a notice when nothing has progressed for a while.
+- Claude Code and Codex that are installed but not logged in are detected, with the command to run to log in.
+- A warning before sending when an attached image cannot reach a member.
+- Development: `npm run harness:ui` drives the real app through interface scenarios and keeps screenshots; CI runs it too and uploads the screenshots on failure.
+
+### Changed
+
+- Once the lead's plan output (usually JSON) parses, it is folded away and only the plan card is shown; output that failed to parse stays fully visible.
+- System messages, errors and API adapter messages from the main process follow the interface language.
+- Status lights turn green only when things actually work: cloud API keys are verified when settings open, unreachable endpoints show an actionable hint, and member cards flag CLIs that are missing or not logged in.
+- Paths in Changes are always relative to the repository root.
+
+### Fixed
+
+- After a member's turn fails, its next turn receives the messages it missed instead of losing the context.
+- Elements marked hidden no longer take up space because of a stylesheet rule (for example an empty warning box under every message).
+- A series of review fixes: Chinese file names, a working folder that is a subfolder or gitignored, commits made by a member, and files already modified before the task are all listed correctly; a model that rejects tools gets the request again without them; file contents attached for a reviewer are not kept in an API member's conversation memory; pressing Stop during a snapshot really stops.
 
 ## [0.1.0] - 2026-09-17
 

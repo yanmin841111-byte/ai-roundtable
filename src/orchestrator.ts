@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
-import { runTurn, getAdapter, effectiveCanEdit } from './adapters';
+import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapters';
 import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
@@ -713,7 +713,7 @@ class Orchestrator extends EventEmitter {
       // 模型在審查時沒有任何工具,只看得到一行稽核摘要——它們只能審執行者自己寫的報告,
       // 或者像實際發生過的那樣,把工具呼叫當成文字寫出來假裝讀了檔。依審查者的能力給它
       // 看得到改動的方式,讓「請打開檔案」這句話對每一位都做得到。
-      const access = reviewAccess(getAdapter(reviewer.cli));
+      const access = reviewAccess(getAdapter(reviewer.cli), reviewer);
       // API 成員只能透過檔案工具改檔,工具紀錄就是它全部的改動;CLI 成員直接動檔案,
       // 只能看工作目錄的差異,而那是所有成員改動的總和。
       const tracked = getAdapter(target.agent.cli)?.type === 'openai';
@@ -1284,11 +1284,12 @@ const MENTION_SCAN_BUDGET = 50_000_000;
 //   tool   OpenAI 相容端點且範本開了檔案工具:給唯讀的 read_file,內容也照樣附上
 //   inline 兩者皆否:把改動檔案目前的內容直接附在提示詞裡
 // 依能力分,不依品牌分:模型換版本很快,能力才是這一步真正需要知道的事。
-function reviewAccess(adapter: Adapter | null | undefined): 'open' | 'tool' | 'inline' {
+function reviewAccess(adapter: Adapter | null | undefined, reviewer: AgentConfig): 'open' | 'tool' | 'inline' {
   if (!adapter) return 'inline';
   if (attachmentCapabilities(adapter).modes.has('filePath')) return 'open';
-  // OpenAI 相容 adapter 的 supportsEdit 就等於「範本明確開啟了檔案工具,端點支援工具呼叫」
-  if (adapter.type === 'openai' && adapter.supportsEdit) return 'tool';
+  // OpenAI 相容 adapter 的 supportsEdit 就等於「範本明確開啟了檔案工具,端點支援工具呼叫」。
+  // 已知這個模型不能呼叫工具就不送:那個請求一定被拒絕,只是多等一輪再重送
+  if (adapter.type === 'openai' && adapter.supportsEdit) return knownCapability(reviewer)?.tools === false ? 'inline' : 'tool';
   return 'inline';
 }
 

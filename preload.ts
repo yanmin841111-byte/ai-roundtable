@@ -26,6 +26,7 @@ const api: RendererApi = {
   retry: (messageId) => invoke('chat:retry', messageId),
   getDiff: () => invoke('diff:changes'),
   quickSetupOllama: (model) => invoke('ollama:quickSetup', model ? { model } : {}),
+  modelCapability: (payload) => invoke('model:capability', payload),
   reset: () => invoke('chat:reset'),
   resume: (sessionId) => invoke('chat:resume', sessionId),
   // 附件:主程序負責驗證、落地與上限,renderer 只拿 metadata 與縮圖 data URL

@@ -12,6 +12,7 @@ import { collectChanges } from './src/diff';
 import { SecretStore } from './src/secrets';
 import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn } from './src/ipc-types';
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
+import { CapabilityStore, setCapabilityStore } from './src/capabilities';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -146,6 +147,8 @@ app.whenReady().then(async () => {
   setSystemLocale(app.getLocale());
   store = new Store(app.getPath('userData'));
   secrets = new SecretStore(app.getPath('userData'), safeStorage);
+  // 模型能力的測試結果要跨次開啟保留:付費 API 的實際測試不該每次開 app 都重做
+  setCapabilityStore(new CapabilityStore(path.join(app.getPath('userData'), 'model-capabilities.json')));
   // 擴充資料夾可用 AI_ROUNDTABLE_ADAPTERS_DIR 覆寫(方便開發外掛)
   registry = new Registry({
     userDir: process.env.AI_ROUNDTABLE_ADAPTERS_DIR || path.join(app.getPath('userData'), 'adapters'),
@@ -184,6 +187,7 @@ app.whenReady().then(async () => {
   handle('config:save', (cfg) => store.save(cfg));
   handle('cli:types', () => registry.catalog());
   handle('cli:check', (opts) => registry.checkAll(opts || {}));
+  handle('model:capability', (payload) => registry.modelCapability(String(payload?.adapterId || ''), String(payload?.model || ''), payload?.live === true));
 
   // CLI 擴充管理
   handle('ext:list', () => registry.summary());

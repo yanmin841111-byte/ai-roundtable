@@ -260,6 +260,19 @@
           </label>
         </div>
         <div id="f-model-desc" class="model-desc"></div>
+        <div class="field cap-field" id="f-cap" hidden>
+          <span data-i18n="agent.capability">模型能力</span>
+          <div class="cap-row">
+            <div class="cap-lines">
+              <div id="f-cap-text" class="cap-text"></div>
+              <div id="f-cap-source" class="cap-source"></div>
+              <div id="f-cap-effect" class="cap-effect" hidden></div>
+              <div id="f-cap-error" class="cap-effect" hidden></div>
+            </div>
+            <button type="button" class="small" id="f-cap-test" data-i18n="cap.test">測試</button>
+          </div>
+          <div class="cap-note" data-i18n="cap.testNote">按「測試」會送出 3 個很小的請求確認;付費 API 會產生少量費用。</div>
+        </div>
         <label class="field" id="f-custom-wrap">
           <span data-i18n="agent.custom">自訂指令(提示詞會從 stdin 送入,stdout 當作回覆;可用 {model}、{effort})</span>
           <input id="f-custom" type="text" data-i18n-placeholder="agent.customPlaceholder" placeholder="例如:gemini -m {model} -p -" spellcheck="false" />

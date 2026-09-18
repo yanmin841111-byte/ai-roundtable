@@ -9,7 +9,7 @@ import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joi
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth, DiffFile,
-  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo,
+  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo, ModelCapability,
   AttachmentsResult, RendererApi,
   PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity,
 } from './api';
@@ -136,6 +136,8 @@ async function init() {
   $<HTMLButtonElement>('#modal-delete').onclick = deleteAgent;
   $<HTMLSelectElement>('#f-cli').onchange = () => fillCliDependentFields($<HTMLSelectElement>('#f-cli').value);
   $<HTMLSelectElement>('#f-model-select').onchange = onModelSelect;
+  $<HTMLInputElement>('#f-model').oninput = () => updateCapabilityRow();
+  $<HTMLButtonElement>('#f-cap-test').onclick = () => { void testCapability(); };
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => window.api.openPath($<HTMLInputElement>('#work-dir').value);
@@ -689,6 +691,7 @@ function formatHistoryTime(value: string | number | undefined): string {
 // 啟動時不帶,避免每開一次 app 就打一輪付費端點。
 async function checkClis(opts: { probeCredentialed?: boolean } = {}) {
   cliStatus = await window.api.checkCli(opts);
+  resetCapabilities(); // 例如 Ollama 晚一點才開:健康狀態變了,能力要重問
   // 側邊欄也要重畫:成員卡上的健康徽章讀的就是 cliStatus,不重畫的話它永遠停在
   // 「還沒檢查」那一刻的樣子——也就是什麼警告都不顯示。
   renderSidebar();
@@ -746,6 +749,7 @@ const typeLabel = (type: string): string => (['builtin', 'cli', 'openai', 'js'].
 
 async function refreshCatalog() {
   [cliTypes, extSummary] = await Promise.all([window.api.cliTypes(), window.api.ext.list()]);
+  resetCapabilities(); // 擴充可能改了端點或模型清單
   renderSidebar();
   renderExtensions();
   renderCliSummary();
@@ -1170,10 +1174,11 @@ function renderSidebar() {
             : '';
     const editBadge = cliTypes[a.cli] && !(a.canEdit && cliTypes[a.cli].supportsEdit)
       ? `<span class="badge">${escapeHtml(t('agent.readOnly'))}</span>` : '';
+    ensureCapability(a.cli, a.model, renderSidebar);
     el.innerHTML = `
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
-        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${healthBadge}${editBadge}</div>
+        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${healthBadge}${editBadge}${capabilityBadges(a)}</div>
         <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort || t('agent.defaultEffort'))}</div>
         ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
       </div>`;
@@ -1259,6 +1264,7 @@ function fillCliDependentFields(cli: string, model?: string, effort?: string): v
   $('#f-custom-wrap').style.display = isCustomCli ? '' : 'none';
   updateEditCapability(cli);
   refreshModelDependents(effort);
+  updateCapabilityRow();
 }
 
 // 轉接器不支援修改檔案時(例如 API),停用勾選框並說明原因;成員原本的設定保留不動。
@@ -1288,6 +1294,116 @@ function onModelSelect() {
   $<HTMLInputElement>('#f-model').style.display = manual ? '' : 'none';
   if (manual) $<HTMLInputElement>('#f-model').focus();
   refreshModelDependents();
+  updateCapabilityRow();
+}
+
+// ---------- 模型能力(API 成員) ----------
+// 同一個範本可以選到能力不同的模型:Ollama 上的 qwen 會呼叫工具,gemma3 不會。
+// 知道了就顯示出來,流程也照著安排(不能呼叫工具的當唯讀成員、審查時附上內容);不知道就不顯示,不猜。
+// 主程序只用免費的來源自動查(Ollama 回報、端點的模型資料);付費端點要使用者按「測試」。
+const modelCaps = new Map<string, ModelCapability | null>();
+const capsPending = new Set<string>();
+// 轉接器清單或健康狀態更新(改了擴充的端點、Ollama 晚一點才開)、按了「測試」之後,整批重問主程序。
+// 主程序有自己的快取,重問很便宜;不重問的話,卡片會一直停在舊的結果。
+// 世代編號讓清空之前發出、之後才回來的舊回應不會寫回快取。
+let capsGeneration = 0;
+function resetCapabilities(): void {
+  capsGeneration++;
+  modelCaps.clear();
+}
+const capKey = (cli: string, model: string) => `${cli}\n${model || ''}`;
+const isApiCli = (cli: string) => !!(cliTypes[cli] && cliTypes[cli].type === 'openai');
+
+function ensureCapability(cli: string, model: string, onDone: () => void): void {
+  if (!isApiCli(cli)) return;
+  const key = capKey(cli, model);
+  if (modelCaps.has(key) || capsPending.has(key)) return;
+  capsPending.add(key);
+  const generation = capsGeneration;
+  window.api.modelCapability({ adapterId: cli, model: model || '' })
+    .then((cap) => { if (generation === capsGeneration) modelCaps.set(key, cap); }, () => { if (generation === capsGeneration) modelCaps.set(key, null); })
+    .finally(() => { capsPending.delete(key); onDone(); });
+}
+
+// 成員卡片只標限制:能做到的是預期,做不到的才需要使用者知道
+function capabilityBadges(a: AgentConfig): string {
+  const cap = modelCaps.get(capKey(a.cli, a.model));
+  if (!cap) return '';
+  const out: string[] = [];
+  if (cap.tools === false) out.push(`<span class="badge warn" title="${escapeHtml(t('cap.noToolsTitle'))}">${escapeHtml(t('cap.noTools'))}</span>`);
+  // 範本本來就不送圖的,「不能看圖」不是新資訊
+  const sendsImages = (cliTypes[a.cli]?.capabilities?.attachments || []).includes('imageInline');
+  if (cap.images === false && sendsImages) out.push(`<span class="badge" title="${escapeHtml(t('cap.noImagesTitle'))}">${escapeHtml(t('cap.noImages'))}</span>`);
+  return out.join('');
+}
+
+// 能力、來源(淡色)、影響(只有不能呼叫工具時,警示色)。這次測試沒完成、但之前知道的保留時,再加一行說明
+function describeCapability(cap: ModelCapability | null): { text: string; source: string; effect: string; error?: string } {
+  if (!cap) return { text: t('cap.unknown'), source: '', effect: '' };
+  if (cap.error && cap.tools === undefined && cap.images === undefined) return { text: t('cap.failed', { error: cap.error }), source: '', effect: '' };
+  const text = [
+    t(cap.tools === true ? 'cap.tools.yes' : cap.tools === false ? 'cap.tools.no' : 'cap.tools.unknown'),
+    t(cap.images === true ? 'cap.images.yes' : cap.images === false ? 'cap.images.no' : 'cap.images.unknown'),
+  ].join(' · ');
+  const source = cap.source === 'probe'
+    ? t('cap.source.probe', { time: new Date(cap.at).toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' }) })
+    : t(`cap.source.${cap.source}`);
+  return { text, source, effect: cap.tools === false ? t('cap.effect.noTools') : '', ...(cap.error ? { error: t('cap.failedKept', { error: cap.error }) } : {}) };
+}
+
+function showCapability(parts: { text: string; source: string; effect: string; error?: string }): void {
+  const error = $<HTMLDivElement>('#f-cap-error');
+  error.textContent = parts.error || '';
+  error.hidden = !parts.error;
+  $<HTMLDivElement>('#f-cap-text').textContent = parts.text;
+  const source = $<HTMLDivElement>('#f-cap-source');
+  source.textContent = parts.source;
+  source.hidden = !parts.source;
+  const effect = $<HTMLDivElement>('#f-cap-effect');
+  effect.textContent = parts.effect;
+  effect.hidden = !parts.effect;
+}
+
+function updateCapabilityRow(): void {
+  const cli = $<HTMLSelectElement>('#f-cli').value;
+  const wrap = $<HTMLDivElement>('#f-cap');
+  wrap.hidden = !isApiCli(cli);
+  if (wrap.hidden) return;
+  const model = currentModel();
+  const key = capKey(cli, model);
+  if (!modelCaps.has(key)) {
+    showCapability({ text: t('cap.checking'), source: '', effect: '' });
+    ensureCapability(cli, model, () => { updateCapabilityRow(); renderSidebar(); });
+    return;
+  }
+  showCapability(describeCapability(modelCaps.get(key) || null));
+}
+
+async function testCapability(): Promise<void> {
+  const cli = $<HTMLSelectElement>('#f-cli').value;
+  const model = currentModel();
+  const key = capKey(cli, model);
+  const btn = $<HTMLButtonElement>('#f-cap-test');
+  btn.disabled = true;
+  btn.textContent = t('cap.testing');
+  showCapability({ text: t('cap.testing'), source: '', effect: '' });
+  let result: ModelCapability | null;
+  try {
+    result = await window.api.modelCapability({ adapterId: cli, model, live: true });
+  } catch (error) {
+    result = { model, source: 'probe', at: Date.now(), error: cleanIpcError(error) };
+  }
+  try {
+    // 成員卡片存的可能是別名或空字串(範本預設),和這裡選的完整名稱是不同的 key:整批重問,
+    // 主程序會把它們對應到同一筆剛測好的結果
+    resetCapabilities();
+    modelCaps.set(key, result);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('cap.test');
+    updateCapabilityRow();
+    renderSidebar();
+  }
 }
 
 // 依目前選的模型更新說明文字與強度選單。effort 未給時沿用畫面上的選擇。
