@@ -2,3 +2,8 @@ node_modules/
 dist/
 .DS_Store
 release/
+
+# 本機的 Claude Code 權限設定,每台機器不同
+.claude/settings.local.json
+# 一次性的真機實測腳本(檔頭註明不進版控,已由 test/harness 取代)
+test/_live-*.ts
