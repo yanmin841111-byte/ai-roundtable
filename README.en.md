@@ -157,8 +157,10 @@ Everything is under `~/Library/Application Support/AI Roundtable/`; `sessions/` 
 | --- | --- |
 | `main.ts`, `preload.ts` | Electron main process and the IPC bridge |
 | `src/ipc-types.ts`, `renderer/api.d.ts` | IPC types shared by the main process and the interface |
-| `renderer/` | The interface (HTML / CSS / TypeScript, bundled by esbuild) |
+| `renderer/` | The interface (HTML / CSS / TypeScript, bundled by esbuild); `app.ts` is the main program, `diff-view.ts` and `task-card.ts` are standalone components |
 | `src/orchestrator.ts` | Discussion, division, execution, review and @-mention flow |
+| `src/flow/` | Self-contained parts of the flow: review pairing and verdicts, transcript truncation, git changes, plan parsing, message restore, the result card |
+| `src/snapshot.ts`, `src/task-changes.ts` | Working-directory snapshots and "what did this task change" |
 | `src/adapters/` | Built-in adapters, extension loading, generic CLI / API adapters |
 | `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts` | Attachments, history, API key storage |
 | `src/models.ts`, `src/model-rules.ts`, `src/usage.ts` | Model lists, effort rules, usage normalization |

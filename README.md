@@ -157,8 +157,10 @@ CLI 的 session 不會寫進歷史紀錄。載入歷史對話繼續討論時,每
 | --- | --- |
 | `main.ts`、`preload.ts` | Electron 主程序與 IPC 介面 |
 | `src/ipc-types.ts`、`renderer/api.d.ts` | 主程序與介面共用的 IPC 型別 |
-| `renderer/` | 介面(HTML / CSS / TypeScript,由 esbuild 打包) |
+| `renderer/` | 介面(HTML / CSS / TypeScript,由 esbuild 打包);`app.ts` 是主程式,`diff-view.ts`、`task-card.ts` 是獨立的元件 |
 | `src/orchestrator.ts` | 討論、分工、執行、審查、@ 指定的流程 |
+| `src/flow/` | 流程用到的獨立部分:審查配對與結論、對話紀錄截斷、git 變更、分工解析、訊息還原、結果卡 |
+| `src/snapshot.ts`、`src/task-changes.ts` | 工作目錄快照,與「這次任務改了什麼」的比對 |
 | `src/adapters/` | 內建轉接器、擴充載入、CLI / API 通用轉接器 |
 | `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts` | 附件、歷史紀錄、API key 儲存 |
 | `src/models.ts`、`src/model-rules.ts`、`src/usage.ts` | 模型清單、強度規則、用量正規化 |

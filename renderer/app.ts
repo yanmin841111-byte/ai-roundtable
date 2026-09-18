@@ -6,17 +6,16 @@ import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
 import { isPhaseInfo } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
+import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape } from './util';
+import { openDiff, loadDiff } from './diff-view';
+import { renderTaskSummary } from './task-card';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
-  AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth, DiffFile,
-  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo, ModelCapability, TaskSummary,
+  AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth,
+  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo, ModelCapability,
   AttachmentsResult, RendererApi,
   PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity,
 } from './api';
-
-// querySelector 在這個 app 裡查的都是 index.html 既有的節點,查不到就是程式寫錯。
-// 保留原本「直接使用回傳值」的語意,型別由呼叫端以泛型指定。
-const $ = <T extends HTMLElement = HTMLElement>(s: string): T => document.querySelector(s) as T;
 
 // marked v15 的 parse() 型別是 string | Promise<string>;這裡一律同步使用。
 const md = (text: string): string => marked.parse(text, { async: false }) as string;
@@ -68,7 +67,6 @@ const mentionMenu: { open: boolean; start: number; items: AgentConfig[]; index: 
   { open: false, start: 0, items: [], index: 0 };
 
 marked.setOptions({ breaks: true, gfm: true });
-
 
 // ---------- 初始化 ----------
 async function init() {
@@ -317,167 +315,6 @@ function emptyEl() {
   d.id = 'empty'; d.className = 'empty';
   d.innerHTML = `<div class="empty-icon">◎</div><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
   return d;
-}
-
-// ---------- 檔案改動(紅綠 diff) ----------
-// 成員可以直接改使用者的檔案,但介面原本只看得到成員「說」它改了什麼。這裡把實際的
-// git 改動撈出來逐檔、逐行呈現,讓說的和做的能被對照。唯讀:不提供套用或還原。
-
-// 展開狀態要跨重新整理保留,否則每按一次 ↻ 使用者就得重新展開在看的那個檔案
-const diffExpanded = new Set<string>();
-// 從審查訊息點檔名打開時,要展開並捲到的那個檔案
-let diffFocus: string | null = null;
-
-async function openDiff(focus?: string): Promise<void> {
-  diffFocus = focus || null;
-  $<HTMLDivElement>('#diff-modal').classList.remove('hidden');
-  await loadDiff();
-}
-
-async function loadDiff(): Promise<void> {
-  const body = $<HTMLDivElement>('#diff-body');
-  const summary = $<HTMLDivElement>('#diff-summary');
-  const refresh = $<HTMLButtonElement>('#diff-refresh');
-  refresh.disabled = true;
-  summary.textContent = '';
-  body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.loading'))}</div>`;
-  try {
-    const result = await window.api.getDiff();
-    if (!result.ok) {
-      const key = result.reason === 'no-workdir' ? 'diff.noWorkdir' : result.reason === 'not-a-repo' ? 'diff.notRepo' : 'diff.failed';
-      // detail 是 git 的原文(多半是英文),只在真正失敗時附上,不強行翻譯
-      const detail = result.reason === 'failed' && result.detail ? `\n${result.detail}` : '';
-      body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}</div>`;
-      return;
-    }
-    renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '', result.source === 'task' ? result.since : undefined);
-  } catch (error) {
-    body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.failed') + '\n' + cleanIpcError(error))}</div>`;
-  } finally {
-    refresh.disabled = false;
-    diffFocus = null; // 只作用一次;之後按 ↻ 不該又跳回那個檔案
-  }
-}
-
-function renderDiff(files: DiffFile[], dir: string, totalFiles: number, prefix = '', taskSince?: number): void {
-  const body = $<HTMLDivElement>('#diff-body');
-  const summary = $<HTMLDivElement>('#diff-summary');
-  body.innerHTML = '';
-  const added = files.reduce((n, f) => n + f.added, 0);
-  const removed = files.reduce((n, f) => n + f.removed, 0);
-  // 超過上限時 files 只是前面一段,增刪統計也只涵蓋這一段。
-  // 把「顯示了幾個 / 一共幾個」講明白,不要讓截斷後的數字看起來像完整結果。
-  const capped = totalFiles > files.length;
-  const head = capped
-    ? t('diff.summaryCapped', { shown: files.length, total: totalFiles, added, removed })
-    : t('diff.summary', { files: files.length, added, removed });
-  // 不是 git repo 時比對的基準是「最近一次任務開始前」,不是上一次 commit:要講清楚,不然數字會被誤讀
-  const since = taskSince ? `　·　${t('diff.taskSince', { time: new Date(taskSince).toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' }) })}` : '';
-  summary.textContent = (totalFiles ? `${head}　·　${t('diff.dirLabel', { dir })}` : t('diff.dirLabel', { dir })) + since;
-  if (!files.length) {
-    body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.clean'))}</div>`;
-    return;
-  }
-  // 審查訊息裡的路徑相對於工作目錄,這裡的路徑相對於 repo 根目錄:接上 prefix 後要完全相符
-  const focus = diffFocus ? Marker.findDiffFocus(files.map((f) => f.path), prefix, diffFocus) : null;
-  if (diffFocus && !focus) {
-    // 快照看得到、git 看不到的檔案(被 .gitignore 忽略、超過顯示上限):打開了卻什麼都沒標,使用者會以為壞了
-    const note = document.createElement('div');
-    note.className = 'diff-note diff-focus-missing';
-    note.textContent = t('diff.focusMissing', { file: diffFocus });
-    body.appendChild(note);
-  }
-  if (focus) diffExpanded.add(focus);
-  for (const file of files) body.appendChild(diffFileEl(file));
-  if (focus) {
-    const el = body.querySelector<HTMLElement>(`.diff-file[data-path="${cssEscape(focus)}"]`);
-    if (el) { el.classList.add('focused'); el.scrollIntoView({ block: 'start' }); }
-  }
-  if (capped) {
-    const note = document.createElement('div');
-    note.className = 'diff-note diff-cap-note';
-    note.textContent = t('diff.cappedNote', { shown: files.length, total: totalFiles });
-    body.appendChild(note);
-  }
-}
-
-function diffFileEl(file: DiffFile): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'diff-file';
-  wrap.dataset.path = file.path;
-  const open = diffExpanded.has(file.path);
-
-  const head = document.createElement('button');
-  head.className = 'diff-file-head';
-  head.setAttribute('aria-expanded', String(open));
-  const arrow = document.createElement('span');
-  arrow.className = 'diff-arrow';
-  arrow.textContent = open ? '▾' : '▸';
-  const status = document.createElement('span');
-  status.className = `diff-status ${file.status}`;
-  status.textContent = t(`diff.status.${file.status}`);
-  const name = document.createElement('span');
-  name.className = 'diff-path';
-  name.textContent = `\u200E${file.path}`; // 見 .diff-path:RTL 省略時,開頭的標點才不會翻到尾端
-  const counts = document.createElement('span');
-  counts.className = 'diff-counts';
-  // 即使檔案內容被截斷,這裡的數字仍是完整統計
-  counts.innerHTML = `<span class="diff-plus">+${file.added}</span> <span class="diff-minus">−${file.removed}</span>`;
-  head.append(arrow, status, name, counts);
-  if (file.oldPath) {
-    const from = document.createElement('span');
-    from.className = 'diff-renamed-from';
-    from.textContent = t('diff.renamedFrom', { from: file.oldPath });
-    head.appendChild(from);
-  }
-
-  const bodyEl = document.createElement('div');
-  bodyEl.className = 'diff-lines';
-  bodyEl.hidden = !open;
-  // 行數多的檔案展開時才建 DOM,一次把幾百個檔案全部渲染會讓視窗開不起來
-  if (open) fillDiffLines(bodyEl, file);
-
-  head.onclick = () => {
-    const nowOpen = bodyEl.hidden;
-    bodyEl.hidden = !nowOpen;
-    arrow.textContent = nowOpen ? '▾' : '▸';
-    head.setAttribute('aria-expanded', String(nowOpen));
-    if (nowOpen) {
-      diffExpanded.add(file.path);
-      if (!bodyEl.childElementCount) fillDiffLines(bodyEl, file);
-    } else diffExpanded.delete(file.path);
-  };
-
-  wrap.append(head, bodyEl);
-  return wrap;
-}
-
-function fillDiffLines(el: HTMLElement, file: DiffFile): void {
-  if (file.binary || file.unavailable) {
-    el.innerHTML = `<div class="diff-note">${escapeHtml(t(file.unavailable ? `diff.unavailable.${file.unavailable}` : 'diff.binary'))}</div>`;
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  for (const line of file.lines) {
-    const row = document.createElement('div');
-    row.className = `diff-line ${line.kind}`;
-    const sign = document.createElement('span');
-    sign.className = 'diff-sign';
-    sign.textContent = line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : '';
-    const text = document.createElement('span');
-    text.className = 'diff-text';
-    // 一律用 textContent:diff 內容是任意檔案的原始碼,絕不能當 HTML 解析
-    text.textContent = line.text;
-    row.append(sign, text);
-    frag.appendChild(row);
-  }
-  if (file.truncated) {
-    const note = document.createElement('div');
-    note.className = 'diff-note';
-    note.textContent = t('diff.truncated', { lines: file.lines.length });
-    frag.appendChild(note);
-  }
-  el.appendChild(frag);
 }
 
 // ---------- 歷史對話 ----------
@@ -1161,11 +998,6 @@ async function deleteExtension() {
   $<HTMLDivElement>('#ext-editor').classList.add('hidden');
   editingExtFile = null;
   await refreshCatalog();
-}
-
-// Electron 會把主程序錯誤包成 "Error invoking remote method 'x': Error: 訊息"
-function cleanIpcError(e: unknown): string {
-  return String((e && (e as Error).message) || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
 // ---------- 側欄 ----------
@@ -1976,202 +1808,6 @@ function toolAuditHtml(m: ChatMessage): string {
   return `<div class="bubble"><div class="body tool-audit"><div class="tool-audit-title">${escapeHtml(title)}</div>${rows}</div></div>`;
 }
 
-// ---------- 任務結果卡 ----------
-// 誰做完了、審查結論、改了哪些檔案、花了多少時間與 token:原本散在整條對話裡,任務結束時整理成一張卡。
-// 結論沿用審查徽章的樣式與用詞,和流程實際的走向是同一個判斷(由主程序寫進訊息)。
-// 「已修復」修完之後沒有再審查一次,不能跟「審查通過」一樣是綠色:用中性色
-const OUTCOME_BADGE: Record<string, string> = { approved: 'verdict pass', repaired: '', unresolved: 'warn', unreviewed: 'unreviewed', failed: 'bad' };
-const TASK_FILES_SHOWN = 12;
-
-function durationText(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  return seconds < 60 ? t('task.seconds', { s: seconds }) : t('task.minutes', { m: Math.floor(seconds / 60), s: seconds % 60 });
-}
-
-// 整體狀態:決定標題旁的狀態標籤(需要留意或失敗時換成警示色)。最嚴重的那個說了算
-function taskState(s: TaskSummary): { tone: 'ok' | 'info' | 'warn' | 'bad'; label: string } {
-  const count = (o: string) => s.members.filter((m) => m.outcome === o).length;
-  if (count('failed')) return { tone: 'bad', label: t('task.state.bad', { n: count('failed') }) };
-  const attention = count('unresolved') + count('unreviewed');
-  if (attention) return { tone: 'warn', label: t('task.state.warn', { n: attention }) };
-  if (count('repaired')) return { tone: 'info', label: t('task.state.repaired') };
-  return { tone: 'ok', label: t('task.state.ok') };
-}
-
-// 像 GitHub 那樣的 5 格增刪比例條:一眼看出這個檔案改了多少
-function diffStatBar(added: number, removed: number): HTMLElement {
-  const bar = document.createElement('span');
-  bar.className = 'ts-bar';
-  bar.setAttribute('aria-hidden', 'true');
-  const total = added + removed;
-  const green = total ? Math.round((5 * added) / total) : 0;
-  const red = total ? 5 - green : 0;
-  for (let i = 0; i < 5; i++) {
-    const cell = document.createElement('i');
-    cell.className = i < green ? 'add' : i < green + red ? 'del' : '';
-    bar.appendChild(cell);
-  }
-  return bar;
-}
-
-// 儀表板式的數字:小標籤在上、數字在下
-function metric(label: string, value: string, title: string): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'ts-metric';
-  el.title = title;
-  const l = document.createElement('span');
-  l.className = 'ts-metric-label';
-  l.textContent = label;
-  const v = document.createElement('span');
-  v.className = 'ts-metric-value';
-  v.textContent = value;
-  el.append(l, v);
-  return el;
-}
-
-function sectionLabel(text: string): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'ts-label';
-  el.textContent = text;
-  return el;
-}
-
-function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
-  const state = taskState(s);
-  const card = document.createElement('div');
-  card.className = `bubble task-summary tone-${state.tone}`;
-
-  // ---- 標題:整體狀態 + 數字 ----
-  const head = document.createElement('div');
-  head.className = 'ts-head';
-  const titleRow = document.createElement('div');
-  titleRow.className = 'ts-title-row';
-  const icon = document.createElement('span');
-  icon.className = 'ts-icon';
-  icon.textContent = '◎';
-  icon.setAttribute('aria-hidden', 'true');
-  const title = document.createElement('b');
-  title.className = 'ts-title';
-  title.textContent = t('task.title');
-  const status = document.createElement('span');
-  status.className = 'ts-state';
-  status.textContent = state.label;
-  titleRow.append(icon, title, status);
-  const metrics = document.createElement('div');
-  metrics.className = 'ts-metrics';
-  metrics.appendChild(metric(t('task.metric.duration'), durationText(s.endedAt - s.startedAt), t('task.durationTitle')));
-  const u = s.usage;
-  if (u.turnsWithUsage) {
-    metrics.appendChild(metric(t('task.metric.tokens'), t('task.tokens', { input: fmt(u.inputTokens), output: fmt(u.outputTokens) }), t('task.tokensTitle')));
-    if (u.costUsd != null) metrics.appendChild(metric(t('task.metric.cost'), `$${u.costUsd.toFixed(3)}`, t('task.costTitle')));
-  }
-  head.append(titleRow, metrics);
-  // 內容區:成員與檔案。標題列是一條品牌色的色帶,和對話泡泡明顯不同
-  const body = document.createElement('div');
-  body.className = 'ts-body';
-  // 有回合沒回報用量時,總數偏低:講出來,不要讓它看起來像精確的數字
-  if (u.turnsWithUsage && u.turnsWithUsage < u.turns) {
-    const partial = document.createElement('div');
-    partial.className = 'ts-partial';
-    partial.textContent = t('task.usagePartial', { n: u.turns - u.turnsWithUsage });
-    head.appendChild(partial);
-  }
-  card.append(head, body);
-
-  // ---- 成員:每人一張小卡 ----
-  body.appendChild(sectionLabel(t('task.membersLabel')));
-  const members = document.createElement('div');
-  members.className = 'ts-members';
-  for (const m of s.members) {
-    const tile = document.createElement('div');
-    tile.className = `ts-member outcome-${m.outcome}`;
-    tile.style.setProperty('--member', m.color || '#6c8cff');
-    const top = document.createElement('div');
-    top.className = 'ts-member-top';
-    const avatar = document.createElement('span');
-    avatar.className = 'avatar ts-avatar';
-    avatar.style.background = m.color || '#6c8cff';
-    avatar.textContent = initials(m.name);
-    const name = document.createElement('b');
-    name.className = 'ts-name';
-    name.textContent = m.name;
-    top.append(avatar, name);
-    const badge = document.createElement('span');
-    badge.className = `badge ${OUTCOME_BADGE[m.outcome] || ''}`;
-    badge.textContent = t(`task.outcome.${m.outcome}`);
-    badge.title = t(`task.outcomeTitle.${m.outcome}`);
-    tile.append(top, badge);
-    if (m.reviewers.length) {
-      const by = document.createElement('span');
-      by.className = 'ts-reviewers';
-      by.textContent = t('task.reviewedBy', { names: joinNames(m.reviewers) });
-      tile.appendChild(by);
-    }
-    members.appendChild(tile);
-  }
-  body.appendChild(members);
-
-  // ---- 改動的檔案 ----
-  const total = s.files.length + s.moreFiles;
-  const filesHead = document.createElement('div');
-  filesHead.className = 'ts-files-head';
-  filesHead.appendChild(sectionLabel(total ? t('task.files', { n: total }) : t('task.noFiles')));
-  if (total) {
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'ts-open';
-    open.textContent = t('diff.open');
-    open.onclick = () => { void openDiff(); };
-    filesHead.appendChild(open);
-  }
-  body.appendChild(filesHead);
-  if (total) {
-    const files = document.createElement('div');
-    files.className = 'ts-files';
-    for (const f of s.files.slice(0, TASK_FILES_SHOWN)) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'ts-file';
-      row.title = t('review.fileTitle');
-      const status = document.createElement('span');
-      status.className = `diff-status ${f.status}`;
-      status.textContent = t(`diff.status.${f.status}`);
-      const p = document.createElement('span');
-      p.className = 'ts-path';
-      p.textContent = f.path;
-      const counts = document.createElement('span');
-      counts.className = 'ts-counts';
-      const plus = document.createElement('span');
-      plus.className = 'diff-plus';
-      plus.textContent = `+${Number(f.added) || 0}`;
-      const minus = document.createElement('span');
-      minus.className = 'diff-minus';
-      minus.textContent = `−${Number(f.removed) || 0}`;
-      counts.append(plus, minus);
-      row.append(status, p, counts, diffStatBar(Number(f.added) || 0, Number(f.removed) || 0));
-      row.onclick = () => { void openDiff(f.path); };
-      files.appendChild(row);
-    }
-    const rest = total - Math.min(s.files.length, TASK_FILES_SHOWN);
-    if (rest > 0) {
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'ts-file more';
-      more.textContent = t('review.scope.more', { n: rest });
-      more.onclick = () => { void openDiff(); };
-      files.appendChild(more);
-    }
-    body.appendChild(files);
-  }
-  // 上方一條「任務結束」分隔線,跟階段分隔線同一種語彙:這是一次任務的收尾,不是又一則發言
-  const end = document.createElement('div');
-  end.className = 'ts-end';
-  const endLabel = document.createElement('span');
-  endLabel.textContent = t('task.end');
-  end.appendChild(endLabel);
-  el.replaceChildren(end, card);
-}
-
 function renderUserMessage(el: HTMLElement, m: ChatMessage): void {
   el.innerHTML = userHtml(m);
   highlightMentions(el.querySelector('.body'), m.mentions);
@@ -2971,25 +2607,5 @@ function readFileDataUrl(file: Blob): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
-
-function cssEscape(value: string): string {
-  if (window.CSS && CSS.escape) return CSS.escape(String(value));
-  return String(value).replace(/"/g, '\\"');
-}
-
-// ---------- 小工具 ----------
-function fmt(n: number): string { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
-function exactNumber(n: number): string { return Number(n).toLocaleString(localeTag(), { maximumFractionDigits: 20 }); }
-// 只留最後兩層,例如 /Users/me/projects/app → …/projects/app
-function shortPath(p: string): string {
-  const parts = String(p).replace(/\/+$/, '').split('/').filter(Boolean);
-  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : String(p);
-}
-function initials(name: string | undefined): string { return (name || '?').trim().slice(0, 1).toUpperCase(); }
-function escapeHtml(s: unknown): string {
-  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return String(s ?? '').replace(/[&<>"']/g, (c) => map[c]);
-}
-function randomColor(): string { const c = ['#6c8cff', '#d97757', '#10a37f', '#c678dd', '#e5c07b', '#56b6c2', '#ff6b9d']; return c[Math.floor(Math.random() * c.length)]; }
 
 init();
