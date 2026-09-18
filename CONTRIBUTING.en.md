@@ -34,6 +34,7 @@ The code is TypeScript. `npm start` builds into `dist/` and then launches Electr
 | `npm run smoke:dist` | Confirm the CommonJS output in `dist/` loads |
 | `npm run e2e` | Build, then launch the real Electron app and run a full roundtable, attachments, @-mentions and history with fake members (`test/e2e/`); no CLI needs to be installed |
 | `npm run harness:ui` | Build, then run the interface scenarios (`test/harness/scenarios/`) to check that status lights, badges, review verdicts, model abilities and the like tell the truth, keeping screenshots; fake members only, about 1–2 minutes, also run in CI |
+| `npm run eval` | Review-quality evaluation: a real model reviews a fixed set of tasks and gets a score (see [eval/README.en.md](eval/README.en.md)); needs a real model, not run in CI |
 
 Handy environment variables and flags during development:
 
@@ -73,6 +74,10 @@ Useful CLI or API definitions are welcome in `adapters/templates/`; the fields a
 
 - Which CLI or API version you tested against; if untested, say so in the template's `description`
 - Whether the service supports resuming, editing files, images and so on, and what the `capabilities` are based on
+
+## Evaluation scores
+
+Scores for the model you use are welcome: run `npm run eval -- --runs 10 --save` and send the one file it creates in `eval/results/` as a PR. The file holds only the model name, versions, the date and per-task scores, never any conversation. See [eval/README.en.md](eval/README.en.md).
 
 ## License
 

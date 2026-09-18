@@ -170,6 +170,7 @@ Everything is under `~/Library/Application Support/AI Roundtable/`; `sessions/` 
 | `adapters/templates/` | Extension templates shown under "+ Add" |
 | `docs/` | Extension guide and interface copy spec |
 | `test/` | Tests run by `npm test`; `test/e2e/` is the end-to-end run |
+| `eval/` | Review-quality evaluation: a real model reviews a fixed set of tasks |
 | `dist/` | Output of `npm run build`, which is what the app loads (not committed) |
 
 ## Contributing

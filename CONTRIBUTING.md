@@ -34,6 +34,7 @@ npm test
 | `npm run smoke:dist` | 確認 `dist/` 的 CommonJS 輸出可以正常載入 |
 | `npm run e2e` | 建置後啟動真正的 Electron app,用假成員跑完整圓桌、附件、@ 指定與歷史紀錄(`test/e2e/`),不需要安裝任何 CLI |
 | `npm run harness:ui` | 建置後逐一跑介面情境(`test/harness/scenarios/`),檢查燈號、徽章、審查結論、模型能力等畫面有沒有說實話,並留下截圖;全假成員,約 1~2 分鐘,CI 也會跑 |
+| `npm run eval` | 審查品質評測:真的模型當審查者跑一組固定題目,輸出分數(見 [eval/README.md](eval/README.md));要跑真的模型,不進 CI |
 
 開發時好用的環境變數與參數:
 
@@ -73,6 +74,10 @@ Commit 訊息用英文祈使句開頭,第一行簡短說明做了什麼,例如 `
 
 - 實際測試過的 CLI 或 API 版本;沒有實測的話,在範本的 `description` 註明「尚未實測」
 - 該服務是否支援續接、修改檔案、圖片等能力,以及 `capabilities` 的依據
+
+## 評測分數
+
+歡迎分享你用的模型在審查評測的分數:用 `npm run eval -- --runs 10 --save` 跑完,把 `eval/results/` 裡產生的那一個檔案送 PR。檔案只有模型名稱、版本、日期與各題分數,不含任何對話內容。細節見 [eval/README.md](eval/README.md)。
 
 ## 授權
 

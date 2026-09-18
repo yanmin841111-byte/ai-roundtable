@@ -17,6 +17,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["main.ts", "preload.ts", "src/**/*.ts", "test/**/*.ts"],
+  "include": ["main.ts", "preload.ts", "src/**/*.ts", "test/**/*.ts", "eval/**/*.ts"],
   "exclude": ["dist", "node_modules", "renderer"]
 }

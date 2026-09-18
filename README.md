@@ -170,6 +170,7 @@ CLI 的 session 不會寫進歷史紀錄。載入歷史對話繼續討論時,每
 | `adapters/templates/` | 「+ 新增」裡的擴充範本 |
 | `docs/` | 擴充撰寫說明與介面文案規格 |
 | `test/` | `npm test` 執行的測試;`test/e2e/` 是端對端測試 |
+| `eval/` | 審查品質評測:真的模型當審查者,跑一組固定題目 |
 | `dist/` | `npm run build` 的輸出,app 實際載入的是這裡(不進版控) |
 
 ## 貢獻
