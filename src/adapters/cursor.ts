@@ -16,6 +16,7 @@ import { runProcess, parseJson, truncate, checkCli } from './process';
 import { resolveModelId } from '../model-rules';
 import type { AgentConfig } from '../ipc-types';
 import type { Adapter, RunContext, RunResult } from './types';
+import { tx, type TextLocale } from '../text';
 
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const NOT_FOUND = 127;
@@ -39,18 +40,18 @@ function parseCursorModels(output: any) {
 }
 
 // 工具名稱轉成對話裡顯示的標題,例如 readToolCall → 讀取檔案:path
-function describeCursorTool(key: any, args: any = {}) {
+function describeCursorTool(key: any, args: any = {}, locale: TextLocale = 'zh-Hant') {
   const name = String(key || '').replace(/ToolCall$/, '');
   switch (name) {
-    case 'shell': return `執行指令:${truncate(args.command, 120)}`;
-    case 'read': return `讀取檔案:${args.path || ''}`;
-    case 'edit': return `編輯檔案:${args.path || ''}`;
-    case 'write': return `寫入檔案:${args.path || ''}`;
-    case 'delete': return `刪除檔案:${args.path || ''}`;
-    case 'glob': return `搜尋檔名:${args.globPattern || args.pattern || ''}`;
-    case 'grep': return `搜尋內容:${args.pattern || ''}`;
-    case 'ls': return `列出目錄:${args.path || ''}`;
-    default: return `工具:${name || 'unknown'}`;
+    case 'shell': return tx(locale, 'act.run', { detail: truncate(args.command, 120) });
+    case 'read': return tx(locale, 'act.read', { detail: args.path || '' });
+    case 'edit': return tx(locale, 'act.edit', { detail: args.path || '' });
+    case 'write': return tx(locale, 'act.write', { detail: args.path || '' });
+    case 'delete': return tx(locale, 'act.delete', { detail: args.path || '' });
+    case 'glob': return tx(locale, 'act.glob', { detail: args.globPattern || args.pattern || '' });
+    case 'grep': return tx(locale, 'act.grep', { detail: args.pattern || '' });
+    case 'ls': return tx(locale, 'act.ls', { detail: args.path || '' });
+    default: return tx(locale, 'act.tool', { detail: name || 'unknown' });
   }
 }
 
@@ -109,7 +110,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
   async function run(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
     const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--workspace', ctx.cwd];
     if (agent.model) args.push('--model', resolveModelId(listModels().models, agent.model));
-    if (agent.effort) ctx.onActivity({ id: 'run-options', kind: 'note', title: `Cursor 的強度寫在模型名稱裡,已略過 ${agent.effort}`, status: 'done' });
+    if (agent.effort) ctx.onActivity({ id: 'run-options', kind: 'note', title: tx(ctx.locale || 'zh-Hant', 'cursor.effortIgnored', { effort: agent.effort }), status: 'done' });
     if (ctx.sessionId) args.push('--resume', ctx.sessionId);
     // 不能改檔案時用 ask 模式(唯讀);可以改檔案時自動核准指令
     if (agent.canEdit) args.push('--force');
@@ -134,7 +135,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
       current = '';
     };
 
-    const res = await runProcess(...viaShell(bin, args), { cwd: ctx.cwd, stdin: prompt, timeoutMs: ctx.timeoutMs }, {
+    const res = await runProcess(...viaShell(bin, args), { cwd: ctx.cwd, stdin: prompt, timeoutMs: ctx.timeoutMs, locale: ctx.locale }, {
       onProc: ctx.onProc,
       onLine: (line: any) => {
         const ev = parseJson(line);
@@ -168,7 +169,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
           if (current) { closeSegment(); ctx.onText(renderText()); }
           const key = Object.keys(ev.tool_call).find((k: any) => /ToolCall$/.test(k));
           const call = (key && ev.tool_call[key]) || {};
-          const activity: any = { id: ev.call_id || ev.tool_call.toolCallId, kind: 'tool', title: describeCursorTool(key, call.args || {}) };
+          const activity: any = { id: ev.call_id || ev.tool_call.toolCallId, kind: 'tool', title: describeCursorTool(key, call.args || {}, ctx.locale || 'zh-Hant') };
           if (ev.subtype === 'completed') {
             const r = toolResultText(call.result);
             activity.status = r.status;
@@ -182,7 +183,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
         }
         if (ev.type === 'result') {
           if (ev.usage) usage = ev.usage;
-          if (ev.is_error) errorMsg = (typeof ev.result === 'string' && ev.result) || ev.error || 'Cursor 執行失敗';
+          if (ev.is_error) errorMsg = (typeof ev.result === 'string' && ev.result) || ev.error || tx(ctx.locale || 'zh-Hant', 'cli.failed', { name: 'Cursor' });
           else if (typeof ev.result === 'string') resultText = ev.result;
         }
       },
@@ -192,9 +193,10 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
     let text = renderText();
     // result 是 Cursor 自己組好的最終回覆,串流去重萬一判斷失誤也以它為準
     if (resultText && resultText.trim() && resultText !== text) { text = resultText; ctx.onText(text); }
-    if (res.spawnError || res.code === NOT_FOUND) errorMsg = `無法啟動 ${bin}:${truncate(res.stderr, 1000).trim() || '找不到指令'}`;
-    else if (res.timedOut) errorMsg = res.error || `${bin} 執行逾時\n${truncate(res.stderr, 2000)}`;
-    else if (res.code !== 0 && !text) errorMsg = errorMsg || `${bin} 結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;
+    const l = ctx.locale || 'zh-Hant';
+    if (res.spawnError || res.code === NOT_FOUND) errorMsg = tx(l, 'cli.spawnFailed', { bin, detail: truncate(res.stderr, 1000).trim() || tx(l, 'proc.notFound', { bin }) });
+    else if (res.timedOut) errorMsg = res.error || `${tx(l, 'cli.timedOut', { bin })}\n${truncate(res.stderr, 2000)}`;
+    else if (res.code !== 0 && !text) errorMsg = errorMsg || `${tx(l, 'cli.exitCode', { bin, code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
     return { text, thinking, sessionId, usage, error: errorMsg };
   }
 
@@ -209,7 +211,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
     efforts: [],
     listModels,
     refreshModels,
-    check: () => checkCli(bin),
+    check: (opts) => checkCli(bin, undefined, opts?.locale),
     usageShape: 'cursor',
     run,
   };

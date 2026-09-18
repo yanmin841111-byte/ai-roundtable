@@ -51,7 +51,8 @@ let pending: AttachmentMeta[] = [];
 
 const userData = () => app.getPath('userData');
 // 主程序產生的少數使用者可見文字跟著介面語言
-const text = (key: string, params: Record<string, string | number> = {}) => tx(resolveTextLocale(store.get().settings.uiLocale), key, params);
+const uiLocale = () => resolveTextLocale(store.get().settings.uiLocale);
+const text = (key: string, params: Record<string, string | number> = {}) => tx(uiLocale(), key, params);
 // 對話框附在主視窗上;視窗還沒建立(或已關閉)時退回無父視窗的版本
 const showOpenDialog = (options: Electron.OpenDialogOptions) =>
   mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options);
@@ -194,7 +195,7 @@ app.whenReady().then(async () => {
     if (file.endsWith('.json')) {
       const r = registry.migrateLegacyApiKey(file);
       if (r.error) migrationError = r.error;
-      else if (r.migrated) { migration = '已將舊版明文 API key 移至系統安全儲存。'; registry.reload(); }
+      else if (r.migrated) { migration = text('ext.legacyKeyMigrated'); registry.reload(); }
     }
     return { content: registry.readFile(file), migration, migrationError };
   });
@@ -227,6 +228,8 @@ app.whenReady().then(async () => {
     const result = attachments.addAttachments(userData(), orchestrator.conversationId, items, {
       existingCount: pending.length,
       existingBytes: pendingBytes(),
+      // 拒絕原因會直接顯示在輸入框,跟著介面語言
+      locale: uiLocale(),
     });
     pending = [...pending, ...result.added];
     // added = 這批新加的;attachments = 目前完整的 pending 清單。兩個都給,renderer 不必猜。
@@ -300,17 +303,17 @@ app.whenReady().then(async () => {
     fs.mkdirSync(dir, { recursive: true });
     return shell.openPath(dir);
   });
-  handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50 }));
-  handle('session:read', (id) => readSession(app.getPath('userData'), id));
+  handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50, locale: uiLocale() }));
+  handle('session:read', (id) => readSession(app.getPath('userData'), id, uiLocale()));
   handle('session:delete', (id) => {
-    const result = deleteSession(app.getPath('userData'), id);
+    const result = deleteSession(app.getPath('userData'), id, uiLocale());
     if (result.ok && id === sessionFileId) sessionFileId = null;
     return result;
   });
   // 載入歷史對話繼續討論:之後的任務會寫回同一份紀錄
   handle('chat:resume', (id) => {
     if (orchestrator.snapshot().running) return { ok: false, error: text('main.stillRunning') };
-    const result = readSession(userData(), id);
+    const result = readSession(userData(), id, uiLocale());
     if (!result.ok) return result;
     activeTaskStart = null;
     resetPending(); // 未送出的附件屬於舊對話的目錄,不能帶過去

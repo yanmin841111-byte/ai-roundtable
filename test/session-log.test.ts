@@ -39,11 +39,25 @@ t('envelope 的 title / agents / createdAt 從訊息推導', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-t('空訊息也能寫入,標題降級為「(無標題)」', () => {
+// 沒有文字時標題留空,由介面依語言顯示「未命名對話」。後端寫死中文佔位字串的話,
+// renderer 的在地化備援永遠用不到,英文介面就會看到「(無標題)」。
+t('空訊息也能寫入,標題留空交給介面在地化', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-empty-'));
   const r = writeSession(dir, []);
   assert.strictEqual(r.ok, true);
-  assert.strictEqual(JSON.parse(fs.readFileSync(r.file, 'utf8')).title, '(無標題)');
+  assert.strictEqual(JSON.parse(fs.readFileSync(r.file, 'utf8')).title, '');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+t('舊版寫進檔案的「(無標題)」讀回來時當成沒有標題', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-legacy-'));
+  const sdir = path.join(dir, 'sessions');
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'legacy.json'), JSON.stringify({ version: 1, title: '(無標題)', messages: [] }));
+  const { sessions } = listSessions(dir);
+  assert.strictEqual(sessions[0].title, '', '舊佔位字串不可原樣顯示');
+  const read = readSession(dir, 'legacy.json');
+  assert.strictEqual(read.ok && read.session.title, '', 'readSession 也要一致');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -108,7 +122,8 @@ t('可解析但不是對話紀錄的 JSON 要降級,不可列為空對話', () =
   const { sessions } = listSessions(dir);
   assert.strictEqual(sessions.length, bad.length);
   for (const s of sessions) {
-    assert.strictEqual(s.title, '(無法讀取)', `${s.id} 應降級`);
+    // 標題留空、錯誤放在 error:介面據此顯示「無法讀取」,而不是「未命名」
+    assert.strictEqual(s.title, '', `${s.id} 標題應留空`);
     assert.ok(s.error, `${s.id} 應帶錯誤訊息`);
     assert.strictEqual(readSession(dir, s.id).ok, false, `${s.id} readSession 應失敗`);
   }
@@ -208,11 +223,34 @@ t('listSessions 對舊的純陣列格式動態推導 title / createdAt / agents'
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// readEnvelope 依 mtime 快取解析結果。錯誤若在快取前就翻好,切換語言後
+// 舊檔的錯誤還會是上一個語言——所以同一份壞檔要能先中文、後英文。
+t('解析錯誤跟著語言,且不被解析快取鎖死在第一次的語言', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-i18n-'));
+  const sdir = path.join(dir, 'sessions');
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'notes.json'), JSON.stringify({ version: 1, messages: 'x' }));
+  const zh = listSessions(dir, { locale: 'zh-Hant' }).sessions[0];
+  assert.match(zh.error, /不是對話紀錄/);
+  const en = listSessions(dir, { locale: 'en' }).sessions[0];
+  assert.match(en.error, /not a conversation record/, '同一份檔案(已快取)切到英文也要是英文');
+  const read = readSession(dir, 'notes.json', 'en');
+  assert.strictEqual(read.ok, false);
+  assert.match(read.ok ? '' : read.error, /not a conversation record/);
+  // 格式不合法的代號(帶目錄成分)才是「無效」
+  assert.match((readSession(dir, '../escape.json', 'en') as any).error, /Invalid record ID/);
+  // 格式合法但檔案已不在:不可以把 ENOENT 原文與完整路徑丟給使用者
+  const gone = (readSession(dir, 'nope.json', 'en') as any).error;
+  assert.match(gone, /no longer exists/);
+  assert.doesNotMatch(gone, /ENOENT|\/var\//, '不可外洩原始錯誤與路徑');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 t('壞掉的檔案只讓該筆降級,不讓整份清單失效', () => {
   const dir = makeStore();
   const { sessions } = listSessions(dir);
   const bad = sessions.find((s: any) => s.id === 'broken.json');
-  assert.strictEqual(bad.title, '(無法讀取)');
+  assert.strictEqual(bad.title, '');
   assert.ok(bad.error, '該筆要帶錯誤訊息');
   assert.strictEqual(sessions.length, 3, '其餘紀錄仍然列得出來');
   fs.rmSync(dir, { recursive: true, force: true });

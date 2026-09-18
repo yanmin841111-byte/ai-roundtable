@@ -65,7 +65,9 @@ function deriveTitle(messages: readonly LooseMessage[]) {
   const list = asList(messages);
   const first = list.find((m) => m && m.kind === 'user' && m.text) || list.find((m) => m && m.text);
   const text = String((first && first.text) || '').replace(/\s+/g, ' ').trim();
-  if (!text) return '(無標題)';
+  // 回空字串,交給介面顯示在地化的「未命名對話」。後端塞一個寫死的中文佔位字串,
+  // 會讓 renderer 的在地化備援永遠用不到,英文介面就看到「(無標題)」。
+  if (!text) return '';
   return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX)}…` : text;
 }
 
@@ -100,6 +102,19 @@ function deriveCreatedAt(messages: readonly LooseMessage[], fallback: unknown) {
   return back.toISOString();
 }
 
+// 舊版會把這個中文佔位字串寫進檔案當標題。讀到時當成「沒有標題」,介面才能依語言顯示。
+const LEGACY_UNTITLED = '(無標題)';
+
+// 解析錯誤存「鍵」而不是翻好的文字:readEnvelope 的結果依 mtime 快取,
+// 存翻好的文字的話,切換語言後舊檔的錯誤還會是上一個語言。輸出給介面時才翻。
+const localizeError = (error: string, locale: TextLocale): string =>
+  /^session\.[A-Za-z]+$/.test(error) ? tx(locale, error) : error;
+
+// 清單是先前讀的,使用者點下去時那份檔案可能已經被刪了。原本會把 Node 的
+// ENOENT 原文(含完整路徑)直接顯示在介面上。
+const missingOr = (error: unknown, locale: TextLocale): string =>
+  (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? tx(locale, 'session.missing') : errorMessage(error);
+
 // 舊檔是純陣列,新檔是 envelope;兩者都包成同一個形狀,不批次改寫舊檔
 function toEnvelope(parsed: any, fallbackDate: Date): Envelope {
   if (Array.isArray(parsed)) {
@@ -113,13 +128,13 @@ function toEnvelope(parsed: any, fallbackDate: Date): Envelope {
     };
   }
   // 任意一份合法 JSON 都不該被當成「空對話」列在清單裡,所以 messages 必須真的是陣列
-  if (!parsed || typeof parsed !== 'object') throw new Error('內容不是對話紀錄');
-  if (!Array.isArray(parsed.messages)) throw new Error('內容不是對話紀錄:缺少 messages 陣列');
+  if (!parsed || typeof parsed !== 'object') throw new Error('session.notTranscript');
+  if (!Array.isArray(parsed.messages)) throw new Error('session.noMessages');
   const messages = parsed.messages;
   return {
     version: Number.isFinite(parsed.version) ? parsed.version : ENVELOPE_VERSION,
     createdAt: parsed.createdAt || deriveCreatedAt(messages, fallbackDate),
-    title: parsed.title || deriveTitle(messages),
+    title: (parsed.title && parsed.title !== LEGACY_UNTITLED ? parsed.title : '') || deriveTitle(messages),
     agents: Array.isArray(parsed.agents) ? parsed.agents : deriveAgents(messages),
     conversationId: parsed.conversationId || deriveConversationId(messages),
     messages,
@@ -185,7 +200,7 @@ function readEnvelope(full: string, stat: fs.Stats): EnvelopeResult {
 
 // 列出最近的對話。排序只看 mtime(不讀內容),只解析最新的 limit 筆。
 // 單一檔案壞掉時該筆降級顯示,不讓整份清單失效。
-function listSessions(userDataDir: string, { limit = LIST_LIMIT }: { limit?: number } = {}): { sessions: SessionSummary[]; error?: string } {
+function listSessions(userDataDir: string, { limit = LIST_LIMIT, locale = 'zh-Hant' }: { limit?: number; locale?: TextLocale } = {}): { sessions: SessionSummary[]; error?: string } {
   const dir = sessionsDir(userDataDir);
   let entries: Array<{ name: string; stat: fs.Stats }>;
   try {
@@ -208,7 +223,8 @@ function listSessions(userDataDir: string, { limit = LIST_LIMIT }: { limit?: num
   const sessions = entries.slice(0, Math.max(0, limit)).map(({ name, stat }): SessionSummary => {
     const base = { id: name, size: stat.size, createdAt: stat.mtime.toISOString() };
     const parsed = readEnvelope(path.join(dir, name), stat);
-    if (!parsed.ok) return { ...base, title: '(無法讀取)', agents: [], messageCount: 0, error: parsed.error };
+    // 標題留空,由介面依語言顯示「無法讀取」;錯誤原因在 error 欄位
+    if (!parsed.ok) return { ...base, title: '', agents: [], messageCount: 0, error: localizeError(parsed.error, locale) };
     const e = parsed.envelope;
     const attachmentCount = e.messages.reduce((n, m: LooseMessage) => n + (Array.isArray(m?.attachments) ? m.attachments.length : 0), 0);
     return { ...base, title: e.title, agents: e.agents, createdAt: e.createdAt, messageCount: e.messages.length, conversationId: e.conversationId || null, attachmentCount };
@@ -216,25 +232,25 @@ function listSessions(userDataDir: string, { limit = LIST_LIMIT }: { limit?: num
   return { sessions };
 }
 
-function readSession(userDataDir: string, id: unknown): SessionReadResult {
+function readSession(userDataDir: string, id: unknown, locale: TextLocale = 'zh-Hant'): SessionReadResult {
   const full = resolveSessionPath(userDataDir, id);
-  if (!full) return { ok: false, error: '無效的紀錄代號' };
+  if (!full) return { ok: false, error: tx(locale, 'session.badId') };
   try {
     const stat = fs.statSync(full);
-    if (!stat.isFile()) return { ok: false, error: '無效的紀錄代號' };
+    if (!stat.isFile()) return { ok: false, error: tx(locale, 'session.badId') };
     const parsed = readEnvelope(full, stat);
-    return parsed.ok ? { ok: true, session: parsed.envelope } : { ok: false, error: parsed.error };
+    return parsed.ok ? { ok: true, session: parsed.envelope } : { ok: false, error: localizeError(parsed.error, locale) };
   } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+    return { ok: false, error: missingOr(error, locale) };
   }
 }
 
-function deleteSession(userDataDir: string, id: unknown): OkResult {
+function deleteSession(userDataDir: string, id: unknown, locale: TextLocale = 'zh-Hant'): OkResult {
   const full = resolveSessionPath(userDataDir, id);
-  if (!full) return { ok: false, error: '無效的紀錄代號' };
+  if (!full) return { ok: false, error: tx(locale, 'session.badId') };
   try {
     const stat = fs.statSync(full);
-    if (!stat.isFile()) return { ok: false, error: '無效的紀錄代號' };
+    if (!stat.isFile()) return { ok: false, error: tx(locale, 'session.badId') };
     // 先讀出 conversationId 再刪檔:檔案沒了就查不到要清哪個附件目錄
     const parsed = readEnvelope(full, stat);
     const conversationId = parsed.ok ? parsed.envelope.conversationId : null;
@@ -244,7 +260,7 @@ function deleteSession(userDataDir: string, id: unknown): OkResult {
     if (conversationId && !listConversationIds(userDataDir).includes(conversationId)) deleteConversation(userDataDir, conversationId);
     return { ok: true };
   } catch (error) {
-    return { ok: false, error: errorMessage(error) };
+    return { ok: false, error: missingOr(error, locale) };
   }
 }
 

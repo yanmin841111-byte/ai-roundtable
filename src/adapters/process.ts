@@ -3,6 +3,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import type { Readable } from 'stream';
+import { tx, type TextLocale } from '../text';
 
 export interface RunProcessOptions {
   cwd?: string;
@@ -11,6 +12,8 @@ export interface RunProcessOptions {
   env?: Record<string, string | undefined>;
   timeoutMs?: number;
   killGraceMs?: number;
+  // 逾時等訊息會直接顯示在對話泡泡裡,要跟著介面語言。沒給就用中文(原本的行為)。
+  locale?: TextLocale;
 }
 
 export interface RunProcessCallbacks {
@@ -51,13 +54,13 @@ function truncate(value: unknown, n = 600): string {
 }
 
 // 預設逾時是 20 分鐘,只到「秒」的話使用者看到的是「1200 秒」,得自己心算。
-function formatTimeout(timeoutMs: number): string {
+function formatTimeout(timeoutMs: number, locale: TextLocale = 'zh-Hant'): string {
   if (timeoutMs < 1000) return `${timeoutMs} ms`;
   const seconds = Math.round(timeoutMs / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 60) return tx(locale, 'proc.seconds', { n: seconds });
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
-  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分鐘`;
+  return rest ? tx(locale, 'proc.minutesSeconds', { m: minutes, s: rest }) : tx(locale, 'proc.minutes', { n: minutes });
 }
 
 // 逐行讀取串流,忽略空行。
@@ -104,7 +107,7 @@ function attachProcessGroupKill(child: ChildProcess): ChildProcess {
 
 // 啟動行程並逐行回呼 stdout。
 // 回傳 { code, stderr, timedOut, error, spawnError }
-function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, env, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, killGraceMs = DEFAULT_KILL_GRACE_MS }: RunProcessOptions = {}, cb: RunProcessCallbacks = {}): Promise<ProcessResult> {
+function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, env, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, killGraceMs = DEFAULT_KILL_GRACE_MS, locale = 'zh-Hant' }: RunProcessOptions = {}, cb: RunProcessCallbacks = {}): Promise<ProcessResult> {
   return new Promise<ProcessResult>((resolve) => {
     let child: ChildProcess;
     let settled = false;
@@ -142,16 +145,16 @@ function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, e
     });
     child.on('error', (e) => finish({ code: -1, stderr: stderr + '\n' + String(e), spawnError: e }));
     lineReader(stdout, cb.onLine || (() => {}));
-    child.on('close', (code: number | null) => finish({ code, stderr, timedOut, error: timedOut ? `執行逾時(${formatTimeout(timeoutMs)})` : null }));
+    child.on('close', (code: number | null) => finish({ code, stderr, timedOut, error: timedOut ? tx(locale, 'proc.timeout', { time: formatTimeout(timeoutMs, locale) }) : null }));
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        stderr += `\n執行逾時(${formatTimeout(timeoutMs)}),已送出 SIGTERM。`;
+        stderr += `\n${tx(locale, 'proc.timeoutSigterm', { time: formatTimeout(timeoutMs, locale) })}`;
         child.kill('SIGTERM');
         killTimer = setTimeout(() => {
-          stderr += '\n逾時行程未結束,已送出 SIGKILL。';
+          stderr += `\n${tx(locale, 'proc.timeoutSigkill')}`;
           child.kill('SIGKILL');
-          setTimeout(() => finish({ code: -1, stderr, timedOut, error: `執行逾時(${formatTimeout(timeoutMs)})` }), 250);
+          setTimeout(() => finish({ code: -1, stderr, timedOut, error: tx(locale, 'proc.timeout', { time: formatTimeout(timeoutMs, locale) }) }), 250);
         }, killGraceMs);
       }, timeoutMs);
     }
@@ -164,18 +167,18 @@ function runProcess(bin: string, args: readonly string[], { cwd, stdin, shell, e
 }
 
 // 檢查指令是否可用。args 為 null 時只確認指令存在於 PATH。
-function checkCli(bin: string, args: readonly string[] | null = ['--version']): Promise<CliCheckResult> {
+function checkCli(bin: string, args: readonly string[] | null = ['--version'], locale: TextLocale = 'zh-Hant'): Promise<CliCheckResult> {
   if (!args) {
-    return runQuick('/bin/sh', ['-c', 'command -v "$1"', 'sh', bin]).then((r) =>
-      r.ok ? { ok: true, version: r.out.trim() } : { ok: false, error: `找不到指令 ${bin}` });
+    return runQuick('/bin/sh', ['-c', 'command -v "$1"', 'sh', bin], locale).then((r) =>
+      r.ok ? { ok: true, version: r.out.trim() } : { ok: false, error: tx(locale, 'proc.notFound', { bin }) });
   }
-  return runQuick(bin, args).then((r) =>
-    r.ok ? { ok: true, version: r.out.trim().split('\n')[0] } : { ok: false, error: r.error || `找不到指令 ${bin}` });
+  return runQuick(bin, args, locale).then((r) =>
+    r.ok ? { ok: true, version: r.out.trim().split('\n')[0] } : { ok: false, error: r.error || tx(locale, 'proc.notFound', { bin }) });
 }
 
 interface QuickResult { ok: boolean; out: string; error?: string }
 
-function runQuick(bin: string, args: readonly string[]): Promise<QuickResult> {
+function runQuick(bin: string, args: readonly string[], locale: TextLocale = 'zh-Hant'): Promise<QuickResult> {
   return new Promise<QuickResult>((resolve) => {
     let out = '';
     let child: ChildProcess | undefined;
@@ -188,12 +191,12 @@ function runQuick(bin: string, args: readonly string[]): Promise<QuickResult> {
     };
     const timer = setTimeout(() => {
       if (child) child.kill('SIGTERM');
-      finish({ ok: false, out, error: '逾時' });
+      finish({ ok: false, out, error: tx(locale, 'proc.checkTimeout') });
     }, CLI_CHECK_TIMEOUT_MS);
     try { child = attachProcessGroupKill(spawn(bin, args, { detached: true, env: process.env })); } catch (e) { return finish({ ok: false, out, error: String(e) }); }
     child.stdout?.on('data', (d) => (out += d));
     child.stderr?.on('data', (d) => (out += d));
-    child.on('error', (e: NodeJS.ErrnoException) => finish({ ok: false, out, error: e.code === 'ENOENT' ? `找不到指令 ${bin}` : e.message }));
+    child.on('error', (e: NodeJS.ErrnoException) => finish({ ok: false, out, error: e.code === 'ENOENT' ? tx(locale, 'proc.notFound', { bin }) : e.message }));
     child.on('close', (code: number | null) => finish({ ok: code === 0, out }));
   });
 }

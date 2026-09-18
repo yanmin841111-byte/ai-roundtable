@@ -30,23 +30,24 @@ function canonicalModelId(models: any, requested: unknown): string | null {
   return findModel(models, requested)?.id || null;
 }
 
-function validateOpenAISpec(spec: any, errors: any) {
-  if (typeof spec.baseUrl !== 'string' || !/^https?:\/\//.test(spec.baseUrl)) errors.push('baseUrl 必須是 http:// 或 https:// 開頭的網址');
-  if (spec.apiKeyEnv != null && typeof spec.apiKeyEnv !== 'string') errors.push('apiKeyEnv 必須是環境變數名稱');
-  if (spec.secretRef != null && (typeof spec.secretRef !== 'string' || !SECRET_REF_PATTERN.test(spec.secretRef))) errors.push('secretRef 格式不正確');
-  if (spec.apiKey != null) errors.push('apiKey 明文欄位已停用，請在擴充設定的 API key 欄位安全移轉');
-  if (spec.headers != null && (typeof spec.headers !== 'object' || Array.isArray(spec.headers))) errors.push('headers 必須是物件');
-  if (spec.body != null && (typeof spec.body !== 'object' || Array.isArray(spec.body))) errors.push('body 必須是物件');
-  if (spec.effortBody != null && (typeof spec.effortBody !== 'object' || Array.isArray(spec.effortBody))) errors.push('effortBody 必須是物件');
-  if (spec.maxHistoryMessages != null && (!Number.isInteger(spec.maxHistoryMessages) || spec.maxHistoryMessages <= 0)) errors.push('maxHistoryMessages 必須是正整數');
-  if (spec.unreachableHint != null && typeof spec.unreachableHint !== 'string') errors.push('unreachableHint 必須是字串');
-  if (spec.supportsEdit != null && typeof spec.supportsEdit !== 'boolean') errors.push('supportsEdit 必須是布林值');
-  if (spec.fileTools != null && (!spec.fileTools || typeof spec.fileTools !== 'object' || Array.isArray(spec.fileTools))) errors.push('fileTools 必須是物件');
-  else if (spec.fileTools?.enabled != null && typeof spec.fileTools.enabled !== 'boolean') errors.push('fileTools.enabled 必須是布林值');
-  if (spec.supportsEdit === true && spec.fileTools?.enabled !== true) errors.push('supportsEdit=true 時必須明確設定 fileTools.enabled=true');
-  if (spec.fileTools?.enabled === true && spec.supportsEdit !== true) errors.push('fileTools.enabled=true 時必須明確設定 supportsEdit=true');
+function validateOpenAISpec(spec: any, errors: any, locale: TextLocale = 'zh-Hant') {
+  const e = (key: string, params: Record<string, string> = {}) => errors.push(tx(locale, key, params));
+  if (typeof spec.baseUrl !== 'string' || !/^https?:\/\//.test(spec.baseUrl)) e('spec.baseUrl');
+  if (spec.apiKeyEnv != null && typeof spec.apiKeyEnv !== 'string') e('spec.apiKeyEnv');
+  if (spec.secretRef != null && (typeof spec.secretRef !== 'string' || !SECRET_REF_PATTERN.test(spec.secretRef))) e('spec.badFormat', { field: 'secretRef' });
+  if (spec.apiKey != null) e('spec.plainApiKey');
+  if (spec.headers != null && (typeof spec.headers !== 'object' || Array.isArray(spec.headers))) e('spec.mustBeObject', { field: 'headers' });
+  if (spec.body != null && (typeof spec.body !== 'object' || Array.isArray(spec.body))) e('spec.mustBeObject', { field: 'body' });
+  if (spec.effortBody != null && (typeof spec.effortBody !== 'object' || Array.isArray(spec.effortBody))) e('spec.mustBeObject', { field: 'effortBody' });
+  if (spec.maxHistoryMessages != null && (!Number.isInteger(spec.maxHistoryMessages) || spec.maxHistoryMessages <= 0)) e('spec.mustBePositiveInt', { field: 'maxHistoryMessages' });
+  if (spec.unreachableHint != null && typeof spec.unreachableHint !== 'string') e('spec.mustBeString', { field: 'unreachableHint' });
+  if (spec.supportsEdit != null && typeof spec.supportsEdit !== 'boolean') e('spec.mustBeBoolean', { field: 'supportsEdit' });
+  if (spec.fileTools != null && (!spec.fileTools || typeof spec.fileTools !== 'object' || Array.isArray(spec.fileTools))) e('spec.mustBeObject', { field: 'fileTools' });
+  else if (spec.fileTools?.enabled != null && typeof spec.fileTools.enabled !== 'boolean') e('spec.mustBeBoolean', { field: 'fileTools.enabled' });
+  if (spec.supportsEdit === true && spec.fileTools?.enabled !== true) e('spec.requiresTogether', { a: 'supportsEdit', b: 'fileTools.enabled' });
+  if (spec.fileTools?.enabled === true && spec.supportsEdit !== true) e('spec.requiresTogether', { a: 'fileTools.enabled', b: 'supportsEdit' });
   if (spec.modelFilter != null) {
-    try { new RegExp(spec.modelFilter); } catch (e: any) { errors.push(`modelFilter 不是有效的正規表示式:${e.message}`); }
+    try { new RegExp(spec.modelFilter); } catch (err: any) { e('spec.badRegex', { field: 'modelFilter', error: err.message }); }
   }
 }
 
@@ -301,7 +302,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           onChunk(await res.json());
         }
       } catch (e: any) {
-        if (timedOut) out.error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs) });
+        if (timedOut) out.error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs, ctx.locale || locale()) });
         else if (e.name === 'AbortError') out.error = out.error || tx(ctx.locale || locale(), 'api.stopped');
         else out.error = tx(ctx.locale || locale(), 'api.cannotConnect', { url: spec.baseUrl, error: e.cause ? e.cause.message || e.cause.code : e.message });
       } finally {
@@ -328,7 +329,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
 
       // 每輪工具本身另有 20 次硬上限；API 往返也設上限，避免模型反覆呼叫失敗工具。
       for (let apiRound = 0; apiRound < 10; apiRound++) {
-        if (Date.now() >= deadline) { error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs) }); break; }
+        if (Date.now() >= deadline) { error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs, ctx.locale || locale()) }); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
         status = result.status;
         usage = result.usage || usage;

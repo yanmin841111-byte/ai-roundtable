@@ -89,7 +89,8 @@ export interface Adapter {
   capabilities?: AdapterCapabilities;
   listModels?(): ModelList;
   refreshModels?(): Promise<unknown>;
-  check?(): Promise<CliStatus>;
+  // locale:健康檢查的錯誤訊息會顯示在設定畫面,要跟著介面語言。檢查時沒有 RunContext,所以另外傳。
+  check?(opts?: { locale?: TextLocale }): Promise<CliStatus>;
   testConnection?(): Promise<CliStatus>;
   run(agent: AgentConfig, ctx: RunContext): Promise<RunResult>;
 }

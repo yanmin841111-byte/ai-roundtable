@@ -7,30 +7,32 @@ import crypto from 'crypto';
 import { runProcess, parseJson, truncate, checkCli } from './process';
 import { getPath, render, buildArgs, matches } from './template';
 import { resolveModelId, resolveEffort } from '../model-rules';
-import { normalizeModels, normalizeCapabilities } from './spec';
+import { normalizeModels, normalizeCapabilities, listOf } from './spec';
 import type { AgentConfig } from '../ipc-types';
 import type { Adapter, RunContext, RunResult } from './types';
+import { tx, type TextLocale } from '../text';
 
 const TEXT_MODES = ['append', 'replace', 'message'];
 
-function validateCliSpec(spec: any, errors: any) {
-  if (typeof spec.bin !== 'string' || !spec.bin.trim()) errors.push('bin 必須是指令名稱或路徑');
-  if (spec.args != null && !Array.isArray(spec.args)) errors.push('args 必須是陣列');
-  if (spec.input != null && !['stdin', 'arg', 'file', 'none'].includes(spec.input)) errors.push('input 必須是 stdin、arg、file 或 none');
-  if (spec.systemPrompt != null && !['prepend', 'arg', 'none'].includes(spec.systemPrompt)) errors.push('systemPrompt 必須是 prepend、arg 或 none');
+function validateCliSpec(spec: any, errors: any, locale: TextLocale = 'zh-Hant') {
+  const e = (key: string, params: Record<string, string> = {}) => errors.push(tx(locale, key, params));
+  if (typeof spec.bin !== 'string' || !spec.bin.trim()) e('spec.binShape');
+  if (spec.args != null && !Array.isArray(spec.args)) e('spec.mustBeArray', { field: 'args' });
+  if (spec.input != null && !['stdin', 'arg', 'file', 'none'].includes(spec.input)) e('spec.mustBeOneOf', { field: 'input', list: listOf(['stdin', 'arg', 'file', 'none'], locale) });
+  if (spec.systemPrompt != null && !['prepend', 'arg', 'none'].includes(spec.systemPrompt)) e('spec.mustBeOneOf', { field: 'systemPrompt', list: listOf(['prepend', 'arg', 'none'], locale) });
   const out = spec.output || {};
-  if (out.format != null && !['text', 'jsonl', 'json'].includes(out.format)) errors.push('output.format 必須是 text、jsonl 或 json');
-  if (out.rules != null && !Array.isArray(out.rules)) errors.push('output.rules 必須是陣列');
+  if (out.format != null && !['text', 'jsonl', 'json'].includes(out.format)) e('spec.mustBeOneOf', { field: 'output.format', list: listOf(['text', 'jsonl', 'json'], locale) });
+  if (out.rules != null && !Array.isArray(out.rules)) e('spec.mustBeArray', { field: 'output.rules' });
   (out.rules || []).forEach((r: any, i: any) => {
-    if (!r || typeof r !== 'object') { errors.push(`output.rules[${i}] 必須是物件`); return; }
+    if (!r || typeof r !== 'object') { e('spec.mustBeObject', { field: `output.rules[${i}]` }); return; }
     for (const key of ['mode', 'thinkingMode']) {
-      if (r[key] != null && !TEXT_MODES.includes(r[key])) errors.push(`output.rules[${i}].${key} 必須是 ${TEXT_MODES.join('、')}`);
+      if (r[key] != null && !TEXT_MODES.includes(r[key])) e('spec.mustBeOneOf', { field: `output.rules[${i}].${key}`, list: listOf(TEXT_MODES, locale) });
     }
   });
   if (out.sessionIdPattern != null) {
-    try { new RegExp(out.sessionIdPattern); } catch (e: any) { errors.push(`output.sessionIdPattern 不是有效的正規表示式:${e.message}`); }
+    try { new RegExp(out.sessionIdPattern); } catch (err: any) { e('spec.badRegex', { field: 'output.sessionIdPattern', error: err.message }); }
   }
-  if (spec.env != null && (typeof spec.env !== 'object' || Array.isArray(spec.env))) errors.push('env 必須是物件');
+  if (spec.env != null && (typeof spec.env !== 'object' || Array.isArray(spec.env))) e('spec.mustBeObject', { field: 'env' });
 }
 
 function createCliAdapter(spec: any): Adapter {
@@ -52,7 +54,9 @@ function createCliAdapter(spec: any): Adapter {
     usageShape: spec.usageShape || null, // 沒填就交給 usage.js 依欄位特徵判斷
     capabilities: normalizeCapabilities(spec.capabilities, ['filePath']),
     listModels: () => ({ models, source: models.length ? 'config' : 'none' }),
-    check: () => (spec.versionArgs === false ? Promise.resolve({ ok: true, version: '(略過檢查)' }) : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'])),
+    check: (opts) => (spec.versionArgs === false
+      ? Promise.resolve({ ok: true, version: tx(opts?.locale || 'zh-Hant', 'proc.checkSkipped') })
+      : checkCli(spec.bin, spec.versionArgs === null ? null : spec.versionArgs || ['--version'], opts?.locale)),
     run: (agent, ctx) => runCli(spec, { format, rules, models }, agent, ctx),
   };
 }
@@ -109,6 +113,7 @@ async function runCli(spec: any, { format, rules, models }: any, agent: AgentCon
       env,
       shell: !!spec.shell,
       timeoutMs: spec.timeoutMs || ctx.timeoutMs,
+      locale: ctx.locale,
     }, {
       onProc: ctx.onProc,
       onStderr: (d: any) => { if (out.sessionIdPattern) stdout += d; },
@@ -131,7 +136,7 @@ async function runCli(spec: any, { format, rules, models }: any, agent: AgentCon
   if (format === 'json') {
     const data = parseJson(stdout.trim());
     if (data && typeof data === 'object') (Array.isArray(data) ? data : [data]).forEach(applyEvent);
-    else if (stdout.trim()) state.error = state.error || `無法解析 JSON 輸出:${truncate(stdout, 500)}`;
+    else if (stdout.trim()) state.error = state.error || tx(ctx.locale || 'zh-Hant', 'cli.unparsableJson', { detail: truncate(stdout, 500) });
   }
 
   if (out.sessionIdPattern && !state.sessionId) {
@@ -141,9 +146,10 @@ async function runCli(spec: any, { format, rules, models }: any, agent: AgentCon
 
   const okCodes = spec.successExitCodes || [0];
   let error = state.error;
-  if (res.spawnError) error = `無法啟動 ${spec.bin}:${truncate(res.stderr, 1000)}`;
-  else if (res.timedOut) error = res.error || `${spec.bin} 執行逾時`;
-  else if (!okCodes.includes(res.code) && !state.text) error = error || `${spec.bin} 結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;
+  const l = ctx.locale || 'zh-Hant';
+  if (res.spawnError) error = tx(l, 'cli.spawnFailed', { bin: spec.bin, detail: truncate(res.stderr, 1000) });
+  else if (res.timedOut) error = res.error || tx(l, 'cli.timedOut', { bin: spec.bin });
+  else if (!okCodes.includes(res.code) && !state.text) error = error || `${tx(l, 'cli.exitCode', { bin: spec.bin, code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
   return { text: state.text, thinking: state.thinking, sessionId: state.sessionId, usage: state.usage, error };
 }
 

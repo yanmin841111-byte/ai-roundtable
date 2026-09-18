@@ -10,7 +10,7 @@ import { canonicalModelId, createOpenAIAdapter, discoverOllama, validateOpenAISp
 import { kit } from './kit';
 import type { Adapter, ModelList, RegisteredAdapter } from './types';
 import type { CliHealth, CliStatus } from '../ipc-types';
-import type { TextLocale } from '../text';
+import { tx, type TextLocale } from '../text';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -58,7 +58,7 @@ class Registry {
         entry.label = adapter.label;
         entry.type = adapter.type;
         entry.description = adapter.description || '';
-        if (seen.has(adapter.id)) throw new Error(`id「${adapter.id}」與 ${seen.get(adapter.id)} 重複`);
+        if (seen.has(adapter.id)) throw new Error(tx(this.getLocale(), 'ext.duplicateId', { id: adapter.id, file: seen.get(adapter.id) }));
         seen.set(adapter.id, file);
         const builtin = this.adapters.get(adapter.id);
         if (builtin && builtin.origin === 'builtin') entry.overrides = true;
@@ -76,20 +76,20 @@ class Registry {
     let adapter: Adapter;
     if (full.endsWith('.json')) {
       let spec: any;
-      try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (e: any) { throw new Error(`JSON 格式錯誤:${e.message}`); }
-      validateCommon(spec, errors);
+      try { spec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (e: any) { throw new Error(tx(this.getLocale(), 'ext.badJson', { error: e.message })); }
+      validateCommon(spec, errors, this.getLocale());
       const type = spec && spec.type;
-      if (type === 'cli') validateCliSpec(spec, errors);
-      else if (type === 'openai') validateOpenAISpec(spec, errors);
-      else errors.push('type 必須是 "cli" 或 "openai"(需要更多彈性時請改寫成 .js 外掛)');
+      if (type === 'cli') validateCliSpec(spec, errors, this.getLocale());
+      else if (type === 'openai') validateOpenAISpec(spec, errors, this.getLocale());
+      else errors.push(tx(this.getLocale(), 'ext.badType'));
       if (errors.length) throw new Error(errors.join(';'));
       adapter = type === 'cli' ? createCliAdapter(spec) : createOpenAIAdapter(spec, { fetchImpl: this.fetchImpl, getSecret: this.getSecret, getLocale: this.getLocale });
     } else {
       delete require.cache[require.resolve(full)];
       let mod = require(full);
       if (typeof mod === 'function') mod = mod(kit);
-      validateCommon(mod, errors);
-      if (!mod || typeof mod.run !== 'function') errors.push('必須匯出 run(agent, ctx, kit) 函式');
+      validateCommon(mod, errors, this.getLocale());
+      if (!mod || typeof mod.run !== 'function') errors.push(tx(this.getLocale(), 'ext.noRun'));
       if (errors.length) throw new Error(errors.join(';'));
       const staticModels = normalizeModels(mod.models);
       adapter = {
@@ -111,7 +111,7 @@ class Registry {
           return { models: staticModels, source: staticModels.length ? 'config' : 'none' };
         },
         refreshModels: typeof mod.refreshModels === 'function' ? () => mod.refreshModels(kit) : undefined,
-        check: typeof mod.check === 'function' ? () => mod.check(kit) : mod.bin ? () => kit.checkCli(mod.bin) : undefined,
+        check: typeof mod.check === 'function' ? () => mod.check(kit) : mod.bin ? (opts?: { locale?: TextLocale }) => kit.checkCli(mod.bin, undefined, opts?.locale) : undefined,
         run: (agent: any, ctx: any) => mod.run(agent, ctx, kit),
       };
     }
@@ -170,10 +170,12 @@ class Registry {
       // 免 credential 的 OpenAI HTTP adapter 每次都探測（典型是 Ollama，本機且免費）。
       const probe = (a as RegisteredAdapter & { probeConnectionOnCheck?: boolean }).probeConnectionOnCheck;
       const shouldProbe = a.type === 'openai' && a.testConnection && (probe || probeCredentialed);
-      const checker = shouldProbe ? a.testConnection : a.check;
-      if (!checker) return [a.id, null];
+      if (!(shouldProbe ? a.testConnection : a.check)) return [a.id, null];
       let status: CliStatus;
-      try { status = await checker(); } catch (e: any) { status = { ok: false, error: e.message }; }
+      try {
+        // testConnection 由 adapter 自己透過 getLocale 取語言;check 沒有 ctx,這裡把語言帶進去
+        status = shouldProbe ? await a.testConnection!() : await a.check!({ locale: this.getLocale() });
+      } catch (e: any) { status = { ok: false, error: e.message }; }
       const normalized: CliHealth = {
         ...status,
         // CLI 維持原本的 ready / missing；需要金鑰的 API 缺 key 時維持 unauthenticated。
@@ -188,19 +190,19 @@ class Registry {
   // 一鍵連接 Ollama：不帶 model 時只偵測並列出模型；帶 model 時套用內建範本並完成儲存。
   // 主程序只需把這一支方法透過 IPC 暴露給 renderer，不必讓介面理解 baseUrl / API key / JSON。
   async quickSetupOllama({ model }: { model?: string } = {}) {
-    if (!this.userDir) throw new Error('找不到擴充設定目錄');
-    if (!this.templatesDir) throw new Error('找不到內建 Ollama 範本目錄');
+    if (!this.userDir) throw new Error(tx(this.getLocale(), 'ext.noUserDir'));
+    if (!this.templatesDir) throw new Error(tx(this.getLocale(), 'ext.noTemplateDir'));
     const templateFile = 'ollama-api.json';
     const templatePath = path.join(this.templatesDir, templateFile);
     let template: any;
     try { template = JSON.parse(fs.readFileSync(templatePath, 'utf8')); }
-    catch (e: any) { throw new Error(`無法讀取 Ollama 範本:${e.message}`); }
+    catch (e: any) { throw new Error(tx(this.getLocale(), 'ext.ollamaTemplateUnreadable', { error: e.message })); }
 
     const existing = this.entries.find((entry: any) => entry.id === 'ollama' && !entry.error && entry.file?.endsWith('.json'));
     let existingSpec: any = {};
     if (existing) {
       try { existingSpec = JSON.parse(fs.readFileSync(this.safeUserPath(existing.file), 'utf8')); }
-      catch (e: any) { throw new Error(`無法讀取現有 Ollama 設定:${e.message}`); }
+      catch (e: any) { throw new Error(tx(this.getLocale(), 'ext.ollamaConfigUnreadable', { error: e.message })); }
     }
 
     // 模型必須從實際要寫回的同一個端點取得；否則自訂 port / 遠端 Ollama 會拿到
@@ -217,7 +219,7 @@ class Registry {
     if (!model) return { ...discovery, installed: false, recommendedModel };
 
     const selectedModel = canonicalModelId(discovery.models, model);
-    if (!selectedModel) throw new Error(`Ollama 找不到模型「${model}」，請先下載後再試一次`);
+    if (!selectedModel) throw new Error(tx(this.getLocale(), 'ext.ollamaModelMissing', { model }));
 
     let file = existing?.file || templateFile;
     if (!existing) {
@@ -272,12 +274,12 @@ class Registry {
   }
 
   safeUserPath(file: any) {
-    if (!FILE_PATTERN.test(file || '')) throw new Error('檔名只能包含英數字、. _ -,並以 .json 或 .js 結尾');
+    if (!FILE_PATTERN.test(file || '')) throw new Error(tx(this.getLocale(), 'ext.badFileName'));
     return path.join(this.userDir, file);
   }
 
   installTemplate(templateFile: any) {
-    if (!FILE_PATTERN.test(templateFile || '')) throw new Error('範本名稱不正確');
+    if (!FILE_PATTERN.test(templateFile || '')) throw new Error(tx(this.getLocale(), 'ext.badTemplate'));
     const src = path.join(this.templatesDir, templateFile);
     const ext = path.extname(templateFile);
     const base = path.basename(templateFile, ext);
@@ -313,14 +315,14 @@ class Registry {
     const ref = spec.secretRef || `adapter:${spec.id}`;
     try {
       if (legacyKey) {
-        if (typeof this.setSecret !== 'function') throw new Error('系統安全儲存目前不可用');
+        if (typeof this.setSecret !== 'function') throw new Error(tx(this.getLocale(), 'ext.noKeychain'));
         this.setSecret(ref, legacyKey);
         spec.secretRef = ref;
       }
       delete spec.apiKey;
       fs.writeFileSync(full, JSON.stringify(spec, null, 2) + '\n');
     } catch (e: any) {
-      return { migrated: false, error: `偵測到舊版明文 API key，但${e.message}。請設定環境變數後移除檔案中的 apiKey` };
+      return { migrated: false, error: tx(this.getLocale(), 'ext.legacyKeyFailed', { error: e.message }) };
     }
     return { migrated: !!legacyKey };
   }
@@ -328,9 +330,9 @@ class Registry {
   writeFile(file: any, content: any, { originalFile }: any = {}) {
     const full = this.safeUserPath(file);
     if (file.endsWith('.json')) {
-      try { JSON.parse(content); } catch (e: any) { throw new Error(`JSON 格式錯誤,尚未儲存:${e.message}`); }
+      try { JSON.parse(content); } catch (e: any) { throw new Error(tx(this.getLocale(), 'ext.badJsonUnsaved', { error: e.message })); }
     }
-    if (originalFile && originalFile !== file && fs.existsSync(full)) throw new Error(`已經有名為 ${file} 的擴充`);
+    if (originalFile && originalFile !== file && fs.existsSync(full)) throw new Error(tx(this.getLocale(), 'ext.exists', { file }));
     fs.mkdirSync(this.userDir, { recursive: true });
     fs.writeFileSync(full, content);
     if (originalFile && originalFile !== file) fs.rmSync(this.safeUserPath(originalFile), { force: true });

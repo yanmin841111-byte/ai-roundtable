@@ -6,6 +6,14 @@ const ATTACHMENT_CAPABILITIES = ['filePath', 'imageInline', 'textInline'];
 
 import type { Model } from '../model-rules';
 import type { AdapterCapabilities } from './types';
+import { tx, type TextLocale } from '../text';
+
+// 「a、b、c 或 d」/「a, b, c or d」。or=false 時只是並列(「只接受 a、b、c」)。
+function listOf(values: readonly string[], locale: TextLocale, or = true): string {
+  const sep = tx(locale, 'spec.listSep');
+  if (!or || values.length < 2) return values.join(sep);
+  return values.slice(0, -1).join(sep) + tx(locale, 'spec.or') + values[values.length - 1];
+}
 
 // 模型清單可寫成字串陣列或物件陣列,統一成 model-rules 使用的格式。
 function normalizeModels(list: unknown): Model[] {
@@ -28,25 +36,26 @@ function normalizeModels(list: unknown): Model[] {
     });
 }
 
-function validateCommon(spec: any, errors: any) {
-  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) { errors.push('內容必須是物件'); return; }
-  if (typeof spec.id !== 'string' || !ID_PATTERN.test(spec.id)) errors.push('id 必須是 1–64 個英數字,可含 . _ -,且以英數字開頭');
-  if (spec.label != null && typeof spec.label !== 'string') errors.push('label 必須是字串');
-  if (spec.models != null && spec.models !== 'auto' && !Array.isArray(spec.models)) errors.push('models 必須是陣列或 "auto"');
-  if (spec.efforts != null && !Array.isArray(spec.efforts)) errors.push('efforts 必須是陣列');
-  if (spec.timeoutMs != null && !(Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0)) errors.push('timeoutMs 必須是正數');
-  if (spec.usageShape != null && !USAGE_SHAPES.includes(spec.usageShape)) errors.push(`usageShape 必須是 ${USAGE_SHAPES.join('、')};不填則依欄位特徵自動判斷`);
+function validateCommon(spec: any, errors: any, locale: TextLocale = 'zh-Hant') {
+  const e = (key: string, params: Record<string, string> = {}) => errors.push(tx(locale, key, params));
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) { e('spec.contentObject'); return; }
+  if (typeof spec.id !== 'string' || !ID_PATTERN.test(spec.id)) e('spec.badId');
+  if (spec.label != null && typeof spec.label !== 'string') e('spec.mustBeString', { field: 'label' });
+  if (spec.models != null && spec.models !== 'auto' && !Array.isArray(spec.models)) e('spec.modelsShape');
+  if (spec.efforts != null && !Array.isArray(spec.efforts)) e('spec.mustBeArray', { field: 'efforts' });
+  if (spec.timeoutMs != null && !(Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0)) e('spec.mustBePositive', { field: 'timeoutMs' });
+  if (spec.usageShape != null && !USAGE_SHAPES.includes(spec.usageShape)) e('spec.usageShape', { list: listOf(USAGE_SHAPES, locale) });
   if (spec.capabilities != null) {
     const caps = spec.capabilities;
-    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) errors.push('capabilities 必須是物件');
+    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) e('spec.mustBeObject', { field: 'capabilities' });
     else {
-      if (!Array.isArray(caps.attachments)) errors.push('capabilities.attachments 必須是陣列');
+      if (!Array.isArray(caps.attachments)) e('spec.mustBeArray', { field: 'capabilities.attachments' });
       else {
         const invalid = caps.attachments.filter((value: any) => !ATTACHMENT_CAPABILITIES.includes(value));
-        if (invalid.length) errors.push(`capabilities.attachments 只接受 ${ATTACHMENT_CAPABILITIES.join('、')}`);
-        if (new Set(caps.attachments).size !== caps.attachments.length) errors.push('capabilities.attachments 不可重複');
+        if (invalid.length) e('spec.onlyAccepts', { field: 'capabilities.attachments', list: listOf(ATTACHMENT_CAPABILITIES, locale, false) });
+        if (new Set(caps.attachments).size !== caps.attachments.length) e('spec.noDuplicates', { field: 'capabilities.attachments' });
       }
-      if (caps.attachmentsNeedCwd != null && typeof caps.attachmentsNeedCwd !== 'boolean') errors.push('capabilities.attachmentsNeedCwd 必須是布林值');
+      if (caps.attachmentsNeedCwd != null && typeof caps.attachmentsNeedCwd !== 'boolean') e('spec.mustBeBoolean', { field: 'capabilities.attachmentsNeedCwd' });
     }
   }
 }
@@ -59,4 +68,4 @@ function normalizeCapabilities(capabilities: any, fallback: string[] = []): Adap
   };
 }
 
-export { ID_PATTERN, ATTACHMENT_CAPABILITIES, normalizeModels, normalizeCapabilities, validateCommon };
+export { ID_PATTERN, ATTACHMENT_CAPABILITIES, normalizeModels, normalizeCapabilities, validateCommon, listOf };

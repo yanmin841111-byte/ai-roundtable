@@ -6,6 +6,10 @@ import { listModels, resolveRunOptions } from '../models';
 import { createCursorAdapter } from './cursor';
 import type { AgentConfig } from '../ipc-types';
 import type { Adapter, RunContext, RunResult } from './types';
+import { tx, type TextLocale } from '../text';
+
+// 錯誤訊息與工具動作標題會顯示在對話泡泡裡,跟著介面語言。
+const loc = (ctx: RunContext): TextLocale => ctx.locale || 'zh-Hant';
 
 // 強度被調整或略過時,在對話泡泡裡留一筆紀錄,讓使用者知道實際送出的設定。
 function reportRunNote(ctx: RunContext, run: { note?: string | null }) {
@@ -32,7 +36,7 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
   let errorMsg: any = null;
   const toolNames: Record<string, any> = {};
 
-  const res = await runProcess('claude', args, { cwd: ctx.cwd, stdin: ctx.prompt, timeoutMs: ctx.timeoutMs }, {
+  const res = await runProcess('claude', args, { cwd: ctx.cwd, stdin: ctx.prompt, timeoutMs: ctx.timeoutMs, locale: loc(ctx) }, {
     onProc: ctx.onProc,
     onLine: (line: any) => {
       const ev = parseJson(line);
@@ -57,7 +61,7 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
         for (const block of ev.message.content) {
           if (block.type === 'tool_use') {
             toolNames[block.id] = block.name;
-            ctx.onActivity({ id: block.id, kind: 'tool', title: describeClaudeTool(block), detail: truncate(JSON.stringify(block.input, null, 1), 1500), status: 'running' });
+            ctx.onActivity({ id: block.id, kind: 'tool', title: describeClaudeTool(block, loc(ctx)), detail: truncate(JSON.stringify(block.input, null, 1), 1500), status: 'running' });
           }
         }
         return;
@@ -73,29 +77,29 @@ async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult
       }
       if (ev.type === 'result') {
         usage = { total_cost_usd: ev.total_cost_usd, ...(ev.usage || {}) };
-        if (ev.is_error) errorMsg = ev.result || ev.error || '執行失敗';
+        if (ev.is_error) errorMsg = ev.result || ev.error || tx(loc(ctx), 'cli.failed', { name: 'Claude' });
         else if (typeof ev.result === 'string') resultText = ev.result;
       }
     },
   });
 
   if (!text && resultText) { text = resultText; ctx.onText(text); }
-  if (res.spawnError) errorMsg = `無法啟動 claude:${res.stderr}`;
-  else if (res.timedOut) errorMsg = res.error || `claude 執行逾時\n${truncate(res.stderr, 2000)}`;
-  else if (res.code !== 0 && !text) errorMsg = errorMsg || `claude 結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;
+  if (res.spawnError) errorMsg = tx(loc(ctx), 'cli.spawnFailed', { bin: 'claude', detail: res.stderr });
+  else if (res.timedOut) errorMsg = res.error || `${tx(loc(ctx), 'cli.timedOut', { bin: 'claude' })}\n${truncate(res.stderr, 2000)}`;
+  else if (res.code !== 0 && !text) errorMsg = errorMsg || `${tx(loc(ctx), 'cli.exitCode', { bin: 'claude', code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
   return { text, thinking, sessionId, usage, error: errorMsg };
 }
 
-function describeClaudeTool(block: any) {
+function describeClaudeTool(block: any, locale: TextLocale) {
   const i = block.input || {};
   switch (block.name) {
-    case 'Bash': return `執行指令:${truncate(i.command, 120)}`;
-    case 'Read': return `讀取檔案:${i.file_path || ''}`;
-    case 'Edit': return `編輯檔案:${i.file_path || ''}`;
-    case 'Write': return `寫入檔案:${i.file_path || ''}`;
-    case 'Glob': return `搜尋檔名:${i.pattern || ''}`;
-    case 'Grep': return `搜尋內容:${i.pattern || ''}`;
-    default: return `工具:${block.name}`;
+    case 'Bash': return tx(locale, 'act.run', { detail: truncate(i.command, 120) });
+    case 'Read': return tx(locale, 'act.read', { detail: i.file_path || '' });
+    case 'Edit': return tx(locale, 'act.edit', { detail: i.file_path || '' });
+    case 'Write': return tx(locale, 'act.write', { detail: i.file_path || '' });
+    case 'Glob': return tx(locale, 'act.glob', { detail: i.pattern || '' });
+    case 'Grep': return tx(locale, 'act.grep', { detail: i.pattern || '' });
+    default: return tx(locale, 'act.tool', { detail: block.name });
   }
 }
 
@@ -127,7 +131,7 @@ async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult>
   const renderText = () => [...items.values()].filter((it: any) => it.type === 'agent_message').sort((a: any, b: any) => a._o - b._o).map((it: any) => it.text || '').join('\n\n');
   const renderThinking = () => [...items.values()].filter((it: any) => it.type === 'reasoning').sort((a: any, b: any) => a._o - b._o).map((it: any) => it.text || '').join('\n\n');
 
-  const res = await runProcess('codex', args, { cwd: ctx.cwd, stdin: prompt, timeoutMs: ctx.timeoutMs }, {
+  const res = await runProcess('codex', args, { cwd: ctx.cwd, stdin: prompt, timeoutMs: ctx.timeoutMs, locale: loc(ctx) }, {
     onProc: ctx.onProc,
     onLine: (line: any) => {
       const ev = parseJson(line);
@@ -146,27 +150,27 @@ async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult>
         if (it.type === 'agent_message') ctx.onText(renderText());
         else if (it.type === 'reasoning') ctx.onThinking(renderThinking());
         else if (it.type === 'command_execution') {
-          ctx.onActivity({ id: it.id, kind: 'tool', title: `執行指令:${truncate(it.command, 120)}`, detail: it.command, status: ev.type === 'item.completed' ? (it.exit_code === 0 || it.exit_code == null ? 'done' : 'error') : 'running', result: truncate(it.aggregated_output, 1500) });
+          ctx.onActivity({ id: it.id, kind: 'tool', title: tx(loc(ctx), 'act.run', { detail: truncate(it.command, 120) }), detail: it.command, status: ev.type === 'item.completed' ? (it.exit_code === 0 || it.exit_code == null ? 'done' : 'error') : 'running', result: truncate(it.aggregated_output, 1500) });
         } else if (it.type === 'file_change') {
           const files = (it.changes || []).map((c: any) => `${c.kind || ''} ${c.path || ''}`).join('\n');
-          ctx.onActivity({ id: it.id, kind: 'tool', title: `修改檔案(${(it.changes || []).length})`, detail: files, status: ev.type === 'item.completed' ? 'done' : 'running' });
+          ctx.onActivity({ id: it.id, kind: 'tool', title: tx(loc(ctx), 'act.changes', { n: (it.changes || []).length }), detail: files, status: ev.type === 'item.completed' ? 'done' : 'running' });
         } else if (it.type === 'mcp_tool_call' || it.type === 'web_search') {
-          ctx.onActivity({ id: it.id, kind: 'tool', title: it.type === 'web_search' ? `搜尋網路:${truncate(it.query, 100)}` : `工具:${it.server || ''}/${it.tool || ''}`, detail: truncate(JSON.stringify(it.arguments || it, null, 1), 1200), status: ev.type === 'item.completed' ? 'done' : 'running' });
+          ctx.onActivity({ id: it.id, kind: 'tool', title: it.type === 'web_search' ? tx(loc(ctx), 'act.webSearch', { detail: truncate(it.query, 100) }) : tx(loc(ctx), 'act.tool', { detail: `${it.server || ''}/${it.tool || ''}` }), detail: truncate(JSON.stringify(it.arguments || it, null, 1), 1200), status: ev.type === 'item.completed' ? 'done' : 'running' });
         } else if (it.type === 'error') {
-          errorMsg = it.message || 'Codex 回報錯誤';
+          errorMsg = it.message || tx(loc(ctx), 'cli.reportedError', { name: 'Codex' });
         }
         return;
       }
       if (ev.type === 'turn.completed') usage = ev.usage || null;
-      if (ev.type === 'turn.failed') errorMsg = (ev.error && ev.error.message) || 'Codex 回合失敗';
-      if (ev.type === 'error') errorMsg = ev.message || 'Codex 錯誤';
+      if (ev.type === 'turn.failed') errorMsg = (ev.error && ev.error.message) || tx(loc(ctx), 'cli.turnFailed', { name: 'Codex' });
+      if (ev.type === 'error') errorMsg = ev.message || tx(loc(ctx), 'cli.reportedError', { name: 'Codex' });
     },
   });
 
   const text = renderText();
-  if (res.spawnError) errorMsg = `無法啟動 codex:${res.stderr}`;
-  else if (res.timedOut) errorMsg = res.error || `codex 執行逾時\n${truncate(res.stderr, 2000)}`;
-  else if (res.code !== 0 && !text) errorMsg = errorMsg || `codex 結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;
+  if (res.spawnError) errorMsg = tx(loc(ctx), 'cli.spawnFailed', { bin: 'codex', detail: res.stderr });
+  else if (res.timedOut) errorMsg = res.error || `${tx(loc(ctx), 'cli.timedOut', { bin: 'codex' })}\n${truncate(res.stderr, 2000)}`;
+  else if (res.code !== 0 && !text) errorMsg = errorMsg || `${tx(loc(ctx), 'cli.exitCode', { bin: 'codex', code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
   return { text, thinking: renderThinking(), sessionId, usage, error: errorMsg };
 }
 
@@ -174,18 +178,19 @@ async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult>
 // 指令範本可用 {model}、{effort} 佔位;提示詞從 stdin 送入,stdout 視為純文字回覆。
 async function runCustom(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
   const cmd = (agent.customCommand || '').replace(/\{model\}/g, agent.model || '').replace(/\{effort\}/g, agent.effort || '');
-  if (!cmd.trim()) return { text: '', sessionId: null, usage: null, error: '尚未設定自訂指令' };
+  if (!cmd.trim()) return { text: '', sessionId: null, usage: null, error: tx(loc(ctx), 'cli.customNotSet') };
   let prompt = ctx.prompt;
   if (ctx.systemPrompt) prompt = `${ctx.systemPrompt}\n\n---\n\n${prompt}`;
   let text = '';
-  const res = await runProcess(cmd, [], { cwd: ctx.cwd, stdin: prompt, shell: true, timeoutMs: ctx.timeoutMs }, {
+  const res = await runProcess(cmd, [], { cwd: ctx.cwd, stdin: prompt, shell: true, timeoutMs: ctx.timeoutMs, locale: loc(ctx) }, {
     onProc: ctx.onProc,
     onLine: (line: any) => { text += (text ? '\n' : '') + line; ctx.onText(text); },
   });
   let errorMsg: any = null;
-  if (res.spawnError) errorMsg = `無法啟動指令:${res.stderr}`;
-  else if (res.timedOut) errorMsg = res.error || `自訂指令執行逾時\n${truncate(res.stderr, 2000)}`;
-  else if (res.code !== 0 && !text) errorMsg = `指令結束代碼 ${res.code}\n${truncate(res.stderr, 2000)}`;
+  const what = tx(loc(ctx), 'cli.customCommand');
+  if (res.spawnError) errorMsg = tx(loc(ctx), 'cli.spawnFailed', { bin: what, detail: res.stderr });
+  else if (res.timedOut) errorMsg = res.error || `${tx(loc(ctx), 'cli.timedOut', { bin: what })}\n${truncate(res.stderr, 2000)}`;
+  else if (res.code !== 0 && !text) errorMsg = `${tx(loc(ctx), 'cli.exitCode', { bin: what, code: String(res.code) })}\n${truncate(res.stderr, 2000)}`;
   return { text, thinking: '', sessionId: null, usage: null, error: errorMsg };
 }
 
@@ -204,7 +209,7 @@ const builtinAdapters: Adapter[] = [
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: true },
     efforts: CLAUDE_EFFORTS,
     listModels: () => listModels('claude'),
-    check: () => checkCli('claude'),
+    check: (opts) => checkCli('claude', undefined, opts?.locale),
     usageShape: 'anthropic',
     run: runClaude,
   },
@@ -218,7 +223,7 @@ const builtinAdapters: Adapter[] = [
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
     efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     listModels: () => listModels('codex'),
-    check: () => checkCli('codex'),
+    check: (opts) => checkCli('codex', undefined, opts?.locale),
     usageShape: 'codex',
     run: runCodex,
   },

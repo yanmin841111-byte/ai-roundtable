@@ -69,13 +69,13 @@ const ALLOWED_EXTS = Object.keys(TYPES);
 
 // 副檔名說是文字、內容卻是這些格式時要擋下來:最後拿到路徑的是有 canEdit 權限的 CLI
 const BINARY_SIGNATURES = [
-  { name: 'ELF 執行檔', bytes: [0x7f, 0x45, 0x4c, 0x46] },
-  { name: 'Mach-O 執行檔', bytes: [0xcf, 0xfa, 0xed, 0xfe] },
-  { name: 'Mach-O 執行檔', bytes: [0xce, 0xfa, 0xed, 0xfe] },
-  { name: 'Mach-O 通用二進位', bytes: [0xca, 0xfe, 0xba, 0xbe] },
-  { name: 'Windows 執行檔', bytes: [0x4d, 0x5a] },
-  { name: 'ZIP / Office 壓縮檔', bytes: [0x50, 0x4b, 0x03, 0x04] },
-  { name: 'gzip 壓縮檔', bytes: [0x1f, 0x8b] },
+  { name: 'bin.elf', bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  { name: 'bin.macho', bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+  { name: 'bin.macho', bytes: [0xce, 0xfa, 0xed, 0xfe] },
+  { name: 'bin.machoFat', bytes: [0xca, 0xfe, 0xba, 0xbe] },
+  { name: 'bin.windows', bytes: [0x4d, 0x5a] },
+  { name: 'bin.zip', bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { name: 'bin.gzip', bytes: [0x1f, 0x8b] },
 ];
 
 // ---------- 錯誤 ----------
@@ -166,20 +166,20 @@ function isValidUtf8(buf: Buffer) {
 }
 
 // 回傳 null 代表通過;回傳字串是要顯示給使用者的拒絕原因
-function verifyContent(buf: Buffer, ext: string, type: FileType) {
+function verifyContent(buf: Buffer, ext: string, type: FileType, locale: TextLocale = 'zh-Hant') {
   const head = buf.subarray(0, Math.min(buf.length, SNIFF_BYTES));
   if (type.magic) {
-    if (!matchesMagic(head, type.magic)) return `內容不是 ${ext.slice(1).toUpperCase()} 格式(副檔名與實際內容不符)`;
+    if (!matchesMagic(head, type.magic)) return tx(locale, 'attachErr.notFormat', { fmt: ext.slice(1).toUpperCase() });
     return null;
   }
   // 文字檔:先擋掉偽裝成 .txt / .md 的二進位檔
   for (const sig of BINARY_SIGNATURES) {
-    if (startsWith(head, sig.bytes)) return `內容看起來是${sig.name},不是文字檔`;
+    if (startsWith(head, sig.bytes)) return tx(locale, 'attachErr.looksLike', { kind: tx(locale, sig.name) });
   }
-  if (head.includes(0x00)) return '文字檔不可包含 NUL 位元組(內容看起來是二進位檔)';
-  if (!isValidUtf8(buf)) return '文字檔必須是有效的 UTF-8 編碼';
+  if (head.includes(0x00)) return tx(locale, 'attachErr.nul');
+  if (!isValidUtf8(buf)) return tx(locale, 'attachErr.utf8');
   if (ext === '.json') {
-    try { JSON.parse(buf.toString('utf8').replace(/^\uFEFF/, '')); } catch { return '內容不是有效的 JSON 格式(副檔名與實際內容不符)'; }
+    try { JSON.parse(buf.toString('utf8').replace(/^\uFEFF/, '')); } catch { return tx(locale, 'attachErr.json'); }
   }
   return null;
 }
@@ -214,28 +214,28 @@ function writeThumb(dir: string, id: string, absPath: string, kind: string) {
 }
 
 // ---------- 新增 ----------
-function readSource(item: AttachmentSource | null | undefined): Buffer {
+function readSource(item: AttachmentSource | null | undefined, locale: TextLocale = 'zh-Hant'): Buffer {
   if (item && item.data != null) {
     const data = item.data;
     const size = Buffer.isBuffer(data) || data instanceof Uint8Array || data instanceof ArrayBuffer ? data.byteLength : 0;
-    if (size > LIMITS.maxFileBytes) throw new Error(`超過單檔上限 ${formatBytes(LIMITS.maxFileBytes)}(這個檔 ${formatBytes(size)})`);
+    if (size > LIMITS.maxFileBytes) throw new Error(tx(locale, 'attachErr.tooBig', { limit: formatBytes(LIMITS.maxFileBytes, locale), size: formatBytes(size, locale) }));
     if (Buffer.isBuffer(data)) return data;
     if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     if (data instanceof ArrayBuffer) return Buffer.from(data);
-    throw new Error('附件內容格式無法辨識');
+    throw new Error(tx(locale, 'attachErr.unrecognized'));
   }
   if (item && typeof item.path === 'string' && item.path) {
     const stat = fs.statSync(item.path);
-    if (!stat.isFile()) throw new Error('不是一般檔案');
+    if (!stat.isFile()) throw new Error(tx(locale, 'attachErr.notFile'));
     // 先看 stat 再讀檔:20 MB 的上限不該靠「先整個讀進記憶體」才發現
-    if (stat.size > LIMITS.maxFileBytes) throw new Error(`超過單檔上限 ${formatBytes(LIMITS.maxFileBytes)}(這個檔 ${formatBytes(stat.size)})`);
+    if (stat.size > LIMITS.maxFileBytes) throw new Error(tx(locale, 'attachErr.tooBig', { limit: formatBytes(LIMITS.maxFileBytes, locale), size: formatBytes(stat.size, locale) }));
     return fs.readFileSync(item.path);
   }
-  throw new Error('缺少檔案內容或路徑');
+  throw new Error(tx(locale, 'attachErr.noSource'));
 }
 
-function formatBytes(n: number) {
-  if (!Number.isFinite(n)) return '未知大小';
+function formatBytes(n: number, locale: TextLocale = 'zh-Hant') {
+  if (!Number.isFinite(n)) return tx(locale, 'attachErr.unknownSize');
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -247,10 +247,10 @@ function addAttachments(
   userDataDir: string,
   conversationId: string,
   items: unknown,
-  { existingCount = 0, existingBytes = 0 }: { existingCount?: number; existingBytes?: number } = {},
+  { existingCount = 0, existingBytes = 0, locale = 'zh-Hant' }: { existingCount?: number; existingBytes?: number; locale?: TextLocale } = {},
 ): { added: AttachmentMeta[]; errors: Array<{ name: string; error: string }> } {
   const dir = conversationDir(userDataDir, conversationId);
-  if (!dir) return { added: [], errors: [{ name: '', error: '無效的對話代號' }] };
+  if (!dir) return { added: [], errors: [{ name: '', error: tx(locale, 'attachErr.badConversation') }] };
   const list: Array<AttachmentSource | null> = Array.isArray(items) ? items : [];
   const added: AttachmentMeta[] = [];
   const errors: Array<{ name: string; error: string }> = [];
@@ -260,26 +260,26 @@ function addAttachments(
   for (const item of list) {
     const name = sanitizeOriginalName((item && item.name) || (item && item.path && path.basename(item.path)) || '未命名檔案');
     try {
-      if (count >= LIMITS.maxFiles) throw new Error(`一次最多 ${LIMITS.maxFiles} 個檔案`);
+      if (count >= LIMITS.maxFiles) throw new Error(tx(locale, 'attachErr.tooMany', { n: LIMITS.maxFiles }));
       const ext = path.extname(name).toLowerCase();
       const type = TYPES[ext];
-      if (!type) throw new Error(`不支援的檔案類型「${ext || '無副檔名'}」,目前只收 ${ALLOWED_EXTS.join('、')}`);
+      if (!type) throw new Error(tx(locale, 'attachErr.unsupported', { ext: ext || tx(locale, 'attachErr.noExt'), list: ALLOWED_EXTS.join(tx(locale, 'attachErr.listSep')) }));
 
-      const buf = readSource(item);
-      if (buf.length === 0) throw new Error('檔案是空的');
-      if (buf.length > LIMITS.maxFileBytes) throw new Error(`超過單檔上限 ${formatBytes(LIMITS.maxFileBytes)}(這個檔 ${formatBytes(buf.length)})`);
-      if (total + buf.length > LIMITS.maxTotalBytes) throw new Error(`超過單次合計上限 ${formatBytes(LIMITS.maxTotalBytes)}`);
+      const buf = readSource(item, locale);
+      if (buf.length === 0) throw new Error(tx(locale, 'attachErr.empty'));
+      if (buf.length > LIMITS.maxFileBytes) throw new Error(tx(locale, 'attachErr.tooBig', { limit: formatBytes(LIMITS.maxFileBytes, locale), size: formatBytes(buf.length, locale) }));
+      if (total + buf.length > LIMITS.maxTotalBytes) throw new Error(tx(locale, 'attachErr.totalTooBig', { limit: formatBytes(LIMITS.maxTotalBytes, locale) }));
 
-      const bad = verifyContent(buf, ext, type);
+      const bad = verifyContent(buf, ext, type, locale);
       if (bad) throw new Error(bad);
 
       const id = crypto.randomUUID();
       const file = storedName(id, name, ext);
       const abs = resolveInDir(dir, file);
-      if (!abs) throw new Error('無法產生安全的儲存檔名');
+      if (!abs) throw new Error(tx(locale, 'attachErr.unsafeName'));
       ensureManagedDir(attachmentsRoot(userDataDir));
       ensureManagedDir(dir);
-      if (lstat(abs)) throw new Error('附件儲存路徑已存在');
+      if (lstat(abs)) throw new Error(tx(locale, 'attachErr.exists'));
       fs.writeFileSync(abs, buf);
 
       const meta: AttachmentMeta = {

@@ -512,7 +512,8 @@ function renderHistoryList() {
     main.className = 'history-open';
     const title = document.createElement('span');
     title.className = 'history-title';
-    title.textContent = session.title || t('history.untitled');
+    // 讀不到的紀錄沒有標題;要說「無法讀取」而不是「未命名」,兩者意思完全不同
+    title.textContent = session.title || (session.error ? t('history.unreadable') : t('history.untitled'));
     if (active) main.setAttribute('aria-current', 'true');
     const meta = document.createElement('span');
     meta.className = 'history-meta';
@@ -546,7 +547,7 @@ async function openHistory(summary: SessionSummary): Promise<void> {
     if (!result.session) throw new Error(t('history.readFailed'));
     const session = result.session;
     openHistoryId = summary.id;
-    $('#history-modal-title').textContent = session.title || summary.title || t('history.title');
+    $('#history-modal-title').textContent = session.title || summary.title || t('history.untitled');
     const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), t('history.messages', { n: (session.messages || []).length })];
     $<HTMLDivElement>('#history-modal-meta').textContent = meta.filter(Boolean).join(' · ');
     renderHistoryPreview(session.messages || []);
