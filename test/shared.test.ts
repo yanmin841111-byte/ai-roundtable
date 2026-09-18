@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { parseAsk, stripAsk } = require('../src/shared');
+const { parseAsk, stripAsk, findDiffFocus } = require('../src/shared');
 
 let passed = 0;
 const test = (name: string, fn: () => void) => {
@@ -62,6 +62,14 @@ test('parseAsk:沒有問題文字時回 null 且畸形輸入不拋錯', () => {
   for (const value of [null, undefined, 0, {}, [], Symbol('bad')]) {
     assert.doesNotThrow(() => parseAsk(value));
   }
+});
+
+// 審查訊息的檔名(相對於工作目錄)→ 改動清單裡的檔案(相對於 repo 根目錄)。只接受完全相符。
+test('findDiffFocus:README.md 不會對到 docs/README.md;子資料夾要接上 prefix', () => {
+  const paths = ['docs/README.md', 'README.md', 'package.json', 'web/package.json'];
+  assert.strictEqual(findDiffFocus(paths, '', 'README.md'), 'README.md');
+  assert.strictEqual(findDiffFocus(paths, 'web/', 'package.json'), 'web/package.json', '不是根目錄那個使用者自己的 package.json');
+  assert.strictEqual(findDiffFocus(paths, '', 'debug.log'), null, '不在清單裡就回 null,介面會說明');
 });
 
 console.log(`\n${passed}/${passed} shared tests passed`);

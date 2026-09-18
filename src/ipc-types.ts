@@ -296,6 +296,41 @@ export interface ChatMessage {
   unreviewed?: boolean;
   // 失敗的 @ 指定回覆可以重試。由 orchestrator 決定並寫進訊息,介面只照旗標顯示按鈕。
   retryable?: boolean;
+  // 交叉審查回合:審查者看了什麼、結論是什麼。介面靠它顯示結論徽章與「看了哪些檔案」,
+  // 不必從文字猜。
+  review?: ReviewInfo;
+  // 主持人的分工輸出已經成功解析成下方的「分工結果」。原文(多半是一串 JSON)
+  // 對使用者只是重複又難讀,介面收起來;解析失敗時不標,原文要留著讓人看出哪裡不對。
+  rawPlan?: boolean;
+}
+
+// 審查者怎麼看到改動
+//   open   自己依路徑打開檔案(CLI 成員)
+//   tool   附上內容,也可以用唯讀的 read_file 自己讀
+//   inline 只看得到附在提示詞裡的內容
+export type ReviewAccess = 'open' | 'tool' | 'inline';
+// 這次要審的改動
+//   listed    有改動清單
+//   none      工作目錄裡沒有偵測到改動
+//   untouched 依檔案工具的紀錄,被審者沒有改任何檔案
+//   unknown   拿不到改動(工作目錄太大或讀不到)
+//   readonly  被審者沒有改檔權限,只審回報
+export type ReviewScope = 'listed' | 'none' | 'untouched' | 'unknown' | 'readonly';
+// 結論,與流程決定要不要進修復回合用的是同一個判斷
+//   pass    審查者明確寫了 [NO_ISSUES]
+//   issues  有回覆,但沒有宣告沒問題 → 進修復回合
+//   failed  出錯或沒有回覆 → 不算審查過
+export type ReviewVerdict = 'pass' | 'issues' | 'failed';
+
+export interface ReviewInfo {
+  target: string;      // 被審者的名字
+  access: ReviewAccess;
+  scope: ReviewScope;
+  files: string[];     // 列給審查者的檔案(相對於工作目錄,最多 20 個)
+  more: number;        // 清單之外還有幾個改動的檔案
+  omitted: string[];   // 列了、但超過上限沒附上內容的檔案(access 不是 open 時才有意義)
+  unreadable: string[]; // 列了、但讀不到內容的檔案(已刪除、不是文字檔、沙箱拒絕)
+  verdict?: ReviewVerdict; // 回合結束後才有
 }
 
 // ---------- 選項式提問 ----------
@@ -437,7 +472,9 @@ export interface DiffFile {
 export type DiffResult =
   // totalFiles 是工作目錄實際的改動檔案數。files 可能因上限而較少,介面必須比對兩者,
   // 否則會把「只顯示前 N 個」呈現成精確的總數與完整增刪統計。
-  | { ok: true; dir: string; files: DiffFile[]; totalFiles: number }
+  // files 的路徑一律相對於 repo 根目錄;prefix 是工作目錄在 repo 裡的位置(例如 "web/",在根目錄時是空字串),
+  // 介面拿相對於工作目錄的路徑(審查訊息裡的檔名)來找檔案時要先接上它。
+  | { ok: true; dir: string; files: DiffFile[]; totalFiles: number; prefix: string }
   // reason 是給介面判斷要顯示哪一種說明,不是直接給使用者看的文字
   | { ok: false; reason: 'no-workdir' | 'not-a-repo' | 'failed'; detail?: string };
 

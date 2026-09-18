@@ -38,6 +38,13 @@ export function stripMarker(text: unknown, tag: unknown): string {
     .trim();
 }
 
+// 審查訊息裡的檔名(相對於工作目錄)對應到改動清單裡的哪一個檔案(相對於 repo 根目錄)。
+// 只接受完全相符:以前用「結尾相符」,README.md 會對到排在前面的 docs/README.md。
+export function findDiffFocus(paths: string[], prefix: string, focus: string): string | null {
+  const want = `${prefix || ''}${focus}`;
+  return paths.includes(want) ? want : null;
+}
+
 // ---------- [ASK] 選項式提問 ----------
 // 成員在討論階段可以用單獨成行的 [ASK] 區塊反問使用者:
 //

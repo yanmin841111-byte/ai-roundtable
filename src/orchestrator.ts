@@ -8,7 +8,7 @@ import { runTurn, getAdapter, effectiveCanEdit } from './adapters';
 import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
-import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ToolAuditEntry } from './ipc-types';
+import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, ReviewVerdict, ToolAuditEntry } from './ipc-types';
 import type { Adapter, RunAttachment, Stoppable } from './adapters/types';
 import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
@@ -46,6 +46,8 @@ interface TurnOptions {
   // instruction 裡只有這一回合需要的一段(審查時附上的檔案內容)。會照常送出,
   // 但 API 成員存對話記憶時換成一行說明,否則之後每回合都會重送這幾萬字。
   ephemeral?: string;
+  // 交叉審查回合:寫進訊息,回合結束時補上結論
+  review?: ReviewInfo;
 }
 
 interface TurnOutcome {
@@ -57,6 +59,8 @@ interface TurnOutcome {
   error: string | null;
   // 這一回合實際做了哪些檔案操作。沒有使用工具的 adapter 一律是空陣列。
   toolEvents: ToolAuditEntry[];
+  // 這一回合在時間線上的訊息
+  id: string;
 }
 
 // 主持人輸出的分工;_agentId / _agentName 是比對成員後補上的欄位
@@ -605,7 +609,7 @@ class Orchestrator extends EventEmitter {
     ].join('\n');
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const { text, error } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
+      const { text, error, id } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
       if (this.stopped) return null;
       // 主持人整個回合就失敗(CLI 沒安裝、key 失效、逾時)時,輸出必然是空的。
       // 這種情況下報「格式無法解析」是誤診,會讓使用者去調整提示詞而不是去修設定。
@@ -631,6 +635,9 @@ class Orchestrator extends EventEmitter {
         if (matched.length) {
           const lines = matched.map((a) => this.text('prompt.planItem', { name: a._agentName || '', task: a.task || '' })).join('\n');
           this.system(this.text('sys.plan', { summary: plan.summary || '', lines }), { tag: 'plan' });
+          // 分工結果已經以卡片呈現,主持人那則原文(JSON)在介面上收起來
+          const source = this.messages.find((m) => m.id === id);
+          if (source) this.updateMessage(source, { rawPlan: true }, true);
           return plan;
         }
         this.system(this.text('sys.planNoMatch'), { level: 'warn' });
@@ -738,7 +745,7 @@ class Orchestrator extends EventEmitter {
       const shared = writers.some((r) => r !== target) && files.some((f) => !own.has(f));
       const list = [...files.map((f) => `- ${f}`), ...(more > 0 ? [this.text('git.more', { n: more })] : [])].join('\n');
       // 有工具的審查者也附上內容:範本支援工具不代表它選的模型支援,被拒時 adapter 會不帶工具重送
-      const { text: content, omitted } = access !== 'open' && files.length ? this.inlineReviewContent(files, cwd) : { text: '', omitted: [] as string[] };
+      const { text: content, omitted, unreadable } = access !== 'open' && files.length ? this.inlineReviewContent(files, cwd) : { text: '', omitted: [] as string[], unreadable: [] as string[] };
       const vars = { name: target.agent.name, mark: MARK(NO_ISSUES) };
       const lines: Array<string | null> = [
         this.text(opening, vars),
@@ -759,7 +766,8 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
       ];
       const prompt = lines.filter((line): line is string => line !== null).join('\n');
-      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined })
+      const review: ReviewInfo = { target: target.agent.name, access, scope: state, files, more, omitted, unreadable };
+      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined, review })
         .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
@@ -767,13 +775,14 @@ class Orchestrator extends EventEmitter {
 
   // 無法自行讀檔的審查者:用唯讀的檔案工具把內容讀出來附上。沿用同一層沙箱——
   // 不能讀 .git、不能經由符號連結逃出工作目錄、只收 UTF-8 文字、有大小上限——不另寫一套讀檔。
-  // 回傳附上的內容,以及因為數量或長度上限而沒附上的檔案
-  inlineReviewContent(files: string[], cwd: string): { text: string; omitted: string[] } {
+  // 回傳附上的內容、因為數量或長度上限而沒附上的檔案,以及讀不到的檔案
+  inlineReviewContent(files: string[], cwd: string): { text: string; omitted: string[]; unreadable: string[] } {
     let session: FileToolSession;
-    try { session = new FileToolSession(cwd, { readOnly: true }); } catch { return { text: '', omitted: files }; }
+    try { session = new FileToolSession(cwd, { readOnly: true }); } catch { return { text: '', omitted: files, unreadable: [] }; }
     let budget = REVIEW_INLINE_TOTAL_CHARS;
     const blocks: string[] = [];
     const omitted: string[] = [];
+    const unreadable: string[] = [];
     for (const [i, file] of files.entries()) {
       if (i >= REVIEW_INLINE_FILES || budget <= 0) { omitted.push(file); continue; }
       const r = session.execute('read_file', { path: file, limit: Math.min(REVIEW_INLINE_FILE_CHARS, budget) });
@@ -782,11 +791,12 @@ class Orchestrator extends EventEmitter {
         budget -= content.length;
         blocks.push(this.text('prompt.reviewFileBlock', { path: file, content: r.truncated ? content + this.text('prompt.reviewTruncated') : content }));
       } else {
-        // 刪掉的檔案也會落在這裡;讀不到的原因照實交給審查者
+        // 刪掉的檔案也會落在這裡;讀不到的原因照實交給審查者,介面也另外標出來
+        unreadable.push(file);
         blocks.push(this.text('prompt.reviewFileUnreadable', { path: file, error: r.error || '' }));
       }
     }
-    return { text: blocks.length ? `${this.text('prompt.reviewContent')}\n${blocks.join('\n\n')}` : '', omitted };
+    return { text: blocks.length ? `${this.text('prompt.reviewContent')}\n${blocks.join('\n\n')}` : '', omitted, unreadable };
   }
 
   // 把一位成員這回合的檔案操作寫成稽核訊息。
@@ -823,8 +833,8 @@ class Orchestrator extends EventEmitter {
   markUnreviewed(reports: ExecReport[], reviews: Review[]) {
     const reviewed = new Set(
       reviews
-        // 審查失敗(逾時、崩潰、沒有輸出)不算審查過;這與 fixPhase 的判定一致
-        .filter((rv) => !rv.error && (rv.text || '').trim() && rv.reviewer.id !== rv.target.agent.id)
+        // 審查失敗(逾時、崩潰、沒有輸出)不算審查過;與 fixPhase、介面的結論徽章用同一個判斷
+        .filter((rv) => reviewVerdict(rv.text, rv.error) !== 'failed' && rv.reviewer.id !== rv.target.agent.id)
         .map((rv) => rv.target.agent.id),
     );
     for (const report of reports) {
@@ -841,7 +851,7 @@ class Orchestrator extends EventEmitter {
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
   async fixPhase(reviews: Review[]): Promise<FixOutcome> {
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
-    const reviewFailed = reviews.filter((rv) => rv.error || !(rv.text || '').trim());
+    const reviewFailed = reviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'failed');
     if (reviewFailed.length) {
       this.system(
         this.text('sys.reviewFailed', { list: reviewFailed.map((rv) => this.text('sys.reviewFailedItem', { reviewer: rv.reviewer.name, target: rv.target.agent.name, error: rv.error || this.text('sys.noReviewText') })).join('\n') }),
@@ -851,8 +861,8 @@ class Orchestrator extends EventEmitter {
 
     const issues = new Map<string, Issue>(); // agentId -> { agent, task, notes }
     for (const rv of reviews) {
-      if (rv.error || !(rv.text || '').trim()) continue;
-      if (hasMarker(rv.text, NO_ISSUES)) continue; // 審查者明確表示沒問題
+      // failed 已在上面回報;pass 是審查者明確表示沒問題
+      if (reviewVerdict(rv.text, rv.error) !== 'issues') continue;
       const t = rv.target;
       const issue = issues.get(t.agent.id) || { agent: t.agent, task: t.task, notes: [] };
       issues.set(t.agent.id, issue);
@@ -1021,9 +1031,9 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false, readOnlyFileTools = false, ephemeral }: TurnOptions = {}): Promise<TurnOutcome> {
+  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false, readOnlyFileTools = false, ephemeral, review }: TurnOptions = {}): Promise<TurnOutcome> {
     const startIdx = this.messages.length;
-    const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}) });
+    const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}), ...(review ? { review } : {}) });
     const transcript = this.unseenTranscript(agent, msg);
     const adapter = getAdapter(agent.cli);
     const resumable = !!(adapter?.supportsResume && this.sessions[agent.id]);
@@ -1073,8 +1083,9 @@ class Orchestrator extends EventEmitter {
       error,
       // 只有 @ 指定回覆可以重試,理由見 retry()
       ...(error && isPhaseInfo(phase) && phase.code === 'direct' ? { retryable: true } : {}),
+      ...(review ? { review: { ...review, verdict: reviewVerdict(display, error) } } : {}),
     }, true); // 回合結束一定要 flush,不能讓最後一次更新卡在節流裡
-    return { text: display, raw: text, error, toolEvents: toAuditEntries((result as { toolEvents?: unknown }).toolEvents) };
+    return { text: display, raw: text, error, toolEvents: toAuditEntries((result as { toolEvents?: unknown }).toolEvents), id: msg.id };
   }
 }
 
@@ -1125,7 +1136,34 @@ function restoreMessage(m: any, locale: TextLocale = 'zh-Hant'): LiveMessage {
   if (m.status === 'running') { msg.status = 'error'; msg.error = m.error || tx(locale, 'sys.unfinishedOnSave'); }
   // 載入的歷史對話不提供重試:附件與 CLI 的 session 都已經跟當時不同,重跑的不是同一件事
   msg.retryable = false;
+  const review = restoreReviewInfo(m.review);
+  if (review) msg.review = review; else delete msg.review;
+  if (m.rawPlan === true) msg.rawPlan = true; else delete msg.rawPlan;
   return msg;
+}
+
+// 紀錄檔可能被手動改過或來自舊版本:形狀不對就整個丟掉,介面不顯示,也不會壞掉
+const REVIEW_ACCESS = new Set(['open', 'tool', 'inline']);
+const REVIEW_SCOPES = new Set(['listed', 'none', 'untouched', 'unknown', 'readonly']);
+const REVIEW_VERDICTS = new Set(['pass', 'issues', 'failed']);
+function restoreReviewInfo(raw: any): ReviewInfo | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.target !== 'string' || !raw.target.trim()) return null;
+  if (!REVIEW_ACCESS.has(raw.access) || !REVIEW_SCOPES.has(raw.scope)) return null;
+  const paths = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.trim() !== ''))] : []);
+  const files = paths(raw.files).slice(0, REVIEW_FILES_MAX);
+  // 沒附上 / 讀不到的一定是清單裡的檔案,而且兩者不重疊;否則「附上 -1 個檔案」這種話就會出現
+  const omitted = paths(raw.omitted).filter((f) => files.includes(f));
+  const unreadable = paths(raw.unreadable).filter((f) => files.includes(f) && !omitted.includes(f));
+  return {
+    target: raw.target,
+    access: raw.access,
+    scope: raw.scope,
+    files,
+    more: Number.isInteger(raw.more) && raw.more > 0 ? raw.more : 0,
+    omitted,
+    unreadable,
+    ...(REVIEW_VERDICTS.has(raw.verdict) ? { verdict: raw.verdict } : {}),
+  };
 }
 
 // ---------- 對話紀錄截斷 ----------
@@ -1252,6 +1290,12 @@ function reviewAccess(adapter: Adapter | null | undefined): 'open' | 'tool' | 'i
   // OpenAI 相容 adapter 的 supportsEdit 就等於「範本明確開啟了檔案工具,端點支援工具呼叫」
   if (adapter.type === 'openai' && adapter.supportsEdit) return 'tool';
   return 'inline';
+}
+
+// 審查的結論。流程(要不要進修復回合、算不算審查過)與介面的徽章都用這一個判斷,兩邊不會各說各話
+function reviewVerdict(text: string | null | undefined, error: string | null | undefined): ReviewVerdict {
+  if (error || !(text || '').trim()) return 'failed';
+  return hasMarker(text, NO_ISSUES) ? 'pass' : 'issues';
 }
 
 // 這位成員自己用工具改過的檔案(精確)
@@ -1463,4 +1507,4 @@ function resolveAgent(token: unknown, codes: Map<string, AgentConfig>, agents: A
   }) || null;
 }
 
-export { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, snapshotDir, diffSnapshots, extractJson, resolveAgent };
+export { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, snapshotDir, diffSnapshots, extractJson, resolveAgent, restoreMessage };

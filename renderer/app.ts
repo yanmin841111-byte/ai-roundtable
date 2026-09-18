@@ -5,11 +5,11 @@ import * as Marker from '../src/shared';
 import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
 import { isPhaseInfo } from '../src/ipc-types';
-import { t, applyStaticText, resolveLocale, setLocale, localeTag, joinNames } from './i18n';
+import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth, DiffFile,
-  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta,
+  ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo,
   AttachmentsResult, RendererApi,
   PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity,
 } from './api';
@@ -32,6 +32,7 @@ interface AgentShell {
   error: CachedEl;
   // 舊的訊息節點可能還沒有這個元素,所以允許 null
   unreviewed: HTMLElement | null;
+  reviewScope: HTMLElement;
   retry: HTMLButtonElement | null;
   usage: CachedEl;
   statusLine: CachedEl;
@@ -116,7 +117,7 @@ async function init() {
   document.querySelectorAll<HTMLElement>('.settings-tab').forEach((tab) => { tab.onclick = () => showSettingsTab(tab.dataset.tab || ''); });
   $<HTMLButtonElement>('#workdir-chip').onclick = pickWorkDir;
   // 點背景關閉只用在沒有編輯內容的視窗,避免誤點丟掉未儲存的成員或擴充設定
-  $<HTMLButtonElement>('#diff-btn').onclick = openDiff;
+  $<HTMLButtonElement>('#diff-btn').onclick = () => { void openDiff(); };
   $<HTMLButtonElement>('#diff-close').onclick = () => $<HTMLDivElement>('#diff-modal').classList.add('hidden');
   $<HTMLButtonElement>('#diff-refresh').onclick = () => loadDiff();
   for (const id of ['#settings', '#history-modal', '#ext-picker', '#diff-modal']) {
@@ -322,8 +323,11 @@ function emptyEl() {
 
 // 展開狀態要跨重新整理保留,否則每按一次 ↻ 使用者就得重新展開在看的那個檔案
 const diffExpanded = new Set<string>();
+// 從審查訊息點檔名打開時,要展開並捲到的那個檔案
+let diffFocus: string | null = null;
 
-async function openDiff(): Promise<void> {
+async function openDiff(focus?: string): Promise<void> {
+  diffFocus = focus || null;
   $<HTMLDivElement>('#diff-modal').classList.remove('hidden');
   await loadDiff();
 }
@@ -344,15 +348,16 @@ async function loadDiff(): Promise<void> {
       body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}</div>`;
       return;
     }
-    renderDiff(result.files, result.dir, result.totalFiles);
+    renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '');
   } catch (error) {
     body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.failed') + '\n' + cleanIpcError(error))}</div>`;
   } finally {
     refresh.disabled = false;
+    diffFocus = null; // 只作用一次;之後按 ↻ 不該又跳回那個檔案
   }
 }
 
-function renderDiff(files: DiffFile[], dir: string, totalFiles: number): void {
+function renderDiff(files: DiffFile[], dir: string, totalFiles: number, prefix = ''): void {
   const body = $<HTMLDivElement>('#diff-body');
   const summary = $<HTMLDivElement>('#diff-summary');
   body.innerHTML = '';
@@ -369,7 +374,21 @@ function renderDiff(files: DiffFile[], dir: string, totalFiles: number): void {
     body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.clean'))}</div>`;
     return;
   }
+  // 審查訊息裡的路徑相對於工作目錄,這裡的路徑相對於 repo 根目錄:接上 prefix 後要完全相符
+  const focus = diffFocus ? Marker.findDiffFocus(files.map((f) => f.path), prefix, diffFocus) : null;
+  if (diffFocus && !focus) {
+    // 快照看得到、git 看不到的檔案(被 .gitignore 忽略、超過顯示上限):打開了卻什麼都沒標,使用者會以為壞了
+    const note = document.createElement('div');
+    note.className = 'diff-note diff-focus-missing';
+    note.textContent = t('diff.focusMissing', { file: diffFocus });
+    body.appendChild(note);
+  }
+  if (focus) diffExpanded.add(focus);
   for (const file of files) body.appendChild(diffFileEl(file));
+  if (focus) {
+    const el = body.querySelector<HTMLElement>(`.diff-file[data-path="${cssEscape(focus)}"]`);
+    if (el) { el.classList.add('focused'); el.scrollIntoView({ block: 'start' }); }
+  }
   if (capped) {
     const note = document.createElement('div');
     note.className = 'diff-note diff-cap-note';
@@ -381,6 +400,7 @@ function renderDiff(files: DiffFile[], dir: string, totalFiles: number): void {
 function diffFileEl(file: DiffFile): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'diff-file';
+  wrap.dataset.path = file.path;
   const open = diffExpanded.has(file.path);
 
   const head = document.createElement('button');
@@ -1860,21 +1880,31 @@ function hydrateAttachmentThumbs(root: HTMLElement | null, list: Array<Attachmen
 
 function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   const agreed = Marker.hasMarker(m.text || '', 'AGREED');
-  const text = Marker.stripMarker(m.text || '', 'AGREED');
+  // 審查結論改用徽章表示,[NO_ISSUES] 這個給程式看的標記不顯示
+  const text = m.review ? Marker.stripMarker(Marker.stripMarker(m.text || '', 'AGREED'), 'NO_ISSUES') : Marker.stripMarker(m.text || '', 'AGREED');
+  // 結論與流程(要不要進修復回合)是同一個判斷,由主程序寫進訊息,介面不自己猜
+  const verdict = m.review && m.status !== 'running' ? m.review.verdict : undefined;
+  const verdictBadge = verdict
+    ? `<span class="badge verdict ${escapeHtml(verdict)}" title="${escapeHtml(t(`review.verdictTitle.${verdict}`))}">${escapeHtml(t(`review.verdict.${verdict}`))}</span>`
+    : '';
   const status = m.status === 'running' ? `<span class="spinner" title="${escapeHtml(t('msg.generating'))}"></span>` : '';
   const shell = ensureAgentShell(el);
   shell.avatar.style.background = m.color || '#6c8cff';
   setTextIfChanged(shell.avatar, initials(m.agentName));
   shell.bubble.style.setProperty('--c', m.color || '#6c8cff');
-  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${m.unreviewed ? `<span class="badge unreviewed" title="${escapeHtml(t('review.unreviewedTitle'))}">${escapeHtml(t('review.unreviewed'))}</span>` : ''}${status}`);
+  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${verdictBadge}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${m.unreviewed ? `<span class="badge unreviewed" title="${escapeHtml(t('review.unreviewedTitle'))}">${escapeHtml(t('review.unreviewed'))}</span>` : ''}${status}`);
+  renderReviewScope(shell.reviewScope, m.review);
   renderThinking(shell.thinking, m.thinking || '');
   renderActivities(shell.activities, m.activities || []);
   // 回合結束卻沒有任何內容時,以前留下一個完全空白的泡泡——使用者無從判斷是
   // 成員沒話說、還是出了什麼事。討論與總結階段都會這樣收尾,必須講出來。
-  const body = text
-    ? md(text)
-    : m.status === 'running' ? '<span class="hint">…</span>'
-      : m.error ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
+  // 分工原文已經解析成下方的「分工結果」卡片:只留一句說明,原文收進可展開的區塊
+  const body = text && m.rawPlan && m.status !== 'running'
+    ? `<span class="hint raw-plan-note">${escapeHtml(t('plan.rawNote'))}</span><details class="raw-plan"><summary>${escapeHtml(t('plan.rawShow'))}</summary><div class="raw-plan-body">${md(text)}</div></details>`
+    : text
+      ? md(text)
+      : m.status === 'running' ? '<span class="hint">…</span>'
+        : m.error ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
@@ -1967,6 +1997,10 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     thinking.className = 'thinking-slot';
     const activities = document.createElement('div');
     activities.className = 'activities';
+    // 交叉審查:這位審查者審誰、看了哪些檔案。放在內容之前,讀審查意見前先知道它的依據
+    const reviewScope = document.createElement('div');
+    reviewScope.className = 'review-scope';
+    reviewScope.hidden = true;
     const body = document.createElement('div');
     body.className = 'body';
     const error = document.createElement('div');
@@ -1985,7 +2019,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
     statusLine.textContent = t('msg.streaming');
-    bubble.append(head, thinking, activities, body, error, retry, unreviewed, usage, statusLine);
+    bubble.append(head, reviewScope, thinking, activities, body, error, retry, unreviewed, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
@@ -2004,10 +2038,71 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     body: el.querySelector<CachedEl>('.body')!,
     error: el.querySelector<CachedEl>('.error-text')!,
     unreviewed: el.querySelector<HTMLElement>('.unreviewed-note'),
+    reviewScope: el.querySelector<HTMLElement>('.review-scope') || insertReviewScope(el),
     retry: el.querySelector<HTMLButtonElement>('.retry-btn'),
     usage: el.querySelector<CachedEl>('.usage')!,
     statusLine: el.querySelector<CachedEl>('.bubble-status')!,
   };
+}
+
+// 這個版本之前建立的訊息節點沒有審查範圍列,補在標題列後面
+function insertReviewScope(el: HTMLElement): HTMLElement {
+  const scope = document.createElement('div');
+  scope.className = 'review-scope';
+  scope.hidden = true;
+  el.querySelector<HTMLElement>('.bubble-head')!.after(scope);
+  return scope;
+}
+
+// 「審查 Alice · 附上 3 個檔案的內容 · 另有 2 個沒附上」+ 可點的檔案名稱。
+// 審查意見有多少分量,取決於審查者實際看到了什麼;看不到改動的審查要一眼看得出來。
+const REVIEW_CHIPS_MAX = 6;
+function renderReviewScope(slot: HTMLElement, review: ReviewInfo | undefined): void {
+  slot.hidden = !review;
+  if (!review) return;
+  const key = JSON.stringify([review.target, review.access, review.scope, review.files, review.more, review.omitted, review.unreadable, getLocale()]);
+  if (slot.dataset.key === key) return;
+  slot.dataset.key = key;
+  slot.textContent = '';
+  slot.dataset.scope = review.scope;
+  const unreadable = review.unreadable || [];
+  const attached = Math.max(0, review.files.length - review.omitted.length - unreadable.length);
+  const how = review.scope !== 'listed' ? t(`review.scope.${review.scope}`, { name: review.target })
+    : review.access === 'open' ? t('review.scope.open')
+      : t(review.access === 'tool' ? 'review.scope.tool' : 'review.scope.inline', { n: attached });
+  const parts = [t('review.scope.target', { name: review.target }), how];
+  if (review.scope === 'listed' && review.access !== 'open' && review.omitted.length) parts.push(t('review.scope.omitted', { n: review.omitted.length }));
+  if (review.scope === 'listed' && review.access !== 'open' && unreadable.length) parts.push(t('review.scope.unreadable', { n: unreadable.length }));
+  const line = document.createElement('span');
+  line.className = 'review-scope-text';
+  line.textContent = parts.join(' · ');
+  slot.appendChild(line);
+  if (!review.files.length) return;
+  const chips = document.createElement('span');
+  chips.className = 'review-files';
+  for (const file of review.files.slice(0, REVIEW_CHIPS_MAX)) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'review-file';
+    // 沒附上內容、讀不到的檔案要看得出來:審查者對它的判斷沒有根據
+    const omitted = review.access !== 'open' && review.omitted.includes(file);
+    const missing = review.access !== 'open' && unreadable.includes(file);
+    if (omitted || missing) chip.classList.add('omitted');
+    chip.textContent = file;
+    chip.title = t(missing ? 'review.fileUnreadableTitle' : omitted ? 'review.fileOmittedTitle' : 'review.fileTitle');
+    chip.onclick = () => { void openDiff(file); };
+    chips.appendChild(chip);
+  }
+  const rest = review.files.length - REVIEW_CHIPS_MAX + review.more;
+  if (rest > 0) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'review-file more';
+    more.textContent = t('review.scope.more', { n: rest });
+    more.onclick = () => { void openDiff(); };
+    chips.appendChild(more);
+  }
+  slot.appendChild(chips);
 }
 
 function renderThinking(slot: HTMLElement, thinking: string): void {

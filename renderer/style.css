@@ -211,6 +211,10 @@ textarea { resize: vertical; }
 .body td, .body th { border: 1px solid var(--border); padding: 5px 9px; }
 .body th { background: var(--panel-2); }
 details.thinking, details.activity { margin: 4px 0 8px; font-size: 12.5px; }
+/* 已解析成「分工結果」卡片的主持人原文:預設收起,需要時再展開 */
+.raw-plan-note { display: block; }
+details.raw-plan { margin-top: 4px; font-size: 12.5px; }
+details.raw-plan .raw-plan-body { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--muted); max-height: 280px; overflow-y: auto; word-break: break-word; }
 details summary { cursor: pointer; color: var(--muted); user-select: none; }
 details summary:hover { color: var(--text); }
 details.thinking .content { white-space: pre-wrap; color: var(--muted); border-left: 2px solid var(--border-strong); padding-left: 10px; margin-top: 6px; max-height: 240px; overflow-y: auto; line-height: 1.6; }
@@ -480,6 +484,23 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 /* 「尚未審查」:沒有其他成員看過這次改動時必須講清楚,不能讓「跑完了」被讀成「有人看過」 */
 .badge.unreviewed { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
 
+/* 審查結論:與流程判斷同一件事(要不要進修復回合),顏色沿用既有的語意色 */
+.badge.verdict.pass { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); }
+.badge.verdict.issues { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
+.badge.verdict.failed { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+
+/* 審查者看了什麼。看不到改動的審查(unknown)用警示色,讓人知道這份意見的根據有限 */
+.review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 2px 0 6px; font-size: 12px; color: var(--muted); }
+.review-scope[data-scope="unknown"] .review-scope-text { color: var(--warn); }
+.review-files { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.review-file { font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file:hover { border-color: var(--accent-border); background: var(--hover); }
+/* 列了但沒附上內容:審查者對它的判斷沒有根據 */
+.review-file.omitted { border-style: dashed; color: var(--muted); }
+.review-file.more { font-family: var(--font); color: var(--muted); }
+/* 從審查訊息點進來的那個檔案 */
+.diff-file.focused { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+
 /* ---------- 檔案改動(紅綠 diff) ----------
    顏色沿用既有的 --ok / --danger 系列,深色模式就不必再維護一組專屬變數。 */
 .diff-modal-card { height: min(82vh, 860px); display: flex; flex-direction: column; }
@@ -514,6 +535,8 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 /* @@ 區塊標頭是位置資訊,不是檔案內容,壓低存在感 */
 .diff-line.hunk { background: var(--panel-2); color: var(--faint); font-size: 11.5px; padding-top: 3px; padding-bottom: 3px; }
 .diff-note { color: var(--muted); font-size: 11.5px; padding: 6px 12px; background: var(--panel-2); }
+/* 從審查訊息點的檔案不在這份清單裡:放最上面,用警示色,不然打開視窗卻什麼都沒標像是壞了 */
+.diff-focus-missing { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-border); border-radius: 8px; margin-bottom: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
   .msg.enter, .msg-group > .msg.enter { animation: none; }

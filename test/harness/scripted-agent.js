@@ -16,15 +16,17 @@ try {
 let input = '';
 process.stdin.on('data', (d) => (input += d));
 process.stdin.on('end', () => {
-  const tags = [...input.matchAll(/【([^】]+)】|^\[([A-Za-z -]+)\]/gm)].map((m) => m[1] || m[2]);
-  const phase = tags[tags.length - 1] || '';
-  const key = {
+  const PHASES = {
     分工: 'divide', 'Divide the work': 'divide',
     執行: 'execute', Execute: 'execute',
     交叉審查: 'review', 'Cross-review': 'review',
     修復: 'fix', Repair: 'fix',
     總結: 'summary', Summary: 'summary',
-  }[phase] || 'discuss';
+  };
+  // 只認階段標籤。修復提示裡的審查意見以「[Alice]:」開頭,以前會被當成最後一個標籤,
+  // 修復回合就回了討論用的「同意分工」。
+  const tags = [...input.matchAll(/【([^】]+)】|^\[([A-Za-z -]+)\]/gm)].map((m) => m[1] || m[2]).filter((t) => PHASES[t]);
+  const key = PHASES[tags[tags.length - 1]] || 'discuss';
 
   if (key === 'execute' && config.writes) {
     const fs = require('fs');

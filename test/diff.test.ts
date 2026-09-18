@@ -192,6 +192,29 @@ test('collectChanges:真實 repo 同時抓到已追蹤的修改與未追蹤的�
   }
 });
 
+// 工作目錄是 repo 的子資料夾:git diff 的路徑相對於 repo 根目錄,ls-files 的相對於工作目錄。
+// 以前同一份清單裡兩種基準混在一起(web/a.ts 和 b.ts),從審查訊息點檔名也會對錯檔案。
+test('collectChanges:工作目錄在子資料夾時,路徑一律相對於 repo 根目錄,並回報 prefix', async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-sub-'));
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+  try {
+    fs.mkdirSync(path.join(repo, 'web'));
+    fs.writeFileSync(path.join(repo, 'package.json'), '{}\n');
+    fs.writeFileSync(path.join(repo, 'web', 'a.ts'), 'a\n');
+    git('init', '-q'); git('config', 'user.email', 't@e.com'); git('config', 'user.name', 't');
+    git('add', '.'); git('commit', '-qm', 'init');
+    fs.writeFileSync(path.join(repo, 'package.json'), '{"x":1}\n'); // 工作目錄以外、使用者自己的改動
+    fs.writeFileSync(path.join(repo, 'web', 'a.ts'), 'a2\n');
+    fs.writeFileSync(path.join(repo, 'web', 'b.ts'), 'b\n');     // 未追蹤
+    const r = await collectChanges(path.join(repo, 'web'));
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.prefix, 'web/');
+    assert.deepStrictEqual(r.files.map((f: any) => f.path).sort(), ['package.json', 'web/a.ts', 'web/b.ts']);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('collectChanges:已加入暫存區的改動一樣看得到', async () => {
   // 對使用者來說「相對上一次 commit 改了什麼」才是有意義的單位;
   // git add 過的東西從介面上消失會讓人以為改動被還原了。

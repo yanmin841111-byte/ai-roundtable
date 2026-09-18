@@ -156,6 +156,10 @@ export async function collectChanges(workDir: string): Promise<DiffResult> {
   }
 
   try {
+    // 工作目錄在 repo 裡的位置。git diff 的路徑相對於 repo 根目錄,ls-files 的路徑相對於工作目錄;
+    // 兩者要統一,否則同一份清單裡 web/a.ts 和 b.ts 基準不同,點檔名跳轉也會對錯檔案。
+    // 只去掉結尾換行:資料夾名稱可以以空白開頭。
+    const prefix = (await git(workDir, ['rev-parse', '--show-prefix'])).replace(/\r?\n$/, '');
     // 有沒有 commit 決定要不要跟 HEAD 比:全新的 repo 還沒有 HEAD,
     // 這時所有檔案都是未追蹤的,交給下面的 untracked 流程處理就好。
     let hasHead = true;
@@ -176,18 +180,18 @@ export async function collectChanges(workDir: string): Promise<DiffResult> {
         const out = await git(workDir, ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-index', '--', '/dev/null', rel], { allowDiffExit: true });
         const parsed = parseUnifiedDiff(out);
         // --no-index 的路徑不帶 a/ b/ 前綴語意,直接用實際的相對路徑覆蓋才不會出現奇怪的檔名
-        if (parsed[0]) return { ...parsed[0], path: rel, status: 'added' };
-        return { path: rel, status: 'added', added: 0, removed: 0, binary: true, lines: [] };
+        if (parsed[0]) return { ...parsed[0], path: prefix + rel, status: 'added' };
+        return { path: prefix + rel, status: 'added', added: 0, removed: 0, binary: true, lines: [] };
       } catch {
         // 讀不到的單一檔案(權限、symlink 斷鏈)不該讓整份清單失敗
-        return { path: rel, status: 'added', added: 0, removed: 0, binary: true, lines: [] };
+        return { path: prefix + rel, status: 'added', added: 0, removed: 0, binary: true, lines: [] };
       }
     });
     files.push(...extra);
 
     files.sort((a, b) => a.path.localeCompare(b.path));
     // totalFiles 一定是真實總數:介面靠它才知道自己看到的是不是全部
-    return { ok: true, dir: workDir, files: files.slice(0, MAX_FILES), totalFiles: files.length };
+    return { ok: true, dir: workDir, files: files.slice(0, MAX_FILES), totalFiles: files.length, prefix };
   } catch (e: any) {
     return { ok: false, reason: 'failed', detail: e?.message || String(e) };
   }
