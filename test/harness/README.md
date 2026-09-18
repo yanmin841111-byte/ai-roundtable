@@ -76,6 +76,19 @@ npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正�
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過
 ```
 
+### 評測(不是回歸測試)
+
+```bash
+node --import tsx test/harness/scenarios/review-quality.ts   # 需要 ollama serve
+```
+
+真的模型當審查者:執行者交出 `add` 寫成 `a - b`、報告卻說「已確認正確」的檔案,看審查者抓不抓得到;
+再用正確的版本確認它不會誤報。**模型輸出每次不同,單次結果只是一個樣本**,要比較兩種設定時請各跑多次。
+
+要看某個改動有沒有讓模型表現變好,用同一題在改動前後各跑一次:用 `git worktree add` 開一份舊版,
+只把 `test/harness/` 的檔案複製進去(產品程式碼維持舊版),分別建置後依序執行。
+兩邊共用本機 Ollama,**不要同時跑**,否則會互相拖慢、影響比較。
+
 ## 踩過的坑
 
 - **劇本函式會被 esbuild 加上 `__name(...)`**。harness 的 prelude 補了一個等價的 no-op,不必自己處理。

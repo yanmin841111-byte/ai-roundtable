@@ -22,11 +22,17 @@ export function scriptedMember(opts: {
   discuss?: string;
   review?: string;
   canEdit?: boolean;
+  /** 執行階段寫進工作目錄的檔案(相對路徑 → 內容) */
+  writes?: Record<string, string>;
+  /** 執行階段的回報文字 */
+  report?: string;
 }): HarnessMember {
   const payload = Buffer.from(JSON.stringify({
     plan: opts.plan || null,
     discuss: opts.discuss || '同意直接進入分工\n[AGREED]',
     review: opts.review || '看過了,沒問題\n[NO_ISSUES]',
+    writes: opts.writes || null,
+    report: opts.report || null,
   }), 'utf8').toString('base64');
   return {
     id: opts.id || 'scripted',

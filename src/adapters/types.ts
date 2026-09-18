@@ -47,6 +47,11 @@ export interface RunContext extends TurnCallbacks {
   // 只有 orchestrator 確認 divide 流程有另一位 reviewer 時才設為 true。
   // adapter 規格與成員 canEdit 即使都開啟，缺這個閘門仍不會把寫入工具送給模型。
   fileToolsEnabled?: boolean;
+  // 只給 read_file(審查回合用)。與 fileToolsEnabled 分開:讀取不需要改檔權限,也不需要 reviewer 閘門。
+  readOnlyFileTools?: boolean;
+  // prompt 裡只有這一回合需要的一段(原封不動包含在 prompt 裡)。照常送出;
+  // 自己保存對話記憶的 adapter 存檔時要換成一行說明,不然之後每回合都會重送。
+  ephemeral?: string;
 }
 
 // 轉接器自己回報的結果;欄位都可以省略,usage 是各家原始格式

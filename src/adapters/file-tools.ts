@@ -101,6 +101,9 @@ export const FILE_TOOL_DEFINITIONS = [
   },
 ] as const;
 
+// 審查回合只給讀取工具:定義裡沒有寫入工具,模型就不會以為自己該改檔。
+export const FILE_TOOL_READ_DEFINITIONS = FILE_TOOL_DEFINITIONS.filter((d) => d.function.name === 'read_file');
+
 function sha256(data: Buffer | string): string {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
@@ -297,14 +300,18 @@ function atomicWrite(target: string, buffer: Buffer, mode: number, createOnly: b
 
 export class FileToolSession {
   readonly root: string;
+  // 審查者只需要「看」,不該能改。工具定義只給 read_file 還不夠——模型仍可能照記憶
+  // 呼叫 write_file,所以在這裡再擋一次,不靠模型守規矩。
+  readonly readOnly: boolean;
   private calls = 0;
   private outputChars = 0;
 
-  constructor(workDir: string) {
+  constructor(workDir: string, { readOnly = false }: { readOnly?: boolean } = {}) {
     if (!workDir || !fs.existsSync(workDir)) throw new Error('工作目錄不存在');
     const root = fs.realpathSync.native(workDir);
     if (!fs.statSync(root).isDirectory()) throw new Error('工作目錄不是資料夾');
     this.root = root;
+    this.readOnly = readOnly;
   }
 
   get remainingCalls(): number {
@@ -376,6 +383,7 @@ export class FileToolSession {
       }
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('工具參數必須是物件');
       if (name === 'read_file') return this.finish(this.readFile(args));
+      if (this.readOnly && (name === 'write_file' || name === 'replace_text')) throw new Error('這個回合只能讀取檔案,不能修改');
       // 這兩個工具回傳時檔案已經寫入,結果必須標成 committed。
       if (name === 'write_file') return this.finish(this.writeFile(args), true);
       if (name === 'replace_text') return this.finish(this.replaceText(args), true);

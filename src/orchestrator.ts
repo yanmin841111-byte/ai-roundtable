@@ -1,6 +1,7 @@
 // 協調器:安排多個 AI 成員輪流發言、達成共識後分工執行、交叉審查、再修復一輪。
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { runTurn, getAdapter, effectiveCanEdit } from './adapters';
@@ -13,6 +14,7 @@ import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
 import type { TextLocale } from './text';
 import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
+import { FileToolSession } from './adapters/file-tools';
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
@@ -39,6 +41,11 @@ interface TurnOptions {
   // 允許這一回合使用寫檔工具。只有執行階段、且確認有人能審查這次改動時才會是 true。
   // adapter 端還有兩層把關(範本啟用 fileTools、成員 canEdit),三層都成立才會把工具送給模型。
   fileToolsEnabled?: boolean;
+  // 只給唯讀的 read_file(審查回合)。讀取不改變任何東西,不需要改檔權限也不需要 reviewer 閘門。
+  readOnlyFileTools?: boolean;
+  // instruction 裡只有這一回合需要的一段(審查時附上的檔案內容)。會照常送出,
+  // 但 API 成員存對話記憶時換成一行說明,否則之後每回合都會重送這幾萬字。
+  ephemeral?: string;
 }
 
 interface TurnOutcome {
@@ -453,10 +460,17 @@ class Orchestrator extends EventEmitter {
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
         if (!plan) { await this.summaryPhase(task, 'discuss', {}); return; }
         const gitBefore = await gitStatus(cwd);
+        // 審查要看的改動:工作目錄在執行前後的快照差異(見 snapshotDir)
+        const snapBefore = await snapshotDir(cwd);
+        // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
+        if (this.stopped) return;
         const { reports, failed } = await this.executePhase(agents, plan);
         if (this.stopped) return;
-        const gitChanges = describeGitChanges(gitBefore, await gitStatus(cwd), this.locale);
-        const reviews = await this.reviewPhase(agents, reports);
+        const gitAfter = await gitStatus(cwd);
+        const gitChanges = describeGitChanges(gitBefore, gitAfter, this.locale);
+        const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
+        if (this.stopped) return;
+        const reviews = await this.reviewPhase(agents, reports, changed, failed);
         if (this.stopped) return;
         this.markUnreviewed(reports, reviews);
         const fix = await this.fixPhase(reviews);
@@ -674,7 +688,7 @@ class Orchestrator extends EventEmitter {
   // 階段四:交叉審查
   // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
   // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
-  async reviewPhase(agents: AgentConfig[], reports: ExecReport[]): Promise<Review[]> {
+  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = []): Promise<Review[]> {
     const pairs = pickReviewPairs(agents, reports);
     if (pairs.length === 0) {
       if (reports.length >= 1) this.system(this.text('sys.noReviewer'), { level: 'warn' });
@@ -682,20 +696,97 @@ class Orchestrator extends EventEmitter {
     }
     this.setPhase({ code: 'review' });
     const group = crypto.randomUUID();
+    const cwd = this.taskCwd || this.config.settings.workDir;
+    // 可能動過工作目錄的成員:有改檔權限的 CLI 成員(含執行失敗的,它可能改到一半),
+    // 以及真的用工具改過檔的 API 成員。唯讀成員、沒改任何檔的 API 成員不算。
+    const writers = [...reports, ...failed].filter((r) => effectiveCanEdit(r.agent)
+      && (getAdapter(r.agent.cli)?.type !== 'openai' || ownPaths(r).size > 0));
     const jobs = pairs.map(({ reviewer, target }) => {
-      const prompt = [
-        this.text('prompt.review', { name: target.agent.name }),
-        this.text('prompt.reviewWhat'),
-        this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
+      // 審查的核心是「看到實際改動」。以前對每位審查者都說「請打開檔案確認」,但 API 與本機
+      // 模型在審查時沒有任何工具,只看得到一行稽核摘要——它們只能審執行者自己寫的報告,
+      // 或者像實際發生過的那樣,把工具呼叫當成文字寫出來假裝讀了檔。依審查者的能力給它
+      // 看得到改動的方式,讓「請打開檔案」這句話對每一位都做得到。
+      const access = reviewAccess(getAdapter(reviewer.cli));
+      // API 成員只能透過檔案工具改檔,工具紀錄就是它全部的改動;CLI 成員直接動檔案,
+      // 只能看工作目錄的差異,而那是所有成員改動的總和。
+      const tracked = getAdapter(target.agent.cli)?.type === 'openai';
+      const own = ownPaths(target);
+      //   readonly  被審者沒有改檔權限:它的工作不會改動檔案,只審回報(別人的改動不列給它)
+      //   listed    有清單
+      //   untouched API 成員的工具紀錄裡沒有任何改檔
+      //   none      工作目錄前後沒有差異(例如只做分析的任務)
+      //   unknown   拿不到工作目錄快照(太大或讀不到)
+      // 拿不到清單時不能照樣說「下面附上了內容」——後面什麼都沒有,審查者只能看報告下判斷,
+      // 正是這個改動要防止的假審查。改成照實說,並要求它不要只憑報告宣告沒問題。
+      const readOnlyTarget = !effectiveCanEdit(target.agent);
+      const all = readOnlyTarget ? [] : tracked ? [...own] : reviewFiles(target, changed);
+      const files = all.slice(0, REVIEW_FILES_MAX);
+      const more = all.length - files.length;
+      const state = readOnlyTarget ? 'readonly' : files.length > 0 ? 'listed' : tracked ? 'untouched' : changed === null ? 'unknown' : 'none';
+      const opening = access === 'open' ? 'prompt.review' : ({
+        readonly: 'prompt.reviewReadOnly',
+        listed: access === 'inline' ? 'prompt.reviewInline' : 'prompt.reviewAttached',
+        untouched: 'prompt.reviewUntouched',
+        none: 'prompt.reviewNoChanges',
+        unknown: access === 'inline' ? 'prompt.reviewInlineUnknown' : 'prompt.review',
+      } as const)[state];
+      const toolLine = access !== 'tool' ? null
+        : state === 'listed' ? 'prompt.reviewReadTool' : state === 'unknown' ? 'prompt.reviewReadToolUnlisted' : 'prompt.reviewReadToolAny';
+      const openLine = access !== 'open' ? null
+        : state === 'none' ? 'prompt.reviewNoFilesChanged' : state === 'untouched' ? 'prompt.reviewUntouchedLine' : null;
+      // 還有別人可能動過工作目錄時,差異是所有人的改動,分不出哪個檔案是誰改的:照實標明
+      const shared = writers.some((r) => r !== target) && files.some((f) => !own.has(f));
+      const list = [...files.map((f) => `- ${f}`), ...(more > 0 ? [this.text('git.more', { n: more })] : [])].join('\n');
+      // 有工具的審查者也附上內容:範本支援工具不代表它選的模型支援,被拒時 adapter 會不帶工具重送
+      const { text: content, omitted } = access !== 'open' && files.length ? this.inlineReviewContent(files, cwd) : { text: '', omitted: [] as string[] };
+      const vars = { name: target.agent.name, mark: MARK(NO_ISSUES) };
+      const lines: Array<string | null> = [
+        this.text(opening, vars),
+        toolLine ? this.text(toolLine, vars) : null,
+        openLine ? this.text(openLine, vars) : null,
         '',
         this.text('prompt.reviewTask', { task: target.task }),
         '',
         this.text('prompt.reviewReport', { report: target.report }),
-      ].join('\n');
-      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group })
+        files.length ? `\n${this.text(shared ? 'prompt.reviewFilesAll' : 'prompt.reviewFiles', { name: target.agent.name, list })}` : null,
+        content ? `\n${content}` : null,
+        // 清單最多 20 個,附內容最多 6 個、兩萬字:沒附上的要點名,不能讓審查者以為看到了全部
+        omitted.length ? `\n${this.text('prompt.reviewOmitted', { list: omitted.map((f) => `- ${f}`).join('\n') })}` : null,
+        // 判定規則放在最後:前面可能附了上萬字的檔案內容,規則寫在內容之前,模型讀完內容就忘了——
+        // 實測本機模型會在指出錯誤之後照樣寫上 [NO_ISSUES],或把它接在句尾而不是單獨一行。
+        '',
+        this.text('prompt.reviewWhat'),
+        this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
+      ];
+      const prompt = lines.filter((line): line is string => line !== null).join('\n');
+      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined })
         .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
+  }
+
+  // 無法自行讀檔的審查者:用唯讀的檔案工具把內容讀出來附上。沿用同一層沙箱——
+  // 不能讀 .git、不能經由符號連結逃出工作目錄、只收 UTF-8 文字、有大小上限——不另寫一套讀檔。
+  // 回傳附上的內容,以及因為數量或長度上限而沒附上的檔案
+  inlineReviewContent(files: string[], cwd: string): { text: string; omitted: string[] } {
+    let session: FileToolSession;
+    try { session = new FileToolSession(cwd, { readOnly: true }); } catch { return { text: '', omitted: files }; }
+    let budget = REVIEW_INLINE_TOTAL_CHARS;
+    const blocks: string[] = [];
+    const omitted: string[] = [];
+    for (const [i, file] of files.entries()) {
+      if (i >= REVIEW_INLINE_FILES || budget <= 0) { omitted.push(file); continue; }
+      const r = session.execute('read_file', { path: file, limit: Math.min(REVIEW_INLINE_FILE_CHARS, budget) });
+      if (r.ok) {
+        const content = r.content || '';
+        budget -= content.length;
+        blocks.push(this.text('prompt.reviewFileBlock', { path: file, content: r.truncated ? content + this.text('prompt.reviewTruncated') : content }));
+      } else {
+        // 刪掉的檔案也會落在這裡;讀不到的原因照實交給審查者
+        blocks.push(this.text('prompt.reviewFileUnreadable', { path: file, error: r.error || '' }));
+      }
+    }
+    return { text: blocks.length ? `${this.text('prompt.reviewContent')}\n${blocks.join('\n\n')}` : '', omitted };
   }
 
   // 把一位成員這回合的檔案操作寫成稽核訊息。
@@ -930,7 +1021,7 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false }: TurnOptions = {}): Promise<TurnOutcome> {
+  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false, readOnlyFileTools = false, ephemeral }: TurnOptions = {}): Promise<TurnOutcome> {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}) });
     const transcript = this.unseenTranscript(agent, msg);
@@ -951,6 +1042,8 @@ class Orchestrator extends EventEmitter {
       cwd: this.taskCwd || this.config.settings.workDir,
       locale: this.locale,
       fileToolsEnabled,
+      readOnlyFileTools,
+      ephemeral,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
@@ -1141,21 +1234,136 @@ function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: Exec
   return reviewer ? [{ reviewer, target }] : [];
 }
 
+// ---------- 審查者看得到改動的方式 ----------
+const REVIEW_FILES_MAX = 20;
+const REVIEW_INLINE_FILES = 6;
+const REVIEW_INLINE_FILE_CHARS = 6000;
+const REVIEW_INLINE_TOTAL_CHARS = 20000;
+// 「檔案數 × 回報長度」的上限,約 0.1 秒內掃得完
+const MENTION_SCAN_BUDGET = 50_000_000;
+
+//   open   本身就能依路徑讀檔(Claude Code、Codex、Cursor 宣告了 filePath)
+//   tool   OpenAI 相容端點且範本開了檔案工具:給唯讀的 read_file,內容也照樣附上
+//   inline 兩者皆否:把改動檔案目前的內容直接附在提示詞裡
+// 依能力分,不依品牌分:模型換版本很快,能力才是這一步真正需要知道的事。
+function reviewAccess(adapter: Adapter | null | undefined): 'open' | 'tool' | 'inline' {
+  if (!adapter) return 'inline';
+  if (attachmentCapabilities(adapter).modes.has('filePath')) return 'open';
+  // OpenAI 相容 adapter 的 supportsEdit 就等於「範本明確開啟了檔案工具,端點支援工具呼叫」
+  if (adapter.type === 'openai' && adapter.supportsEdit) return 'tool';
+  return 'inline';
+}
+
+// 這位成員自己用工具改過的檔案(精確)
+function ownPaths(report: ExecReport): Set<string> {
+  return new Set((report.toolEvents || [])
+    .filter((e) => e.ok !== false && e.tool !== 'read_file' && e.path)
+    .map((e) => String(e.path)));
+}
+
+// CLI 被審者要審的檔案:自己的工具紀錄(通常沒有)+ 工作目錄的差異。附內容有數量上限,
+// 排前面的才看得到,所以任務或回報裡提到的排前面。其他成員工具紀錄裡的檔案不排除:
+// CLI 成員可能也改了同一個檔案,排除掉就會把它的改動藏起來。
+// 回傳完整清單;超過 REVIEW_FILES_MAX 的部分由呼叫端截掉並註明還有幾個。
+function reviewFiles(target: ExecReport, changed: string[] | null): string[] {
+  const own = ownPaths(target);
+  const rest = (changed || []).filter((f) => !own.has(f));
+  const said = `${target.task}\n${target.report}`;
+  // 找「提到的檔案」是在主程序上同步做字串搜尋:成員一口氣產生十萬個檔案(例如 clone 一個 repo)
+  // 又寫了長回報時,會把介面卡住好幾秒。超過工作量上限就不排序,照路徑順序列。
+  if (rest.length * said.length > MENTION_SCAN_BUDGET) return [...own, ...rest];
+  const hit = new Set(rest.filter((f) => said.includes(f) || (path.basename(f).length >= 3 && said.includes(path.basename(f)))));
+  return [...own, ...rest.filter((f) => hit.has(f)), ...rest.filter((f) => !hit.has(f))];
+}
+
+// ---------- 工作目錄快照 ----------
+// 審查要看的改動 = 執行階段前後,工作目錄裡大小或修改時間變了的檔案(含新增與刪除)。
+// 直接看檔案,不經過 git。前幾版用 git status 前後比對,每一輪 code review 都再找到一個盲點:
+// 不是 git repo(預設工作區就不是)、被 .gitignore 忽略、巢狀 repo、成員自己 commit、
+// 任務前就改過的檔案、中文路徑被跳脫、工作目錄是子資料夾、改到工作目錄外面……
+// 快照只看工作目錄本身,這些情況都不存在。只 stat 不讀內容而且非同步:十萬個檔案約 0.5 秒。
+const SNAPSHOT_MAX_FILES = 100000;
+// 版本控制、相依套件、框架快取與 app 自己的暫存:量大,也不是審查的對象。
+// dist、build、vendor 這類名字不略過:有些專案的原始碼就放在裡面。
+const SNAPSHOT_SKIP = new Set(['.git', '.hg', '.svn', 'node_modules', 'bower_components', '.venv', 'venv', '__pycache__', '.tox',
+  '.next', '.nuxt', '.gradle', 'Pods', '.DS_Store', RUNTIME_DIR]);
+// 依 Cache Directory Tagging 規範標記自己是快取的目錄(例如 Rust 的 target/)也略過
+const CACHE_TAG = 'CACHEDIR.TAG';
+type Snapshot = Map<string, string>;
+
+// 相對路徑(以 / 分隔)→「大小:修改時間」。超過上限或工作目錄本身讀不到時回 null(拿不到),
+// 不回一份不完整的快照假裝完整。讀不到的子資料夾直接略過:成員以同一個使用者身分執行,
+// 那裡它一樣讀不到。符號連結不跟隨,避免繞出工作目錄或繞成迴圈。
+async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES): Promise<Snapshot | null> {
+  const out: Snapshot = new Map();
+  let over = false;
+  const walk = async (rel: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(rel ? path.join(cwd, rel) : cwd, { withFileTypes: true }); }
+    catch (e) { if (!rel) throw e; return; }
+    if (rel && entries.some((e) => e.name === CACHE_TAG && e.isFile())) return;
+    const files: string[] = [];
+    const dirs: string[] = [];
+    for (const e of entries) {
+      if (SNAPSHOT_SKIP.has(e.name)) continue;
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) dirs.push(child);
+      else if (e.isFile()) files.push(child);
+    }
+    if (out.size + files.length > maxFiles) { over = true; return; }
+    const stats = await Promise.all(files.map((f) => fs.promises.stat(path.join(cwd, f)).catch(() => null)));
+    files.forEach((f, i) => { const st = stats[i]; if (st) out.set(f, `${st.size}:${st.mtimeMs}`); });
+    for (const d of dirs) { if (over) return; await walk(d); }
+  };
+  try { await walk(''); } catch { return null; }
+  return over ? null : out;
+}
+
+// 兩份快照都在才比得出來,任何一份拿不到就是拿不到
+function diffSnapshots(before: Snapshot | null, after: Snapshot | null): string[] | null {
+  if (!before || !after) return null;
+  const out: string[] = [];
+  for (const file of new Set([...before.keys(), ...after.keys()])) if (before.get(file) !== after.get(file)) out.push(file);
+  return out.sort();
+}
+
 // ---------- git 變更 ----------
 // 讀工作目錄的 git 變更;不是 git repo、找不到 git、逾時都安靜回 null,絕不影響主流程。
 function gitStatus(cwd: string): Promise<GitStatus | null> {
   return new Promise((resolve) => {
     try {
       // --untracked-files=all:預設的 normal 模式會把整個未追蹤目錄收合成「?? dir/」,拿不到檔案清單
-      execFile('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      // -z:以 NUL 分隔、完全不加引號或跳脫。預設輸出會把中文檔名轉成 "\345\255\220…" 這種
+      // 八進位跳脫碼,拿去讀檔一定失敗;工作目錄是中文資料夾時,show-prefix 輸出的正常中文
+      // 還會對不上那些跳脫碼,整批檔案都被丟掉。
+      execFile('git', ['status', '--porcelain', '-z', '--untracked-files=all'], { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
         resolve(err ? null : parsePorcelain(stdout));
       });
     } catch { resolve(null); }
   });
 }
 
-// 「XY path」→ Map(path → status);rename 的「old -> new」取新路徑
+// -z 格式:每筆是「XY 路徑」,以 NUL 結尾。改名/複製(X 或 Y 是 R、C)時,後面再跟一筆
+// 原本的路徑——那一筆不是獨立的變更,要跳過(實測:「RM 新.md\0舊.md\0」)。
+function parsePorcelainZ(text: string): GitStatus {
+  const out: GitStatus = new Map();
+  const fields = text.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    if (entry.length < 4) continue;
+    const xy = entry.slice(0, 2);
+    const file = entry.slice(3);
+    if (file) out.set(file, xy.trim());
+    if (/[RC]/.test(xy)) i++; // 跳過緊接著的原路徑
+  }
+  return out;
+}
+
+// 「XY path」→ Map(path → status);rename 取新路徑。
+// 兩種格式都收:-z(實際執行時用的,NUL 分隔、路徑原樣)與舊的換行格式(保留給既有呼叫端)。
 function parsePorcelain(stdout: unknown): GitStatus {
+  const text = String(stdout || '');
+  if (text.includes('\0')) return parsePorcelainZ(text);
   const out: GitStatus = new Map();
   for (const line of String(stdout || '').split('\n')) {
     if (line.length < 4) continue;
@@ -1174,7 +1382,9 @@ function parsePorcelain(stdout: unknown): GitStatus {
 // 並標出哪些檔案在執行前就已經是變更狀態,讓總結不會過度宣稱。
 // 附件暫存目錄是本 app 自己放的,不是成員改的檔案,一定要從變更報告排除,
 // 否則使用者上傳的圖會被當成「執行階段產生的變更」。
-const isRuntimePath = (file: string) => file === RUNTIME_DIR || file.startsWith(`${RUNTIME_DIR}/`);
+// 比對路徑的每一段,不只開頭:工作目錄是 repo 的子資料夾時,porcelain 給的是
+// 「sub/.roundtable-runtime/…」,只看開頭的話總結會把 app 自己的附件暫存列成成員的改動。
+const isRuntimePath = (file: string) => file.split('/').includes(RUNTIME_DIR);
 
 function describeGitChanges(before: GitStatus | null, after: GitStatus | null, locale: TextLocale = 'zh-Hant') {
   if (!after || after.size === 0) return null;
@@ -1253,4 +1463,4 @@ function resolveAgent(token: unknown, codes: Map<string, AgentConfig>, agents: A
   }) || null;
 }
 
-export { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, extractJson, resolveAgent };
+export { Orchestrator, truncateTranscript, pickReviewPairs, parsePorcelain, describeGitChanges, snapshotDir, diffSnapshots, extractJson, resolveAgent };

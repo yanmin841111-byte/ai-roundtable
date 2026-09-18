@@ -7,7 +7,7 @@ import { truncate, createStopHandle, formatTimeout, DEFAULT_TURN_TIMEOUT_MS } fr
 import { renderDeep } from './template';
 import { findModel, resolveModelId, resolveEffort } from '../model-rules';
 import { normalizeModels, normalizeCapabilities } from './spec';
-import { FILE_TOOL_DEFINITIONS, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
+import { FILE_TOOL_DEFINITIONS, FILE_TOOL_READ_DEFINITIONS, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
 import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
 import { tx } from '../text';
 import type { TextLocale } from '../text';
@@ -227,10 +227,14 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     const timeoutMs = spec.timeoutMs || ctx.timeoutMs || DEFAULT_TURN_TIMEOUT_MS;
     const reasoningFields = spec.reasoningFields || ['reasoning_content', 'reasoning'];
 
-    const toolsEnabled = supportsFileTools && agent.canEdit === true && ctx.fileToolsEnabled === true;
+    // 寫入工具要三重閘門全開;唯讀工具(審查回合)只要端點支援工具呼叫就好——
+    // 讀檔不改變任何東西,不需要改檔權限,也不需要另一位 reviewer。
+    const writeTools = supportsFileTools && agent.canEdit === true && ctx.fileToolsEnabled === true;
+    const readTools = supportsFileTools && ctx.readOnlyFileTools === true;
+    const toolsEnabled = writeTools || readTools;
     let fileTools: FileToolSession | null = null;
     if (toolsEnabled) {
-      try { fileTools = new FileToolSession(ctx.cwd); }
+      try { fileTools = new FileToolSession(ctx.cwd, { readOnly: !writeTools }); }
       catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: tx(ctx.locale || locale(), 'api.fileToolsFailed', { error: e.message }), toolEvents: [] }; }
     }
     const deadline = Date.now() + timeoutMs;
@@ -242,7 +246,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         model,
         messages,
         stream,
-        ...(fileTools ? { tools: FILE_TOOL_DEFINITIONS, tool_choice: 'auto' } : {}),
+        ...(fileTools ? { tools: fileTools.readOnly ? FILE_TOOL_READ_DEFINITIONS : FILE_TOOL_DEFINITIONS, tool_choice: 'auto' } : {}),
         ...(stream && spec.streamUsage !== false ? { stream_options: { include_usage: true } } : {}),
       };
 
@@ -328,7 +332,10 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       const toolEvents: any[] = [];
 
       // 每輪工具本身另有 20 次硬上限；API 往返也設上限，避免模型反覆呼叫失敗工具。
-      for (let apiRound = 0; apiRound < 10; apiRound++) {
+      // 唯讀回合(審查)多給幾輪:一次只讀一個檔案的模型,讀完清單上十個檔案就用光 10 輪,
+      // 整個審查被丟掉。讀檔不會改變任何東西,仍受工具次數上限與回合逾時約束。
+      const maxApiRounds = fileTools && fileTools.readOnly ? FILE_TOOL_MAX_CALLS + 2 : 10;
+      for (let apiRound = 0; apiRound < maxApiRounds; apiRound++) {
         if (Date.now() >= deadline) { error = tx(ctx.locale || locale(), 'api.runTimeout', { duration: formatTimeout(timeoutMs, ctx.locale || locale()) }); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
         status = result.status;
@@ -369,20 +376,43 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
           exchange.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(toolResult) });
         }
       }
-      if (!error) error = tx(ctx.locale || locale(), 'api.toolRoundsExceeded');
+      if (!error) error = tx(ctx.locale || locale(), 'api.toolRoundsExceeded', { n: maxApiRounds });
       return { text, thinking, usage, error, status, exchange, toolEvents };
     };
 
     let result = await runConversation(userContent);
+    // 重送前清掉畫面上已經顯示的文字:被放棄的那次嘗試可能已經說了半句話,
+    // 重送的結果若是空的,orchestrator 會把那半句話當成這回合的回覆。
+    const restart = () => { ctx.onText(''); ctx.onThinking(''); };
+
+    // 範本支援工具,不代表這位成員選的模型支援:同一個 Ollama 範本可以選到不收 tools 的模型,
+    // 帶了 tools 的請求會直接被拒絕(Ollama 回 400,OpenRouter 回 404「沒有支援工具的端點」),整個審查失敗;
+    // 有些端點則是讀過檔之後的下一個請求才被拒。唯讀回合(審查)被拒時不帶工具重送一次,
+    // 並告訴模型這次沒有工具——要審的內容 orchestrator 已經附在提示詞裡。讀檔沒有副作用,
+    // 所以即使已經讀過檔也可以整個重來;會改檔的回合不走這條路。
+    // 這一步排在拿掉圖片之前:能看圖但不支援工具的模型,不該先白白丟掉圖片。
+    let toolsNote = '';
+    if (result.error && fileTools && fileTools.readOnly && [400, 404, 422].includes(result.status)) {
+      ctx.onActivity({ id: 'tools-fallback', kind: 'note', title: tx(ctx.locale || locale(), 'api.readToolsFallback', { error: result.error.slice(0, 120) }), status: 'done' });
+      fileTools = null;
+      toolsNote = tx(ctx.locale || locale(), 'api.readToolsUnavailable');
+      userContent = typeof userContent === 'string' ? `${userContent}\n\n${toolsNote}` : [...userContent, { type: 'text', text: toolsNote }];
+      restart();
+      result = await runConversation(userContent);
+    }
+
     // 很多 OpenAI 相容端點(或同一家的純文字模型)不收 image_url,會直接回 4xx。
     // 帶了圖片才失敗時改用純文字重送一次，否則每回合都會重送同一張圖、一直失敗。
     const imageCount = Array.isArray(userContent) ? userContent.filter((p: any) => p.type === 'image_url').length : 0;
-    if (result.error && imageCount && [400, 415, 422].includes(result.status)) {
+    // 已經改過檔案就不重來:4xx 不一定是圖片造成的(例如內容超過長度上限),整個回合重跑會把
+    // 同一段修改再套用一次。寫入已經落盤、稽核紀錄也在,照實回報失敗,讓審查去看。
+    const wrote = (result.toolEvents || []).some((e: any) => e.ok && e.name !== 'read_file');
+    if (result.error && imageCount && !wrote && [400, 415, 422].includes(result.status)) {
       ctx.onActivity({ id: 'image-fallback', kind: 'note', title: tx(ctx.locale || locale(), 'api.imageFallback', { error: result.error.slice(0, 120), n: imageCount }), status: 'done' });
-      // 第一輪可能已經改過檔案。那些稽核紀錄不能因為重試就消失:
-      // 檔案已經落盤,少了紀錄就等於沒有人會去審它,而畫面看起來一切正常。
+      // 走到這裡的第一輪只可能讀過檔、或寫入失敗(成功寫過檔的回合不重來)。這些紀錄照樣保留
       const executedBeforeRetry = result.toolEvents || [];
-      userContent = ctx.prompt;
+      userContent = toolsNote ? `${ctx.prompt}\n\n${toolsNote}` : ctx.prompt;
+      restart();
       result = await runConversation(userContent);
       if (executedBeforeRetry.length) result.toolEvents = [...executedBeforeRetry, ...(result.toolEvents || [])];
     }
@@ -390,8 +420,11 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     let sessionId = ctx.sessionId || null;
     if (!result.error && spec.history !== false) {
       sessionId = sessionId || crypto.randomUUID();
-      const next = [...history, ...result.exchange];
-      sessions.set(sessionId, compactHistoryImages(next.slice(-maxHistory)));
+      // 審查回合(唯讀)的工具往返只留最後的回答。會改檔的回合保留寫入的呼叫:
+      // 修復回合沒有工具可以重讀,成員只能從記憶裡看到自己寫了什麼。
+      const exchange = readTools && !writeTools ? collapseToolTurn(result.exchange, result.text) : result.exchange;
+      const turn = forgetEphemeral(exchange, ctx.ephemeral, tx(ctx.locale || locale(), 'api.ephemeralDropped'));
+      sessions.set(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory))));
       ctx.onSession(sessionId);
     }
     return { text: result.text, thinking: result.thinking, sessionId, usage: result.usage, error: result.error, toolEvents: result.toolEvents };
@@ -415,6 +448,54 @@ async function discoverOllama({ fetchImpl, baseUrl = OLLAMA_DEFAULT_BASE_URL, ge
   const list = adapter.listModels ? adapter.listModels() : { models: [], source: 'none' };
   if (list.error) return { ok: false, baseUrl, models: [], error: list.error, hint: health.hint || null };
   return { ok: true, baseUrl, models: list.models || [], error: null, hint: null };
+}
+
+// 審查回合存進記憶時只留下「使用者的訊息 + 最後的回答」。
+// 一回合的讀檔往返會產生好幾對「助理呼叫 + 工具結果」:讀七個檔案就是十四則。記憶依則數裁切
+// (Ollama 範本只留 16 則),它們會把之前的討論與任務整個擠掉,而成員之後只會收到沒看過的新訊息,
+// 等於永久失去前情。審查讀過什麼,之後用不到。
+function collapseToolTurn(exchange: any[], text: string) {
+  if (!exchange.some((m) => m && m.role === 'tool')) return exchange;
+  return [exchange[0], { role: 'assistant', content: text || '' }];
+}
+
+// 依則數裁切歷史,可能切在「助理發出工具呼叫」與「工具結果」之間,讓開頭留下沒有對應
+// 呼叫的 tool 訊息。OpenAI 規格不接受這種訊息,嚴格的端點(DeepSeek、OpenRouter…)會以 400
+// 拒絕這位成員之後的每一個回合。裁完之後把開頭孤立的 tool 訊息丟掉。
+// (實測 Ollama 會接受,但不能依賴寬鬆的端點。)
+function trimHistory(history: any[], max: number) {
+  const kept = history.slice(-max);
+  let start = 0;
+  while (start < kept.length && kept[start] && kept[start].role === 'tool') start++;
+  return kept.slice(start);
+}
+
+// 讀檔結果一則可能就幾十 KB。存進歷史的話,之後的每一個回合都會整包重送。
+// 之後需要時可以重讀,所以存進歷史時只留路徑與雜湊,把檔案內容拿掉;寫入的呼叫(成員自己寫的內容)不動。
+const TOOL_HISTORY_MAX_CHARS = 2000;
+function compactHistoryTools(history: any[]) {
+  return history.map((m) => {
+    if (!m || m.role !== 'tool' || typeof m.content !== 'string' || m.content.length <= TOOL_HISTORY_MAX_CHARS) return m;
+    try {
+      const result = JSON.parse(m.content);
+      if (result && typeof result.content === 'string') {
+        return { ...m, content: JSON.stringify({ ...result, content: `(已讀取 ${result.content.length} 字元;內容已從記憶中移除,需要時請重新讀取)` }) };
+      }
+    } catch {}
+    return { ...m, content: `${m.content.slice(0, TOOL_HISTORY_MAX_CHARS)}…(已截短)` };
+  });
+}
+
+// 只屬於這一回合的內容(審查時附上的檔案)存進記憶前換成一行說明
+function forgetEphemeral(exchange: any[], ephemeral: string | undefined, placeholder: string) {
+  if (!ephemeral) return exchange;
+  const strip = (text: string) => (text.includes(ephemeral) ? text.split(ephemeral).join(placeholder) : text);
+  return exchange.map((m) => {
+    if (!m || m.role !== 'user') return m;
+    if (typeof m.content === 'string') return { ...m, content: strip(m.content) };
+    if (Array.isArray(m.content)) return { ...m, content: m.content.map((p: any) => (p && p.type === 'text' && typeof p.text === 'string' ? { ...p, text: strip(p.text) } : p)) };
+    return m;
+  });
 }
 
 // 對話記憶裡只保留最近一則帶圖訊息的影像資料，更早的換成文字佔位。
