@@ -7,6 +7,12 @@ process.stdin.on('end', () => {
   const me = process.argv[2];
   const en = /^[A-Za-z]/.test(phase);
   const key = { 分工: 'divide', 'Divide the work': 'divide', 執行: 'execute', Execute: 'execute', 交叉審查: 'review', 'Cross-review': 'review', 修復: 'fix', Repair: 'fix', 總結: 'summary', Summary: 'summary' }[phase] || 'discuss';
+  // --ask:討論第 1 回合改成用 [ASK] 反問使用者(其餘回合照常),給選項式提問的 e2e 場景用
+  const askRound1 = process.argv.includes('--ask') && key === 'discuss' && /第 1\/|round 1\//.test(input);
+  if (askRound1) {
+    process.stdout.write(`${me} 需要先確認一件事\n[ASK]\n要先接哪一種本地端點?\n- Ollama\n- LM Studio\n[/ASK]\n`);
+    return;
+  }
   const out = {
     divide: en ? '{"summary":"one file each","assignments":[{"agent":"A1","task":"create a.txt"},{"agent":"A2","task":"create b.txt"}]}' : '{"summary":"兩人各寫一個檔案","assignments":[{"agent":"A1","task":"建立 a.txt"},{"agent":"A2","task":"建立 b.txt"}]}',
     execute: en ? `${me} finished the assigned work` : `${me} 已完成分配的工作`,

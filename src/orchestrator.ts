@@ -4,8 +4,10 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { runTurn, getAdapter, effectiveCanEdit } from './adapters';
-import { hasMarker, stripMarker, findMentions } from './shared';
-import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, PhaseInfo } from './ipc-types';
+import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
+import type { ParsedAsk } from './shared';
+import { isPhaseInfo } from './ipc-types';
+import type { Activity, AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ToolAuditEntry } from './ipc-types';
 import type { Adapter, RunAttachment, Stoppable } from './adapters/types';
 import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
@@ -14,8 +16,12 @@ import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachment
 
 const AGREED = 'AGREED';
 const NO_ISSUES = 'NO_ISSUES';
+const ASK = 'ASK';
 const MARK = (t: string) => `[${t}]`;
 const EMIT_INTERVAL = 70; // 串流更新合併發送的間隔(ms),避免每個 token 都走一次 IPC
+const ASK_TIMEOUT_MS = 5 * 60 * 1000; // 提問等多久算使用者不回答(結算成 defer,流程繼續)
+const ASK_MAX_PER_SESSION = 3;  // 整個對話最多打斷使用者幾次;被節流掉的問題不計入
+const ASK_MAX_ANSWER_CHARS = 2000; // 自由輸入的回答上限
 const SEP = '\n\n';            // 對話紀錄各則之間的分隔
 const TRUNCATE_RESERVE = 200;   // 截斷時為省略提示預留的字元空間
 const MAX_GIT_FILES = 200;      // 總結提示裡最多列出的變更檔案數
@@ -30,11 +36,20 @@ interface TurnOptions {
   phase?: PhaseInfo;
   hideAgreed?: boolean;
   group?: string | null;
+  // 允許這一回合使用寫檔工具。只有執行階段、且確認有人能審查這次改動時才會是 true。
+  // adapter 端還有兩層把關(範本啟用 fileTools、成員 canEdit),三層都成立才會把工具送給模型。
+  fileToolsEnabled?: boolean;
 }
 
 interface TurnOutcome {
+  // 已剝除 [ASK] 區塊的文字。所有下游流程(執行回報、審查、修復、總結)一律用這個,
+  // 否則不能提問的階段寫出的 [ASK] 雖然介面看不到,仍會原樣送進下一個模型的提示詞。
   text: string;
+  // 未經處理的原始輸出,只有 discussPhase 拿去餵 parseAsk
+  raw: string;
   error: string | null;
+  // 這一回合實際做了哪些檔案操作。沒有使用工具的 adapter 一律是空陣列。
+  toolEvents: ToolAuditEntry[];
 }
 
 // 主持人輸出的分工;_agentId / _agentName 是比對成員後補上的欄位
@@ -55,6 +70,8 @@ interface ExecReport {
   task: string;
   report: string;
   error: string | null;
+  // 這位成員在執行階段實際做了哪些檔案操作;沒有使用工具時是空陣列
+  toolEvents?: ToolAuditEntry[];
 }
 
 interface ReviewPair {
@@ -113,6 +130,15 @@ class Orchestrator extends EventEmitter {
   taskCwd: string | null;
   directedQueue: Array<{ msg: LiveMessage; agentIds: string[] }>;
   emitTimers: Map<string, NodeJS.Timeout>;
+  // ---------- 選項式提問 ----------
+  // pendingQuestion 與 askResolve 一定同時有值或同時為 null:askResolve 是「還有人在等」的唯一判準,
+  // settleQuestion() 把它清成 null 就等於 first-answer-wins,後到的回答/逾時/stop 都會被擋掉。
+  pendingQuestion: PendingQuestion | null;
+  askResolve: ((answer: QuestionAnswer) => void) | null;
+  askTimer: NodeJS.Timeout | null;
+  askCount: number;                        // 本對話已實際暫停過幾次(session 上限用)
+  askRoundUsed: number | null;             // 本任務中已經觸發過提問的討論回合
+  askLastRound: Record<string, number>;    // agentId -> 上次觸發提問的回合,用來擋連續兩回合
 
   constructor(store: Store) {
     super();
@@ -133,6 +159,12 @@ class Orchestrator extends EventEmitter {
     this.taskCwd = null;          // 本次任務開始時的工作目錄;任務中途改設定也不影響暫存與清理
     this.directedQueue = [];      // 進行中用 @ 指定成員的訊息,任務結束前要確保對方有回覆
     this.emitTimers = new Map(); // msgId -> timer,串流更新的節流
+    this.pendingQuestion = null;
+    this.askResolve = null;
+    this.askTimer = null;
+    this.askCount = 0;
+    this.askRoundUsed = null;
+    this.askLastRound = {};
   }
 
   // ---------- 狀態與事件 ----------
@@ -154,6 +186,9 @@ class Orchestrator extends EventEmitter {
       messages: this.messages,
       conversationId: this.conversationId,
       attachments: this.attachments,
+      // 待答問題不進 session 紀錄,但一定要進 snapshot:renderer 重載時只靠即時事件就補不回卡片,
+      // 流程還在等回答,使用者卻沒有地方可以回答。
+      question: this.pendingQuestion,
     };
   }
   // phase 只帶 code 與參數,顯示文字由 renderer 依 uiLocale 組出。
@@ -227,8 +262,103 @@ class Orchestrator extends EventEmitter {
     return msg;
   }
 
+  // ---------- 選項式提問 ----------
+  // 使用者按下選項 / 送出自由回答時,由 IPC 層原封不動轉進來。
+  // id 驗證、內容正規化與 first-answer-wins 一律在這裡做,IPC 層不保留任何狀態。
+  answerQuestion(answer: QuestionAnswer) {
+    const q = this.pendingQuestion;
+    if (!q || !answer || typeof answer !== 'object' || answer.id !== q.id) return;
+    const valid = new Set(q.options.map((o) => o.id));
+    const optionIds = (Array.isArray(answer.optionIds) ? answer.optionIds : []).filter((id) => valid.has(id));
+    const text = typeof answer.text === 'string' ? answer.text.trim().slice(0, ASK_MAX_ANSWER_CHARS) : '';
+    // 宣稱已回答卻兩者皆空,等同「你決定」,不要送一句空話回去干擾成員
+    const answered = answer.decision === 'answered' && (optionIds.length > 0 || text.length > 0);
+    this.settleQuestion(answered ? { id: q.id, optionIds, text, decision: 'answered' } : { id: q.id, decision: 'defer' });
+  }
+
+  // 回答、逾時、stop() 三條路徑唯一的收斂點。回傳是否真的由這次呼叫結算。
+  settleQuestion(answer: QuestionAnswer): boolean {
+    const resolve = this.askResolve;
+    if (!resolve) return false; // 已經結算過,或本來就沒有人在等
+    try {
+      if (this.askTimer) clearTimeout(this.askTimer);
+    } finally {
+      // 先把狀態清乾淨再 resolve,等待端醒來時看到的一定是「沒有待答問題」
+      this.askTimer = null;
+      this.askResolve = null;
+      this.pendingQuestion = null;
+      this.emit('state', { running: this.running, phase: this.phase, question: null });
+    }
+    resolve(answer);
+    return true;
+  }
+
+  // 節流規則(已定案):每回合最多一題、每對話最多三題、同一成員不得連續兩回合提問。
+  canAsk(agent: AgentConfig, round: number) {
+    if (this.stopped || this.askResolve) return false;
+    if (this.askCount >= ASK_MAX_PER_SESSION) return false;
+    if (this.askRoundUsed === round) return false;
+    return this.askLastRound[agent.id] !== round - 1;
+  }
+
+  // 只由 discussPhase 呼叫(唯一循序執行的階段)。回傳是否真的暫停過流程。
+  // 平行階段不呼叫這裡,所以「同時只有一個待答問題」是結構上的保證,不靠判斷式。
+  async maybeAsk(agent: AgentConfig, text: string, round: number, maxRounds: number): Promise<boolean> {
+    const parsed: ParsedAsk | null = parseAsk(text);
+    // 被節流的問題不暫停也不計數;[ASK] 區塊已經在 turn() 裡從顯示文字剝掉了
+    if (!parsed || !this.canAsk(agent, round)) return false;
+
+    const question: PendingQuestion = {
+      id: crypto.randomUUID(),
+      agentId: agent.id,
+      agentName: agent.name,
+      question: parsed.question,
+      options: parsed.options,
+      allowFree: parsed.allowFree,
+      expiresAt: Date.now() + ASK_TIMEOUT_MS,
+    };
+    this.askCount++;
+    this.askRoundUsed = round;
+    this.askLastRound[agent.id] = round;
+    this.pendingQuestion = question;
+    this.phase = { code: 'ask', names: [agent.name] };
+
+    const answer = await new Promise<QuestionAnswer>((resolve) => {
+      this.askResolve = resolve;
+      this.askTimer = setTimeout(() => this.settleQuestion({ id: question.id, decision: 'defer' }), ASK_TIMEOUT_MS);
+      // 進入等待狀態只送這一次;卡片與階段文字都由這則事件驅動
+      this.emit('state', { running: this.running, phase: this.phase, question } as ChatState);
+    });
+
+    // 回答寫進對話紀錄,讓後面每一位成員都看得到,否則下一位會再問一次同樣的事
+    if (!this.stopped) this.pushMessage({ kind: 'user', text: this.answerText(question, answer) });
+    this.setPhase({ code: 'discuss', round, maxRounds });
+    return true;
+  }
+
+  answerText(question: PendingQuestion, answer: QuestionAnswer) {
+    const name = quoteName(this.locale, question.agentName);
+    if (answer.decision !== 'answered') return this.text('sys.askDeferred', { name });
+    const picked = (answer.optionIds || [])
+      .map((id) => question.options.find((o) => o.id === id))
+      .filter(Boolean)
+      .map((o) => o!.label);
+    const parts = [...picked, ...(answer.text ? [answer.text] : [])];
+    return this.text('sys.askAnswered', { name, answer: parts.join('\n') });
+  }
+
+  // reset / 載入歷史對話時把提問狀態歸零。等待中的 promise 交給 settleQuestion 結算成 defer。
+  clearAsk() {
+    this.settleQuestion({ id: this.pendingQuestion?.id || '', decision: 'defer' });
+    this.askCount = 0;
+    this.askRoundUsed = null;
+    this.askLastRound = {};
+  }
+
   stop() {
     this.stopped = true;
+    // 卡在等回答的流程一定要先放行,否則 runExclusive 會永遠停在 await,使用者只能重開 app
+    this.settleQuestion({ id: this.pendingQuestion?.id || '', decision: 'defer' });
     for (const p of this.procs) { try { p.kill('SIGTERM'); } catch {} }
     // stop / app quit 不必等外部 CLI 真正退出才清附件副本。
     this.staged = [];
@@ -237,6 +367,7 @@ class Orchestrator extends EventEmitter {
 
   reset() {
     this.stop();
+    this.clearAsk();
     this.clearEmitTimers();
     // 舊對話的工作目錄暫存一定要清掉,不能留在使用者的 repo 裡
     clearRuntime(this.config.settings.workDir, this.conversationId);
@@ -257,6 +388,8 @@ class Orchestrator extends EventEmitter {
   // 會收到(依上限截斷的)完整對話紀錄,而不是只有新訊息。
   loadConversation({ messages, conversationId }: { messages?: unknown; conversationId?: string | null } = {}) {
     if (this.running) throw new Error('目前仍在進行中,請先停止再載入歷史對話');
+    // 待答問題不寫進 session,載入歷史對話時一律當成已經 defer
+    this.clearAsk();
     this.clearEmitTimers();
     clearRuntime(this.config.settings.workDir, this.conversationId);
     this.conversationId = conversationId && CONVERSATION_ID.test(conversationId) ? conversationId : newConversationId();
@@ -281,13 +414,17 @@ class Orchestrator extends EventEmitter {
       if (mode === 'divide') {
         if (!agreed) this.system(this.text('sys.maxRoundsDivide', { max: this.config.settings.maxRounds }));
         const plan = await this.assignPhase(agents, task);
-        if (this.stopped || !plan) return;
+        if (this.stopped) return;
+        // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
+        // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
+        if (!plan) { await this.summaryPhase(task, 'discuss', {}); return; }
         const gitBefore = await gitStatus(cwd);
         const { reports, failed } = await this.executePhase(agents, plan);
         if (this.stopped) return;
         const gitChanges = describeGitChanges(gitBefore, await gitStatus(cwd), this.locale);
         const reviews = await this.reviewPhase(agents, reports);
         if (this.stopped) return;
+        this.markUnreviewed(reports, reviews);
         const fix = await this.fixPhase(reviews);
         if (this.stopped) return;
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
@@ -311,6 +448,9 @@ class Orchestrator extends EventEmitter {
     this.taskStartIndex = this.messages.length - 1; // user 訊息的位置
     this.taskCwd = cwd;
     this.directedQueue = [];
+    // 回合編號每個任務都從 1 重新算,跨任務比對會誤判;三題上限是對話級的,不在這裡歸零
+    this.askRoundUsed = null;
+    this.askLastRound = {};
     this.stageAttachments(agents, cwd);
     try {
       await body(agents, cwd);
@@ -383,9 +523,14 @@ class Orchestrator extends EventEmitter {
       let agreedCount = 0;
       for (const agent of agents) {
         if (this.stopped) return false;
-        const { text } = await this.turn(agent, this.discussPrompt(agent, task, round, maxRounds), { phase: { code: 'discuss', round, maxRounds } });
+        const { text, raw } = await this.turn(agent, this.discussPrompt(agent, task, round, maxRounds), { phase: { code: 'discuss', round, maxRounds } });
+        // 提問只在討論階段成立:這裡是唯一循序執行的地方,不會有兩位成員同時搶待答狀態。
+        // 只有這裡吃 raw,其餘流程一律用已剝除的 text。
+        const asked = await this.maybeAsk(agent, raw, round, maxRounds);
+        if (this.stopped) return false;
         // 只認「最後幾行、單獨成行」的標記,避免成員在內文中提到它就被誤判為同意
-        if (hasMarker(text, AGREED)) agreedCount++;
+        // 反問使用者的成員這回合不算同意:他自己都還沒下結論
+        if (!asked && hasMarker(text, AGREED)) agreedCount++;
       }
       if (agreedCount === agents.length) { this.system(this.text('sys.agreed', { round })); return true; }
     }
@@ -412,8 +557,14 @@ class Orchestrator extends EventEmitter {
     ].join('\n');
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const { text } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
+      const { text, error } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
       if (this.stopped) return null;
+      // 主持人整個回合就失敗(CLI 沒安裝、key 失效、逾時)時,輸出必然是空的。
+      // 這種情況下報「格式無法解析」是誤診,會讓使用者去調整提示詞而不是去修設定。
+      if (error) {
+        this.system(this.text('sys.planLeadFailed', { name: lead.name }), { level: 'warn' });
+        continue;
+      }
       const plan = extractJson(text) as Plan | null;
       if (plan && Array.isArray(plan.assignments)) {
         for (const a of plan.assignments) {
@@ -460,14 +611,21 @@ class Orchestrator extends EventEmitter {
         '',
         taskText,
       ].join('\n');
+      // 第一層閘門:確認有人能審查這次改動,才把寫檔工具交給模型。
+      // 用全體啟用成員判斷(不是只看這次被分配到工作的人)——沒被分配工作的成員
+      // 一樣能在審查階段擔任 reviewer,這與 pickReviewPairs 的行為一致。
+      const fileToolsEnabled = effectiveCanEdit(agent) && hasQualifiedReviewer(agents, agent.id);
       jobs.push(
-        this.turn(agent, prompt, { phase: { code: 'execute' }, hideAgreed: true, group })
-          .then(({ text, error }) => ({ agent, task: taskText, report: text, error })),
+        this.turn(agent, prompt, { phase: { code: 'execute' }, hideAgreed: true, group, fileToolsEnabled })
+          .then(({ text, error, toolEvents }) => ({ agent, task: taskText, report: text, error, toolEvents })),
       );
     }
     if (jobs.length === 0) { this.system(this.text('sys.nobodyAssigned'), { level: 'warn' }); return { reports: [], failed: [] }; }
 
     const all = await Promise.all(jobs);
+    // 稽核紀錄緊接在執行結果之後寫進 transcript,審查者才能拿實際改動去對照成員的報告。
+    // 用 system 訊息而不是偽裝成使用者發言:它是流程產生的事實,不是任何人說的話。
+    for (const r of all) this.writeToolAudit(r.agent, r.toolEvents || []);
     const reports = all.filter((r) => !r.error && (r.report || '').trim());
     const failed = all.filter((r) => r.error || !(r.report || '').trim());
     if (failed.length) {
@@ -504,6 +662,54 @@ class Orchestrator extends EventEmitter {
         .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
     return Promise.all(jobs);
+  }
+
+  // 把一位成員這回合的檔案操作寫成稽核訊息。
+  // 沒有動到任何檔案就不寫,避免每個唯讀成員後面都掛一則空紀錄。
+  writeToolAudit(agent: AgentConfig, events: ToolAuditEntry[]) {
+    if (!Array.isArray(events) || events.length === 0) return;
+    // read_file 不改變任何東西,列出來只會把審查者的注意力稀釋掉;失敗的讀取仍要留,
+    // 因為那代表成員可能是在資訊不足的情況下做了修改。
+    const shown = events.filter((e) => e.tool !== 'read_file' || !e.ok);
+    if (shown.length === 0) return;
+    const lines = shown.map((e) => {
+      const head = `${e.ok ? '✓' : '✗'} ${e.tool} ${e.path || ''}`.trim();
+      if (!e.ok) return `${head} — ${e.error || this.text('sys.toolUnknownError')}`;
+      // 近似值要在審查者讀到的文字裡就講明,否則它會拿高估的數字當實際改動規模
+      const counts = e.added != null || e.removed != null
+        ? ` (+${e.added || 0}/-${e.removed || 0}${e.statsApproximate ? this.text('sys.toolStatsApprox') : ''})`
+        : '';
+      return `${head}${counts}${e.reason ? ` — ${e.reason}` : ''}`;
+    });
+    this.system(this.text('sys.toolAudit', { name: agent.name, list: lines.join('\n') }), {
+      tag: 'tool-audit',
+      toolAudit: shown,
+      ...(shown.some((e) => !e.ok) ? { level: 'warn' } : {}),
+    });
+  }
+
+  // 標記「這次改動沒有人看過」。
+  //
+  // 只有一位成員、或審查者自己也失敗時,交叉審查會靜默地不發生,而介面上看起來跟
+  // 順利跑完一模一樣——使用者會把「跑完了」讀成「有人檢查過了」。可以改檔的執行者
+  // 若沒有一份成功的他人審查,就在它的執行訊息上標出來,讓這件事無法被誤讀。
+  //
+  // 只針對允許改檔的成員:唯讀成員沒有改動,沒被審查也不構成風險。
+  markUnreviewed(reports: ExecReport[], reviews: Review[]) {
+    const reviewed = new Set(
+      reviews
+        // 審查失敗(逾時、崩潰、沒有輸出)不算審查過;這與 fixPhase 的判定一致
+        .filter((rv) => !rv.error && (rv.text || '').trim() && rv.reviewer.id !== rv.target.agent.id)
+        .map((rv) => rv.target.agent.id),
+    );
+    for (const report of reports) {
+      if (!effectiveCanEdit(report.agent) || reviewed.has(report.agent.id)) continue;
+      // 執行階段每位成員只發一次言,取最後一則即可
+      const msg = [...this.messages].reverse().find(
+        (m) => m.kind === 'agent' && m.agentId === report.agent.id && isPhaseInfo(m.phase) && m.phase.code === 'execute',
+      );
+      if (msg) this.updateMessage(msg as LiveMessage, { unreviewed: true }, true);
+    }
   }
 
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
@@ -609,7 +815,12 @@ class Orchestrator extends EventEmitter {
       this.text('prompt.system.rule2'),
       this.text('prompt.system.rule3'),
     ];
-    if (showAgreed) rules.push(this.text('prompt.system.agreed', { mark: MARK(AGREED) }));
+    // showAgreed 同時也是「現在是討論階段」的判準:提問只在討論階段成立,
+    // 在平行階段提到這個機制只會讓成員在不能提問的地方寫出 [ASK]。
+    if (showAgreed) {
+      rules.push(this.text('prompt.system.agreed', { mark: MARK(AGREED) }));
+      rules.push(this.text('prompt.system.ask', { open: MARK(ASK), close: MARK('/' + ASK), max: ASK_MAX_PER_SESSION }));
+    }
     rules.push(this.text('prompt.system.act'));
     return [
       this.text('prompt.system.intro', { name: agent.name, others }),
@@ -670,6 +881,10 @@ class Orchestrator extends EventEmitter {
       else if (m.kind === 'agent' && m.agentId !== agent.id && m.text) entries.push({ text: `[${m.agentName}]:\n${m.text}` });
       // 舊紀錄沒有 tag 欄位,退回比對當時的文案
       else if (m.kind === 'system' && m.level !== 'error' && (m.tag === 'plan' || m.text.startsWith('**分工結果**'))) entries.push({ text: `[${this.text('transcript.system')}]:\n${m.text}`, pinned: true });
+      // 檔案工具的稽核紀錄:審查者一定要看得到成員實際改了什麼,
+      // 否則它只能審報告文字,而報告文字可能與實際改動完全對不上。
+      // pinned:這是審查的依據,截斷 transcript 時不能先丟掉它。
+      else if (m.kind === 'system' && m.tag === 'tool-audit') entries.push({ text: `[${this.text('transcript.system')}]:\n${m.text}`, pinned: true });
     }
     if (entries.length === 0) return '';
     if (incremental) return entries.map((e) => e.text).join(SEP); // 只送新訊息,量本來就小
@@ -678,7 +893,7 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null }: TurnOptions = {}): Promise<TurnOutcome> {
+  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false }: TurnOptions = {}): Promise<TurnOutcome> {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}) });
     const transcript = this.unseenTranscript(agent, msg);
@@ -698,6 +913,7 @@ class Orchestrator extends EventEmitter {
       sessionId: this.sessions[agent.id] || null,
       cwd: this.taskCwd || this.config.settings.workDir,
       locale: this.locale,
+      fileToolsEnabled,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
@@ -714,15 +930,44 @@ class Orchestrator extends EventEmitter {
     text = result.text || text;
     this.lastSeen[agent.id] = startIdx;
     const error = result.error || null;
+    // 顯示、對話紀錄與所有下游提示詞都不留 [ASK] 區塊:問題由卡片呈現,留著會同一個問題出現兩次;
+    // 被節流或非討論階段的 [ASK] 走同一條路徑剝掉,對成員來說就是「問了但沒被受理」。
+    const display = stripAsk(text);
     this.updateMessage(msg, {
-      text,
+      text: display,
       thinking: result.thinking || msg.thinking,
       usage: result.usage,
       status: error ? 'error' : 'done',
       error,
     }, true); // 回合結束一定要 flush,不能讓最後一次更新卡在節流裡
-    return { text, error };
+    return { text: display, raw: text, error, toolEvents: toAuditEntries((result as { toolEvents?: unknown }).toolEvents) };
   }
+}
+
+// adapter 回傳的工具紀錄 → 稽核紀錄。
+// 這裡是唯一會碰到 adapter 內部形狀的地方,刻意放在轉換層:file-tools 的欄位改名時
+// 只需要改這一個函式,orchestrator 與介面看到的形狀不變。
+function toAuditEntries(raw: unknown): ToolAuditEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((e: any) => {
+    const r = e?.result || {};
+    const entry: ToolAuditEntry = { tool: e?.name || '', ok: !!e?.ok };
+    if (e?.path) entry.path = e.path;
+    if (r.error) entry.error = r.error;
+    // 寫入類工具回傳 newSha256;read_file 回傳 sha256(它就是之後寫入要帶的 expectedSha256)
+    if (r.newSha256) entry.shaAfter = r.newSha256;
+    else if (r.sha256) entry.shaAfter = r.sha256;
+    if (r.shaBefore) entry.shaBefore = r.shaBefore;
+    if (typeof r.added === 'number') entry.added = r.added;
+    if (typeof r.removed === 'number') entry.removed = r.removed;
+    // 近似旗標一定要跟著數字走。少了它,退化成整檔行數的統計看起來仍然精確,
+    // 審查者會拿一個高估好幾個數量級的數字當事實。
+    if (r.statsApproximate) entry.statsApproximate = true;
+    if (typeof r.replacements === 'number') entry.replacements = r.replacements;
+    if (r.reason) entry.reason = r.reason;
+    if (r.replaced) entry.replaced = r.replaced;
+    return entry;
+  });
 }
 
 // 「[使用者 → @Codex]」:讓每位成員都看得出這則訊息指定給誰
@@ -825,6 +1070,20 @@ function allocateBudget(costs: number[], budget: number) {
 // 兩份以上成果:每人審查下一位(環狀)。
 // 只有一份:從其他啟用成員裡挑一位(優先有執行成果的),讓單人執行也有品質關卡。
 // 整場只剩一名啟用成員時回空陣列,由呼叫端提示並略過。
+// 「誰有資格審查 targetId 的改動」——合格條件只有一條:不是改動的本人。
+//
+// 這個判定是唯一的真相來源,執行前的工具閘門與執行後的 markUnreviewed 都用它。
+// 兩邊各寫一套的話,就會出現「事前開了寫入工具、事後卻沒有人審」的縫隙,
+// 而那正是使用者最不可能自己發現的一種失敗:畫面看起來跟順利跑完一模一樣。
+function reviewerCandidates(agents: AgentConfig[] | null | undefined, targetId: string): AgentConfig[] {
+  return (agents || []).filter((a) => a && a.id !== targetId);
+}
+
+// 這次改動有沒有人能審。執行前只知道「誰會執行」,還沒有 report,所以用 id 判斷。
+function hasQualifiedReviewer(agents: AgentConfig[] | null | undefined, targetId: string): boolean {
+  return reviewerCandidates(agents, targetId).length > 0;
+}
+
 function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: ExecReport[]): ReviewPair[] {
   if (!Array.isArray(reports) || reports.length === 0) return [];
   if (reports.length >= 2) {
@@ -832,7 +1091,9 @@ function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: Exec
   }
   const target = reports[0];
   const executed = new Set(reports.map((r) => r.agent.id));
-  const candidates = (agents || []).filter((a) => a && a.id !== target.agent.id);
+  // 與 hasQualifiedReviewer 共用同一組候選人;這裡只是再挑出優先順序
+  // (先找也執行過的人,他讀過工作內容,審起來更有依據)
+  const candidates = reviewerCandidates(agents, target.agent.id);
   const reviewer = candidates.find((a) => executed.has(a.id)) || candidates[0];
   return reviewer ? [{ reviewer, target }] : [];
 }

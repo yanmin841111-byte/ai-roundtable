@@ -6,9 +6,10 @@ import path from 'path';
 import { builtinAdapters } from './builtin';
 import { validateCommon, normalizeModels, normalizeCapabilities } from './spec';
 import { createCliAdapter, validateCliSpec } from './cli-adapter';
-import { createOpenAIAdapter, validateOpenAISpec } from './openai-adapter';
+import { canonicalModelId, createOpenAIAdapter, discoverOllama, validateOpenAISpec } from './openai-adapter';
 import { kit } from './kit';
 import type { Adapter, ModelList, RegisteredAdapter } from './types';
+import type { CliHealth, CliStatus } from '../ipc-types';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 
@@ -158,12 +159,93 @@ class Registry {
     return out;
   }
 
-  async checkAll() {
+  // probeCredentialed:連有 key 的雲端 API 真的驗證一次。預設關閉,因為啟動健康檢查
+  // 不該每次都去打付費端點;使用者打開設定畫面時才帶 true——只檢查「key 有沒有填」
+  // 會對過期或打錯的 key 亮綠燈,而他正要依那個燈號判斷能不能開會。
+  async checkAll({ probeCredentialed = false }: { probeCredentialed?: boolean } = {}) {
     const results = await Promise.all(this.list().map(async (a) => {
-      if (!a.check) return [a.id, null];
-      try { return [a.id, await a.check()]; } catch (e: any) { return [a.id, { ok: false, error: e.message }]; }
+      // 免 credential 的 OpenAI HTTP adapter 每次都探測（典型是 Ollama，本機且免費）。
+      const probe = (a as RegisteredAdapter & { probeConnectionOnCheck?: boolean }).probeConnectionOnCheck;
+      const shouldProbe = a.type === 'openai' && a.testConnection && (probe || probeCredentialed);
+      const checker = shouldProbe ? a.testConnection : a.check;
+      if (!checker) return [a.id, null];
+      let status: CliStatus;
+      try { status = await checker(); } catch (e: any) { status = { ok: false, error: e.message }; }
+      const normalized: CliHealth = {
+        ...status,
+        // CLI 維持原本的 ready / missing；需要金鑰的 API 缺 key 時維持 unauthenticated。
+        // 免金鑰 HTTP adapter 會由上面的 checker 選用 testConnection 並明確回傳 unreachable。
+        state: status.state || (status.ok ? 'ready' : a.type === 'openai' ? 'unauthenticated' : 'missing'),
+      };
+      return [a.id, normalized];
     }));
     return Object.fromEntries(results.filter(([, r]: any) => r));
+  }
+
+  // 一鍵連接 Ollama：不帶 model 時只偵測並列出模型；帶 model 時套用內建範本並完成儲存。
+  // 主程序只需把這一支方法透過 IPC 暴露給 renderer，不必讓介面理解 baseUrl / API key / JSON。
+  async quickSetupOllama({ model }: { model?: string } = {}) {
+    if (!this.userDir) throw new Error('找不到擴充設定目錄');
+    if (!this.templatesDir) throw new Error('找不到內建 Ollama 範本目錄');
+    const templateFile = 'ollama-api.json';
+    const templatePath = path.join(this.templatesDir, templateFile);
+    let template: any;
+    try { template = JSON.parse(fs.readFileSync(templatePath, 'utf8')); }
+    catch (e: any) { throw new Error(`無法讀取 Ollama 範本:${e.message}`); }
+
+    const existing = this.entries.find((entry: any) => entry.id === 'ollama' && !entry.error && entry.file?.endsWith('.json'));
+    let existingSpec: any = {};
+    if (existing) {
+      try { existingSpec = JSON.parse(fs.readFileSync(this.safeUserPath(existing.file), 'utf8')); }
+      catch (e: any) { throw new Error(`無法讀取現有 Ollama 設定:${e.message}`); }
+    }
+
+    // 模型必須從實際要寫回的同一個端點取得；否則自訂 port / 遠端 Ollama 會拿到
+    // localhost 的模型清單，直到第一次發話才發現選到不存在的模型。
+    const baseUrl = typeof existingSpec.baseUrl === 'string' && existingSpec.baseUrl.trim()
+      ? existingSpec.baseUrl.trim()
+      : template.baseUrl;
+    const discovery = await discoverOllama({ fetchImpl: this.fetchImpl, baseUrl });
+    if (!discovery.ok) return { ...discovery, installed: false, recommendedModel: null };
+
+    const recommendedModel = canonicalModelId(discovery.models, template.defaultModel)
+      || discovery.models[0]?.id
+      || null;
+    if (!model) return { ...discovery, installed: false, recommendedModel };
+
+    const selectedModel = canonicalModelId(discovery.models, model);
+    if (!selectedModel) throw new Error(`Ollama 找不到模型「${model}」，請先下載後再試一次`);
+
+    let file = existing?.file || templateFile;
+    if (!existing) {
+      const ext = path.extname(templateFile);
+      const base = path.basename(templateFile, ext);
+      for (let i = 2; fs.existsSync(path.join(this.userDir, file)); i++) file = `${base}-${i}${ext}`;
+    }
+    // 模型能力與行為必須跟最新範本走，避免舊版 efforts / capabilities / body 讓
+    // thinking 靜默重開、強度選項失效，或多模態模型收不到圖片。
+    // 只保留使用者環境與偏好欄位；未列入的舊範本欄位由新版範本取代。
+    const preservedKeys = [
+      'baseUrl', 'path', 'modelsPath', 'headers', 'modelFilter',
+      'secretRef', 'apiKeyEnv', 'apiKeyOptional', 'unreachableHint',
+      'timeoutMs', 'maxHistoryMessages', 'history', 'stream', 'streamUsage',
+      'systemRole', 'reasoningFields',
+    ];
+    const preserved = Object.fromEntries(preservedKeys
+      .filter((key) => Object.prototype.hasOwnProperty.call(existingSpec, key))
+      .map((key) => [key, existingSpec[key]]));
+    const spec = { ...template, ...preserved, id: 'ollama', defaultModel: selectedModel };
+    const saved = this.writeFile(file, JSON.stringify(spec, null, 2) + '\n');
+    if (saved.error) throw new Error(saved.error);
+    return {
+      ...discovery,
+      installed: true,
+      recommendedModel: selectedModel,
+      selectedModel,
+      adapterId: spec.id,
+      file,
+      summary: saved.summary,
+    };
   }
 
   // ---------- 範本與檔案管理 ----------

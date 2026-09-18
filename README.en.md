@@ -89,10 +89,10 @@ Bottom-left "⚙ Settings" → "CLIs & extensions" → "+ Add" adds another AI f
 | --- | --- | --- |
 | Grok CLI, Kimi Code CLI, Gemini CLI | CLI | The CLI installed |
 | DeepSeek, Kimi (Moonshot), Grok (xAI), OpenRouter | API | An API key (entered in the extension editor, or an environment variable) |
-| Ollama | API | Ollama running locally |
+| Ollama | API | Ollama running locally; run `ollama pull qwen3.8:27b-mlx` first for Qwen3.8 MLX |
 | Blank CLI, blank API, Aider JS plugin | Custom | Fill it in yourself |
 
-- API members can only discuss and review; they cannot edit files.
+- Ollama `qwen3.8:27b-mlx` (about 18 GB; at least 32 GB of memory recommended) can discuss, understand images, review, and perform restricted file edits through the bundled template; run `ollama serve` first. The template disables thinking by default. Editing requires all three conditions: the template enables tools, the member allows editing, and the divide run has another eligible reviewer. Only read, exact-text replacement, and small-file write tools are exposed, with path confinement and SHA-256 conflict protection. Operations enter an audit record for another member to review. If review does not complete successfully, the UI explicitly marks the change “not reviewed”; check the red/green diff yourself.
 - When a definition is wrong, the settings page and the editor show the reason.
 - The CLI templates follow the official docs and have not all been tested against the real CLIs.
 

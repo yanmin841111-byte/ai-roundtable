@@ -2,7 +2,7 @@
   "id": "deepseek",
   "label": "DeepSeek API",
   "type": "openai",
-  "description": "DeepSeek 官方 API。需要環境變數 DEEPSEEK_API_KEY。API 成員只能討論與審查,不能修改檔案。",
+  "description": "DeepSeek 官方 API。下一步直接貼上 API key 即可,會存進系統安全儲存、不會寫進設定檔。受限檔案工具只在有另一位 reviewer 的分工流程中啟用。",
   "baseUrl": "https://api.deepseek.com",
   "apiKeyEnv": "DEEPSEEK_API_KEY",
   "models": [
@@ -32,6 +32,10 @@
       "type": "enabled"
     },
     "reasoning_effort": "{effort}"
+  },
+  "supportsEdit": true,
+  "fileTools": {
+    "enabled": true
   },
   "capabilities": {
     "attachments": [

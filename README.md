@@ -89,10 +89,10 @@ npm run dist
 | --- | --- | --- |
 | Grok CLI、Kimi Code CLI、Gemini CLI | CLI | 安裝對應 CLI |
 | DeepSeek、Kimi(Moonshot)、Grok(xAI)、OpenRouter | API | API key(在擴充編輯器填入,或設定環境變數) |
-| Ollama | API | 本機執行 Ollama |
+| Ollama | API | 本機執行 Ollama；Qwen3.8 MLX 可先執行 `ollama pull qwen3.8:27b-mlx` |
 | 空白 CLI、空白 API、Aider JS 外掛 | 自訂 | 自己填 |
 
-- API 類型的成員只能討論與審查,不能修改檔案。
+- Ollama 的 `qwen3.8:27b-mlx`（約 18GB，建議至少 32GB 記憶體）可透過內建範本參與討論、圖片理解、審查及受限改檔；請先執行 `ollama serve`。範本預設關閉 thinking。改檔必須同時符合：範本啟用工具、成員允許改檔、divide 流程有另一位合格 reviewer。工具只有讀檔、精確文字替換與小檔寫入，含路徑隔離與 SHA-256 衝突保護；操作會寫入稽核紀錄供另一位成員審查。若審查沒有成功完成，介面會明確標示「尚未審查」，請使用紅綠 diff 自行確認。
 - 設定有錯時,設定頁與編輯器會直接顯示原因。
 - CLI 範本依官方文件撰寫,尚未全部實測。
 

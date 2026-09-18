@@ -337,6 +337,9 @@ function messagesToMarkdown(messages: readonly ChatMessage[], locale: TextLocale
       sections.push(tx(locale, 'export.attachments', { list: message.attachments.map((a) => (locale === 'en' ? `${a.name} (${a.mime})` : `${a.name}（${a.mime}）`)).join(locale === 'en' ? ', ' : '、') }));
     }
     if (message.text) sections.push(String(message.text));
+    // 「沒有人審查過這次改動」是整份紀錄最重要的品質訊號。匯出後通常是寄給別人看的,
+    // 漏掉它,讀的人會把「流程跑完了」讀成「有人檢查過了」。
+    if (message.unreviewed) sections.push(tx(locale, 'export.unreviewed'));
     if (message.error) sections.push(tx(locale, 'export.error', { text: String(message.error).replace(/\n/g, '\n> ') }));
     const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
     if (!message.text && !message.error && !hasAttachments) sections.push(tx(locale, 'export.empty'));

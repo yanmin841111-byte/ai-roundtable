@@ -78,6 +78,55 @@
     check(replies.length === 1 && replies[0].agentName === '甲' && replies[0].phase.code === 'direct', '只有被指定的甲回覆,不跑討論流程');
     check((await api.sessions.list()).sessions.length === 1, '同一段對話寫回同一筆紀錄');
 
+    // ---------- 選項式提問 ----------
+    // 讓甲在討論第 1 回合用 [ASK] 反問,驗證卡片、點選項、回答回灌與停止解鎖
+    const askCfg = await api.getConfig();
+    askCfg.agents = askCfg.agents.map((a) => (a.name === '甲' ? { ...a, customCommand: `${a.customCommand} --ask` } : a));
+    await api.saveConfig(askCfg);
+    const waitCard = async () => {
+      for (let i = 0; i < 300; i++) { if (document.querySelector('#pending-question')) return true; await sleep(100); }
+      return false;
+    };
+
+    await api.reset();
+    await api.send('接本地模型', 'discuss', []);
+    check(await waitCard(), '成員提問時介面出現選項卡片');
+    const card = document.querySelector('#pending-question');
+    check(card.querySelector('.question-text').textContent === '要先接哪一種本地端點?', '卡片顯示問題內容');
+    const opts = card.querySelectorAll('.question-option');
+    check(opts.length === 2 && opts[1].textContent.includes('LM Studio'), '兩個選項都畫出來了');
+    check(!!card.querySelector('.question-free input'), '選項之外仍可自由輸入');
+    check((await snapshot()).running === true, '等待回答期間流程仍在進行中');
+    const waitingMsgs = (await snapshot()).messages.filter((m) => m.kind === 'agent');
+    check(!waitingMsgs.some((m) => m.text.includes('[ASK]')), '訊息本體不留 [ASK] 標記');
+    check(!waitingMsgs.some((m) => m.text.includes('要先接哪一種本地端點?')), '問題只出現在卡片,不在氣泡裡重複');
+
+    opts[1].click(); // 使用者點下第二個選項
+    await waitIdle();
+    await sleep(500);
+    const asked = (await snapshot()).messages;
+    const reply = asked.find((m) => m.kind === 'user' && m.text.includes('LM Studio'));
+    check(!!reply, '回答寫進對話紀錄');
+    check(reply.text.includes('甲'), '回答標明是回覆哪位成員的提問');
+    check(!document.querySelector('#pending-question'), '結算後卡片收起來');
+    check(asked.some((m) => m.kind === 'agent' && m.agentName === '乙'), '回答後流程繼續,乙接著發言');
+
+    // 等待中按停止:不能卡在 await,而且不該補一則回答
+    await api.reset();
+    await api.send('再問一次', 'discuss', []);
+    check(await waitCard(), '第二次提問的卡片出現');
+    await api.stop();
+    await waitIdle();
+    check(!document.querySelector('#pending-question'), '停止後卡片收起來');
+    const stopped = (await snapshot()).messages;
+    check(stopped.some((m) => m.kind === 'system' && m.text.includes('已停止')), '停止時流程確實結束,沒有卡在等待');
+    check(!stopped.some((m) => m.kind === 'user' && m.text.includes('自行決定')), '停止時不補寫回答訊息');
+
+    // 還原設定,後面的檢查沿用原本的假成員
+    await api.saveConfig(cfg);
+    await api.reset();
+    for (const s of (await api.sessions.list()).sessions) if (s.id !== sessionId) await api.sessions.remove(s.id);
+
     // ---------- 載入與刪除 ----------
     await api.reset();
     check((await snapshot()).messages.length === 0, '新對話後訊息清空');

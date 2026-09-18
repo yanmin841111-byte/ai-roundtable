@@ -7,7 +7,7 @@ AI Roundtable ships with Claude Code, Codex CLI and Cursor CLI. Other AIs can be
 | Type | Suited to | Can edit files | File |
 | --- | --- | --- | --- |
 | CLI | AI CLIs with a non-interactive mode, e.g. Grok CLI, Kimi Code CLI, Gemini CLI | Yes | `.json`, `"type": "cli"` |
-| API | OpenAI-compatible Chat Completions APIs, e.g. DeepSeek, Kimi, Grok, OpenRouter, Ollama | No, discussion and review only | `.json`, `"type": "openai"` |
+| API | OpenAI-compatible Chat Completions APIs, e.g. DeepSeek, Kimi, Grok, OpenRouter, Ollama | No by default; file editing requires explicitly enabled restricted tools and a reviewer gate | `.json`, `"type": "openai"` |
 | JS plugin | Anything JSON cannot describe | Up to you | `.js` |
 
 ## Quick start
@@ -31,7 +31,7 @@ During development, the `AI_ROUNDTABLE_ADAPTERS_DIR` environment variable points
 | `description` | No | Description shown in templates and member settings |
 | `models` | No | Model list, see below; `openai` extensions may use `"auto"` |
 | `efforts` | No | Effort levels offered when the model is typed manually or has no effort restriction |
-| `timeoutMs` | No | Per-turn timeout, default 10 minutes |
+| `timeoutMs` | No | Per-model-turn timeout, default 20 minutes; background work such as model downloads does not use this value |
 | `usageShape` | No | Convention for usage fields, see [Usage normalization](#usage-normalization). Detected from the fields when omitted |
 | `capabilities` | No | Attachment capabilities, see below |
 
@@ -212,7 +212,31 @@ Every JSON event is run through all rules whose `match` applies, in order.
 | `stream` | `true` | Whether to stream |
 | `streamUsage` | `true` | Ask for usage while streaming; set to `false` for services that do not support it |
 | `history` | `true` | Keep the conversation history in memory to resume; when off, the full transcript is sent every turn |
-| `maxHistoryMessages` | `80` | Number of history messages kept |
+| `maxHistoryMessages` | `80` | Number of history messages kept; must be a positive integer. Zero, negative values, and fractions fail validation |
+| `unreachableHint` | Generic hint | Guidance shown when a credential-free HTTP endpoint cannot be reached, e.g. `Run ollama serve first` |
+| `supportsEdit` | `false` | Must be explicitly `true` together with `fileTools.enabled: true`; the execution flow must still pass the reviewer gate |
+| `fileTools.enabled` | `false` | Enables restricted `read_file`, `replace_text`, and `write_file` tools; no shell or `apply_patch` is exposed |
+
+### Ollama and Qwen3.8
+
+The bundled `ollama-api.json` template targets the multimodal `qwen3.8:27b-mlx` model (about 18 GB and 27.3B parameters), allows 20 minutes per turn, keeps at most 16 history messages, and recommends at least 32 GB of memory. It always sends `reasoning_effort: "none"` and disables effort overrides, reducing latency and preventing reasoning text from interfering with `[ASK]` / `[AGREED]` control markers.
+
+In a live comparison with the same short prompt, omitting the parameter produced 118 characters of separate `reasoning`, 82 completion tokens, and took 5709ms. With `reasoning_effort: "none"`, the response had no reasoning, used 6 tokens, and took 856ms. Ollama keeps thinking in the separate `reasoning` field instead of mixing it into the answer, so it cannot accidentally trigger the answer parser's `[ASK]` / `[AGREED]` markers.
+
+```bash
+ollama pull qwen3.8:27b-mlx
+ollama serve
+```
+
+Then add the Ollama template under "Settings → CLIs & extensions" and select `qwen3.8:27b-mlx` in the member settings. The model list comes from `http://localhost:11434/v1/models`. If the app reports that the endpoint is unreachable, make sure `ollama serve` is running. The template sends png / jpeg / webp / gif images as OpenAI `image_url` data URIs; other attachments are handled as text.
+
+A simplified setup UI can use one backend method without exposing the endpoint or JSON. Call `registry.quickSetupOllama()` first to receive `{ models, recommendedModel }` and show only the model choice. Then call `registry.quickSetupOllama({ model })` to create or update the configuration. Its `adapterId` and `selectedModel` can be written directly into the member settings. Discovery uses the existing configuration's `baseUrl`. Updating preserves environment preferences such as endpoint, credentials, timeout, and history limit, while model capabilities, thinking behavior, and attachment support come from the latest template so stale settings cannot restore ineffective controls or disable images. A returned `name:latest` model also accepts the bare `name` as an alias; other tags are never guessed or substituted.
+
+The built-in OpenAI-compatible templates (Ollama, DeepSeek, OpenRouter, Grok, Kimi, and the blank API template) all explicitly declare `supportsEdit: true` and `fileTools.enabled: true`. The adapter provides three restricted tools: `read_file`, the preferred exact-and-unique `replace_text`, and `write_file` for small new files or whole-file replacement. The first version deliberately exposes neither a shell nor `apply_patch`. Every path must stay inside the working directory. Version-control internals such as `.git`, `.hg`, and `.svn` are always blocked to prevent indirect command execution through hooks or configuration; symlink aliases are checked again after realpath resolution. Paths that get executed automatically are additionally **blocked for writes but readable** (reading `package.json` is a legitimate way to understand a project; writing it is what makes code run): any path containing `.husky`, `.vscode`, `.idea`, `.claude`, `.github`, `.devcontainer`, or `node_modules`; the root-level `package.json`, `.npmrc`, `.yarnrc*`, `.pnpmfile.cjs`, `Makefile`, `lefthook.*`, and `.pre-commit-config.*`; and any existing file that already carries an executable bit (mode `0o111`). `.husky/pre-commit` and `.git/hooks/pre-commit` do the same thing, so blocking only the latter achieves nothing. Editing an existing file requires a prior read and its SHA-256; a concurrent change causes the write to be rejected. Files are capped at 256 KB, `replace_text.oldText` must contain at least 24 characters, and calls plus returned output have per-turn hard limits. Both successful and failed calls produce transcript-ready records for another reviewer. Added/removed counts use a line-level shortest-edit diff. Pathological large reorders that hit the computation guard are explicitly marked as approximate, and reviewers should rely on the red/green diff in that case.
+
+The tools are not sent merely because the template or member enables editing. Three conditions must all hold: the template explicitly enables `supportsEdit` and `fileTools.enabled`, the member allows editing, and the divide run has another eligible reviewer. The orchestrator passes `RunContext.fileToolsEnabled: true` only after confirming reviewer availability; an executor cannot review its own changes. Successful and failed operations enter the transcript as a `tool-audit` system message, so the reviewer sees actual operations rather than only the model's prose report. Full `read_file` contents are not duplicated. Preflight availability does not guarantee a successful review: if review times out, crashes, or returns no text, the execution message is marked “not reviewed” and the user should inspect the red/green diff.
+
+Remote API members take exactly the same path as local Ollama: the model only emits tool arguments, while path resolution and the actual writes always run on the user's machine inside the app. The same sandbox limits therefore apply to remote providers — working-directory boundary, blocked version-control internals, and the SHA-256 precondition on writes. Conversely, those tool arguments now originate from a remote model and must be treated as untrusted input: the sandbox is the only boundary, and nothing should rely on the model policing itself.
 
 ### Setting the API key
 

@@ -8,6 +8,7 @@ import { Orchestrator } from './src/orchestrator';
 import { Registry, setRegistry } from './src/adapters';
 import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } from './src/session-log';
 import * as attachments from './src/attachments';
+import { collectChanges } from './src/diff';
 import { SecretStore } from './src/secrets';
 import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn } from './src/ipc-types';
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
@@ -105,6 +106,22 @@ function createWindow() {
     stopOrchestrator();
     app.exit(result && result.ok ? 0 : 1);
   });
+  // 測試 harness 的多張截圖:劇本在 renderer 裡 console.log('__SHOT__ 名稱'),主程序看到就拍一張。
+  // 用 console 當通道是刻意的——不必為了測試在 preload 開新的 IPC 面,production 沒有多一吋介面。
+  const shotDir = process.env.AI_ROUNDTABLE_E2E_SHOT_DIR;
+  if (shotDir) win.webContents.on('console-message', (_e, _level, msg) => {
+    const m = /^__SHOT__ (.+)$/.exec(String(msg || '').trim());
+    if (!m) return;
+    const name = m[1].replace(/[^A-Za-z0-9._-]/g, '_');
+    void (async () => {
+      try {
+        const img = await win.webContents.capturePage();
+        fs.writeFileSync(path.join(shotDir, `${name}.png`), img.toPNG());
+        console.log(`__SHOT_OK__ ${name}`);
+      } catch (e) { console.log(`__SHOT_FAIL__ ${name} ${e instanceof Error ? e.message : String(e)}`); }
+    })();
+  });
+
   const shotFile = process.env.AI_ROUNDTABLE_SHOT;
   if (shotFile) win.webContents.once('did-finish-load', () => setTimeout(async () => {
     if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
@@ -164,7 +181,7 @@ app.whenReady().then(async () => {
   handle('config:get', () => store.get());
   handle('config:save', (cfg) => store.save(cfg));
   handle('cli:types', () => registry.catalog());
-  handle('cli:check', () => registry.checkAll());
+  handle('cli:check', (opts) => registry.checkAll(opts || {}));
 
   // CLI 擴充管理
   handle('ext:list', () => registry.summary());
@@ -299,6 +316,22 @@ app.whenReady().then(async () => {
     const snapshot = orchestrator.loadConversation(result.session);
     sessionFileId = id;
     return { ok: true, id, snapshot };
+  });
+  // 只轉交;id 驗證與 first-answer-wins 都在 orchestrator,IPC 層不保留任何狀態
+  handle('chat:answer', (answer) => orchestrator.answerQuestion(answer));
+  // 工作目錄目前的檔案改動。唯讀:只讀 git 的輸出,不碰使用者的版本控制狀態。
+  // collectChanges 全程非同步——在主程序同步跑 git 會凍結整個視窗。
+  handle('diff:changes', () => collectChanges(store.get().settings.workDir));
+  // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
+  // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
+  handle('ollama:quickSetup', async (payload) => {
+    try {
+      return await registry.quickSetupOllama(payload?.model ? { model: payload.model } : {});
+    } catch (error: any) {
+      // registry 對「找不到範本」「選了不存在的模型」等情況是丟例外的;
+      // 介面需要的是一個能顯示的結果,不是一個 rejected promise
+      return { ok: false, baseUrl: '', models: [], recommendedModel: null, installed: false, error: error?.message || String(error) };
+    }
   });
   handle('chat:stop', () => orchestrator.stop());
   handle('chat:reset', () => orchestrator.reset());

@@ -2,10 +2,14 @@
   "id": "grok-api",
   "label": "Grok API (xAI)",
   "type": "openai",
-  "description": "xAI Grok 官方 API,模型清單自動從 /models 取得。需要環境變數 XAI_API_KEY。",
+  "description": "xAI Grok 官方 API,模型清單自動取得。下一步直接貼上 API key 即可,會存進系統安全儲存。",
   "baseUrl": "https://api.x.ai/v1",
   "apiKeyEnv": "XAI_API_KEY",
   "models": "auto",
+  "supportsEdit": true,
+  "fileTools": {
+    "enabled": true
+  },
   "capabilities": {
     "attachments": [
       "imageInline",

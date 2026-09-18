@@ -234,6 +234,27 @@ details.thinking .content { white-space: pre-wrap; color: var(--muted); border-l
 .msg-group:not([data-count="1"]) .bubble-head .phase-badge { display: none; } /* 上方階段分隔已經標示 */
 .mention { display: inline-block; padding: 0 6px; margin: 0 1px; border-radius: 999px; border: 1px solid var(--accent-border); background: var(--panel); color: var(--accent); font-size: .92em; font-weight: 600; line-height: 1.45; }
 
+/* ---------- 成員提問 ---------- */
+.question-card { width: min(680px, 100%); align-self: center; margin-top: 18px; padding: 16px; border: 1px solid var(--accent-border); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow-md); }
+.question-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.question-card-head strong { color: var(--accent); font-size: 13px; }
+.question-countdown { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.question-text { color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.55; white-space: pre-wrap; }
+.question-options { display: grid; gap: 8px; margin-top: 13px; }
+.question-option { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; width: 100%; padding: 9px 11px; text-align: left; white-space: normal; }
+.question-option-id { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+.question-option-copy { min-width: 0; }
+.question-option-copy b { display: block; font-size: 13px; font-weight: 600; }
+.question-option-copy small { display: block; margin-top: 2px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.question-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.question-free { display: flex; gap: 8px; flex: 1; min-width: 0; }
+.question-free input { flex: 1; min-width: 0; }
+.question-card button:focus-visible, .question-card input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.question-card.answered, .question-card.expired { border-color: var(--border); box-shadow: var(--shadow-sm); }
+.question-card.answered .question-text, .question-card.expired .question-text { color: var(--muted); }
+.question-card-status { display: none; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.question-card.answered .question-card-status, .question-card.expired .question-card-status { display: block; }
+
 /* ---------- 輸入區 ---------- */
 #composer { padding: 10px max(24px, calc((100% - 960px) / 2)) 18px; background: var(--bg); }
 .composer-box { position: relative; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 8px; box-shadow: var(--shadow-md); transition: border-color .12s, box-shadow .12s; }
@@ -331,6 +352,10 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .ext-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ext-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .ext-err { color: var(--danger); font-size: 12px; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
+.cli-auth { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
+.cli-auth-command { color: var(--warn); font-family: var(--mono); font-size: 11.5px; }
+.cli-copy { padding: 2px 7px; border-color: var(--warn-border); color: var(--warn); font-size: 11px; }
+.cli-copy:hover { border-color: var(--warn); background: var(--warn-soft); }
 .template-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .template-filters { display: inline-flex; flex-shrink: 0; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); }
 .template-filters button { padding: 5px 15px; border: 0; background: transparent; color: var(--muted); }
@@ -354,7 +379,9 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .ext-editor-tabs button { border: 0; padding: 6px 14px; background: transparent; color: var(--muted); }
 .ext-editor-tabs button.active { color: var(--text); background: var(--panel); box-shadow: var(--shadow-sm); }
 .ext-basic { min-height: 360px; padding: 2px 1px; }
-.ext-basic-fields, #ext-cli-fields, #ext-api-fields { display: flex; flex-direction: column; gap: 13px; }
+/* :not([hidden]) 是必要的:作者樣式表的 display 會蓋掉 UA 的 [hidden]{display:none},
+   少了它,設定 API 時會一直看到「執行檔」「參數」這些 CLI 專用欄位。 */
+.ext-basic-fields:not([hidden]), #ext-cli-fields:not([hidden]), #ext-api-fields:not([hidden]) { display: flex; flex-direction: column; gap: 13px; }
 .ext-basic-fields > .setting-grid { margin: 0; }
 .ext-basic .field > span:first-child { display: flex; align-items: baseline; gap: 6px; }
 .ext-basic .field small { color: var(--muted); font-weight: 400; }
@@ -366,6 +393,7 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 @media (max-width: 620px) {
   .template-toolbar { align-items: stretch; flex-direction: column; }
   .template-toolbar input { width: 100%; }
+  .question-actions, .question-free { align-items: stretch; flex-direction: column; }
 }
 
 /* ---------- 歷史對話 ---------- */
@@ -406,6 +434,80 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
   .chip { max-width: 160px; }
 }
 
+/* ---------- 一鍵連接本機模型 ----------
+   刻意做得比下面的擴充清單顯眼:一般使用者應該先看到這條路,而不是自己去研究擴充 JSON。 */
+.quick-connect { border: 1px solid var(--accent-border); background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
+.quick-head { display: flex; align-items: flex-start; gap: 12px; }
+.quick-head > div:first-child { flex: 1; min-width: 0; }
+.quick-head .hint { margin-top: 2px; }
+.quick-status { margin-top: 10px; font-size: 12.5px; color: var(--muted); white-space: pre-wrap; }
+.quick-status.ok { color: var(--ok); }
+.quick-status.warn { color: var(--warn); }
+.quick-status.error { color: var(--danger); }
+.quick-pick { display: flex; align-items: flex-end; gap: 10px; margin-top: 10px; }
+.quick-pick .field { flex: 1; min-width: 0; }
+
+/* 進階選項預設收合:基本流程不該被環境變數這種細節擋住 */
+.ext-advanced-fields { margin-bottom: 10px; }
+.ext-advanced-fields > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; user-select: none; }
+.ext-advanced-fields > summary:hover { color: var(--text); }
+.ext-advanced-fields[open] > summary { margin-bottom: 6px; }
+
+.ext-simple-hint { display: block; background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+
+/* 檔案工具稽核:成員實際做了什麼,與它在報告裡說的話分開呈現 */
+.tool-audit-title { font-weight: 600; margin-bottom: 6px; }
+.tool-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; padding: 3px 0; font-size: 12.5px; }
+.tool-row + .tool-row { border-top: 1px solid var(--border); }
+.tool-mark { flex: none; width: 12px; }
+.tool-row.ok .tool-mark { color: var(--ok); }
+.tool-row.bad .tool-mark { color: var(--danger); }
+.tool-name { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.tool-path { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.tool-counts { font-family: var(--mono); font-size: 11.5px; }
+.tool-approx { font-family: var(--font); font-size: 11px; color: var(--warn); margin-left: 4px; cursor: help; }
+/* 失敗原因另起一行整段顯示:模型需要看到它才能重試,使用者也需要知道哪一步沒成功 */
+.tool-note { flex-basis: 100%; color: var(--muted); font-size: 11.5px; padding-left: 18px; }
+.tool-note.error { color: var(--danger); }
+
+/* 「尚未審查」:沒有其他成員看過這次改動時必須講清楚,不能讓「跑完了」被讀成「有人看過」 */
+.badge.unreviewed { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
+
+/* ---------- 檔案改動(紅綠 diff) ----------
+   顏色沿用既有的 --ok / --danger 系列,深色模式就不必再維護一組專屬變數。 */
+.diff-modal-card { height: min(82vh, 860px); display: flex; flex-direction: column; }
+.diff-summary { padding: 8px 18px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+.diff-summary:empty { display: none; }
+.diff-body { flex: 1; overflow-y: auto; padding: 10px 14px 16px; }
+.diff-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 28px 12px; white-space: pre-wrap; line-height: 1.6; }
+
+.diff-file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; background: var(--panel); }
+.diff-file-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; border-radius: 0; background: var(--panel-2); padding: 8px 12px; font-size: 12.5px; }
+.diff-file-head:hover { background: var(--hover); border-color: transparent; }
+.diff-arrow { color: var(--faint); width: 10px; flex: none; }
+.diff-status { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.diff-status.added { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-border); }
+.diff-status.deleted { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
+.diff-status.renamed { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
+/* 路徑太長時保留結尾的檔名:使用者是靠檔名認檔案的,截掉開頭的目錄影響最小 */
+.diff-path { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; flex: 1; min-width: 0; }
+.diff-counts { flex: none; font-family: var(--mono); font-size: 11.5px; }
+.diff-plus { color: var(--ok); }
+.diff-minus { color: var(--danger); }
+.diff-renamed-from { flex: none; color: var(--faint); font-size: 11px; }
+
+.diff-lines { font-family: var(--mono); font-size: 12px; line-height: 1.55; overflow-x: auto; border-top: 1px solid var(--border); }
+.diff-line { display: flex; gap: 6px; padding: 0 10px; white-space: pre; }
+.diff-line .diff-sign { flex: none; width: 10px; color: var(--faint); user-select: none; }
+.diff-line .diff-text { flex: 1; }
+.diff-line.add { background: var(--ok-soft); box-shadow: inset 2px 0 0 var(--ok); }
+.diff-line.add .diff-sign { color: var(--ok); }
+.diff-line.del { background: var(--danger-soft); box-shadow: inset 2px 0 0 var(--danger); }
+.diff-line.del .diff-sign { color: var(--danger); }
+/* @@ 區塊標頭是位置資訊,不是檔案內容,壓低存在感 */
+.diff-line.hunk { background: var(--panel-2); color: var(--faint); font-size: 11.5px; padding-top: 3px; padding-bottom: 3px; }
+.diff-note { color: var(--muted); font-size: 11.5px; padding: 6px 12px; background: var(--panel-2); }
+
 @media (prefers-reduced-motion: reduce) {
   .msg.enter, .msg-group > .msg.enter { animation: none; }
   .phase.busy, .spinner, .act.running .dot, .agent-card.speaking .avatar { animation: none; }
@@ -413,3 +515,33 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
   .template:hover { transform: none; }
   button, .chip, .agent-card, .segmented span, .composer-box { transition: none; }
 }
+
+/* ---------- 尚未審查:這個產品最不希望被忽略的訊號 ---------- */
+/* 原本只有標頭一個 11px 徽章,排在 CLI / 模型 / 階段 / AGREED 之後。
+   改成泡泡內的警示區塊,並直接給一顆可按的按鈕通往紅綠 diff。 */
+.unreviewed-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px; padding: 9px 12px;
+  font-size: 12.5px; line-height: 1.6;
+  color: var(--warn); background: var(--warn-soft);
+  border: 1px solid var(--warn-border); border-left-width: 3px;
+  border-radius: 10px;
+}
+.unreviewed-note > span { flex: 1 1 200px; }
+.unreviewed-note::before { content: "⚠"; font-size: 13px; line-height: 1; flex: none; }
+.unreviewed-open {
+  flex: none; padding: 4px 11px; font-size: 12px; font-weight: 600;
+  color: var(--warn); background: transparent;
+  border: 1px solid var(--warn-border); border-radius: 7px;
+}
+.unreviewed-open:hover { background: var(--panel); border-color: var(--warn); }
+
+/* ---------- 空狀態:沒有可用成員時才出現的下一步 ---------- */
+.empty-setup {
+  margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.empty-setup-text { margin: 0; font-size: 13px; line-height: 1.7; color: var(--warn); }
+
+/* 成員卡的徽章可能同時有「主持人」「未安裝」「唯讀」,要能換行不擠壞版面 */
+.agent-name { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }

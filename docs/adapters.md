@@ -7,7 +7,7 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 | 類型 | 適合 | 能修改檔案 | 檔案 |
 | --- | --- | --- | --- |
 | CLI | 有非互動模式的 AI CLI,例如 Grok CLI、Kimi Code CLI、Gemini CLI | 可以 | `.json`,`"type": "cli"` |
-| API | OpenAI 相容的 Chat Completions API,例如 DeepSeek、Kimi、Grok、OpenRouter、Ollama | 不行,只能討論與審查 | `.json`,`"type": "openai"` |
+| API | OpenAI 相容的 Chat Completions API,例如 DeepSeek、Kimi、Grok、OpenRouter、Ollama | 預設不行；明確啟用受限檔案工具並通過 reviewer 閘門後才可改檔 | `.json`,`"type": "openai"` |
 | JS 外掛 | JSON 描述不了的情況 | 自己決定 | `.js` |
 
 ## 快速開始
@@ -31,7 +31,7 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 | `description` | 否 | 範本與成員設定裡的說明 |
 | `models` | 否 | 模型清單,見下方;`openai` 類型可以寫 `"auto"` |
 | `efforts` | 否 | 手動輸入模型、或模型沒限制強度時可選的強度 |
-| `timeoutMs` | 否 | 單回合逾時,預設 10 分鐘 |
+| `timeoutMs` | 否 | 單回合模型逾時,預設 20 分鐘；模型下載等背景工作不套用此值 |
 | `usageShape` | 否 | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷 |
 | `capabilities` | 否 | 附件能力,格式見下方 |
 
@@ -212,7 +212,31 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 | `stream` | `true` | 是否串流 |
 | `streamUsage` | `true` | 串流時要求回傳用量;不支援的服務設 false |
 | `history` | `true` | 在記憶體保留對話歷史來續接;關閉後每回合送完整紀錄 |
-| `maxHistoryMessages` | `80` | 保留的歷史訊息數 |
+| `maxHistoryMessages` | `80` | 保留的歷史訊息數,必須是正整數；`0`、負數或非整數會驗證失敗 |
+| `unreachableHint` | 通用提示 | 免金鑰 HTTP 端點連不上時顯示的處理方式,例如 `請先執行 ollama serve` |
+| `supportsEdit` | `false` | 必須明確設為 `true`，且同時設定 `fileTools.enabled: true` 才宣告可改檔；仍需執行流程通過 reviewer 閘門 |
+| `fileTools.enabled` | `false` | 啟用受限的 `read_file`、`replace_text`、`write_file` 工具；不提供 shell 或 `apply_patch` |
+
+### Ollama 與 Qwen3.8
+
+內建的 `ollama-api.json` 範本已針對約 18GB、27.3B 參數的多模態模型 `qwen3.8:27b-mlx` 設好 OpenAI 相容端點、20 分鐘逾時與最多 16 則歷史訊息，建議至少 32GB 記憶體。範本固定送出 `reasoning_effort: "none"` 關閉 thinking，並停用強度覆寫，以縮短等待時間並避免推理內容干擾 `[ASK]` / `[AGREED]` 控制標記。
+
+真機對照中，同一個短題目未帶參數時產生 118 字元的獨立 `reasoning`、82 個 completion tokens，耗時 5709ms；帶 `reasoning_effort: "none"` 時沒有 reasoning、只產生 6 個 tokens，耗時 856ms。Ollama 會把 thinking 放在獨立的 `reasoning` 欄位，不會混進正文，因此也不會誤觸正文中的 `[ASK]` / `[AGREED]` 解析。
+
+```bash
+ollama pull qwen3.8:27b-mlx
+ollama serve
+```
+
+接著在「設定 → CLI 與擴充」加入 Ollama 範本，並在成員設定選擇 `qwen3.8:27b-mlx`。模型清單來自 `http://localhost:11434/v1/models`;若 app 顯示端點無法連線，先確認 `ollama serve` 正在執行。此範本會把 png / jpeg / webp / gif 圖片以 OpenAI `image_url` data URI 傳給模型；其他附件仍以文字處理。
+
+簡易設定介面可直接呼叫同一個後端方法，不必顯示端點或 JSON：先以 `registry.quickSetupOllama()` 取得 `{ models, recommendedModel }`，讓使用者只選模型；再以 `registry.quickSetupOllama({ model })` 建立或更新設定。回傳的 `adapterId` 與 `selectedModel` 可直接寫入成員設定。偵測會使用既有設定的 `baseUrl`；更新時保留端點、認證、逾時與歷史上限等環境偏好，但模型能力、thinking 與附件支援會套用最新範本，避免舊設定讓選項失效或圖片無法送出。模型清單中的 `name:latest` 也會自動接受裸名 `name`，但其他 tag 不會被猜測或替換。
+
+內建的 OpenAI 相容範本（Ollama、DeepSeek、OpenRouter、Grok、Kimi，以及空白 API 範本）都已明確宣告 `supportsEdit: true` 與 `fileTools.enabled: true`，adapter 端提供三個受限工具：`read_file`、以精確且唯一原文為主的 `replace_text`，以及建立小檔／整檔覆寫用的 `write_file`。第一版刻意不提供 shell 與 `apply_patch`。所有路徑都必須位於工作目錄內，並一律禁止讀寫 `.git`、`.hg`、`.svn` 等版本控制內部檔案，避免透過 hook 或設定間接執行指令；symlink 別名也會在 realpath 後再次檢查。此外，會被自動執行的路徑一律**禁止寫入但允許讀取**（讀 `package.json` 是理解專案的正當需求，寫進去才會讓程式碼真的跑起來）：路徑含 `.husky`、`.vscode`、`.idea`、`.claude`、`.github`、`.devcontainer`、`node_modules` 任一層，根層的 `package.json`、`.npmrc`、`.yarnrc*`、`.pnpmfile.cjs`、`Makefile`、`lefthook.*`、`.pre-commit-config.*`，以及任何已帶執行權限（mode `0o111`）的既有檔案。`.husky/pre-commit` 與 `.git/hooks/pre-commit` 效果完全相同，只擋後者沒有意義。既有檔案修改前必須先讀取並帶回 SHA-256；檔案在兩次操作間改變就會拒絕寫入。單檔上限 256KB，`replace_text.oldText` 至少 24 個字元，工具呼叫與回傳量也有每回合硬上限。成功與失敗結果都會產生可寫入 transcript 的紀錄，供另一位 reviewer 檢查。增刪行數採逐行 shortest-edit diff；病態的大型重排超過運算保護值時會標示為近似值，reviewer 應以紅綠 diff 為準。
+
+工具不會只因範本或成員勾選「允許修改檔案」就送給模型。三個條件必須同時成立：範本明確啟用 `supportsEdit` 與 `fileTools.enabled`、成員允許改檔、divide 流程存在另一位合格 reviewer。orchestrator 只有在事前確認 reviewer 可用時才傳入 `RunContext.fileToolsEnabled: true`；同一位執行者不能審自己的改動。工具成功與失敗會以 `tool-audit` 系統訊息進入 transcript，讓 reviewer 看到實際操作而不只看模型的文字報告；完整 `read_file` 內容不會重複寫入。事前有人可審不代表事後一定成功，若審查逾時、崩潰或空白，執行訊息會標示「尚未審查」，使用者應開啟紅綠 diff 自行確認。
+
+遠端 API 成員與本機 Ollama 走同一條路徑：模型只送出工具參數，實際的路徑解析與寫檔一律在使用者機器上由 app 執行，因此同一組沙箱限制（工作目錄邊界、`.git` 等版控內部封鎖、寫入前的 SHA-256 檢查）對遠端供應商同樣成立。反過來說，工具參數此時來自遠端模型，必須當成不可信輸入看待——沙箱是唯一的邊界，不要依賴模型自己守規矩。
 
 ### 設定 API key
 

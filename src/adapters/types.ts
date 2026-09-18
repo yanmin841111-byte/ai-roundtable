@@ -5,6 +5,7 @@ import type { ChildProcess } from 'child_process';
 import type { Activity, AgentConfig, AttachmentMeta, CliStatus, Model } from '../ipc-types';
 import type { NormalizedUsage } from '../usage';
 import type { StopHandle } from './process';
+import type { FileToolTranscriptEntry } from './file-tools';
 
 export type AdapterType = 'builtin' | 'cli' | 'openai' | 'js';
 
@@ -41,6 +42,9 @@ export interface RunContext extends TurnCallbacks {
   cwd: string;
   timeoutMs?: number;
   attachments?: RunAttachment[];
+  // 只有 orchestrator 確認 divide 流程有另一位 reviewer 時才設為 true。
+  // adapter 規格與成員 canEdit 即使都開啟，缺這個閘門仍不會把寫入工具送給模型。
+  fileToolsEnabled?: boolean;
 }
 
 // 轉接器自己回報的結果;欄位都可以省略,usage 是各家原始格式
@@ -50,6 +54,8 @@ export interface RunResult {
   sessionId?: string | null;
   usage?: unknown;
   error?: string | null;
+  // 下一輪由 orchestrator 寫入 transcript，讓 reviewer 看得到成功與失敗的工具紀錄。
+  toolEvents?: FileToolTranscriptEntry[];
 }
 
 // runTurn 補齊欄位、正規化 usage 之後的結果
@@ -59,6 +65,7 @@ export interface TurnResult {
   sessionId: string | null;
   usage: NormalizedUsage | null;
   error: string | null;
+  toolEvents?: FileToolTranscriptEntry[];
 }
 
 export interface Adapter {

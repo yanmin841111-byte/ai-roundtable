@@ -39,7 +39,8 @@ export interface StopHandle extends EventEmitter {
   close(): void;
 }
 
-const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+// 單一模型回合的預設上限；模型下載等背景工作應自行管理生命週期與續傳，不套用此值。
+const DEFAULT_TURN_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_KILL_GRACE_MS = 5000;
 const CLI_CHECK_TIMEOUT_MS = 5000;
 
@@ -49,8 +50,14 @@ function truncate(value: unknown, n = 600): string {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+// 預設逾時是 20 分鐘,只到「秒」的話使用者看到的是「1200 秒」,得自己心算。
 function formatTimeout(timeoutMs: number): string {
-  return timeoutMs < 1000 ? `${timeoutMs} ms` : `${Math.round(timeoutMs / 1000)} 秒`;
+  if (timeoutMs < 1000) return `${timeoutMs} ms`;
+  const seconds = Math.round(timeoutMs / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分鐘`;
 }
 
 // 逐行讀取串流,忽略空行。

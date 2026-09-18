@@ -8,10 +8,10 @@ import { isPhaseInfo } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, localeTag, joinNames } from './i18n';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
-  AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliStatus,
+  AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth, DiffFile,
   ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta,
   AttachmentsResult, RendererApi,
-  PendingAttachment, SessionSummary, SessionDetail, UsageInfo, Activity,
+  PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity,
 } from './api';
 
 // querySelector 在這個 app 裡查的都是 index.html 既有的節點,查不到就是程式寫錯。
@@ -30,6 +30,8 @@ interface AgentShell {
   activities: HTMLElement;
   body: CachedEl;
   error: CachedEl;
+  // 舊的訊息節點可能還沒有這個元素,所以允許 null
+  unreviewed: HTMLElement | null;
   usage: CachedEl;
   statusLine: CachedEl;
 }
@@ -42,7 +44,7 @@ interface Metric { total: number; turns: number; agents: Set<string> }
 
 let config: AppConfig = null as unknown as AppConfig;
 let cliTypes: Record<string, CliType> = {};
-let cliStatus: Record<string, CliStatus> = {};
+let cliStatus: Record<string, CliHealth> = {};
 let extSummary: ExtSummary = { entries: [], templates: [] };
 let editingExtFile: string | null = null;
 let editingExtSpec: ExtSpec | null = null;
@@ -56,6 +58,9 @@ let historyLoaded = false;
 let historySessions: SessionSummary[] = [];
 let openHistoryId: string | null = null;
 let activeSessionId: string | null = null; // 目前對話寫入的歷史紀錄檔
+let currentQuestion: PendingQuestion | null = null;
+let answeredQuestionId: string | null = null;
+let questionTimer: ReturnType<typeof setInterval> | undefined;
 const historyErrors = new Map<string, string>();
 const mentionMenu: { open: boolean; start: number; items: AgentConfig[]; index: number } =
   { open: false, start: 0, items: [], index: 0 };
@@ -110,7 +115,10 @@ async function init() {
   document.querySelectorAll<HTMLElement>('.settings-tab').forEach((tab) => { tab.onclick = () => showSettingsTab(tab.dataset.tab || ''); });
   $<HTMLButtonElement>('#workdir-chip').onclick = pickWorkDir;
   // 點背景關閉只用在沒有編輯內容的視窗,避免誤點丟掉未儲存的成員或擴充設定
-  for (const id of ['#settings', '#history-modal', '#ext-picker']) {
+  $<HTMLButtonElement>('#diff-btn').onclick = openDiff;
+  $<HTMLButtonElement>('#diff-close').onclick = () => $<HTMLDivElement>('#diff-modal').classList.add('hidden');
+  $<HTMLButtonElement>('#diff-refresh').onclick = () => loadDiff();
+  for (const id of ['#settings', '#history-modal', '#ext-picker', '#diff-modal']) {
     $(id).addEventListener('mousedown', (e) => { if (e.target === $(id)) closeTopModal(); });
   }
   document.addEventListener('keydown', (e) => {
@@ -131,6 +139,8 @@ async function init() {
   $<HTMLButtonElement>('#open-dir').onclick = () => window.api.openPath($<HTMLInputElement>('#work-dir').value);
   for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
+  $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
+  $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
   $<HTMLButtonElement>('#ext-add').onclick = openTemplatePicker;
   $<HTMLButtonElement>('#ext-open-dir').onclick = () => window.api.ext.openDir();
   $<HTMLButtonElement>('#ext-reload').onclick = () => reloadExtensions();
@@ -190,6 +200,9 @@ function openSettings(tab = 'general'): void {
   showSettingsTab(tab);
   $('#settings-saved').hidden = true;
   $<HTMLDivElement>('#settings').classList.remove('hidden');
+  // 使用者正要依燈號判斷「哪一位能用」,這時才值得花一次網路往返真的驗證 key。
+  // 不 await:畫面先開,狀態回來再重畫。
+  void checkClis({ probeCredentialed: true });
 }
 
 function closeSettings() { $<HTMLDivElement>('#settings').classList.add('hidden'); }
@@ -268,15 +281,25 @@ function relocalize(): void {
   const attachButton = $<HTMLButtonElement>('#attach-btn');
   if (attachButton) { attachButton.title = t('composer.attach'); attachButton.setAttribute('aria-label', t('composer.attach')); }
   const messages = [...messageData.values()];
+  const question = currentQuestion;
+  const wasAnswered = question && answeredQuestionId === question.id;
   clearTimeline();
   messages.forEach((m) => renderMessage(m, { animate: false }));
-  setState({ running });
+  setState({ running, question });
+  if (wasAnswered) {
+    answeredQuestionId = question!.id;
+    disableQuestionCard('answered');
+  }
   if (historyLoaded) renderHistoryList();
   if (openHistoryId) updateResumeButton();
   showSettingsTab(document.querySelector<HTMLElement>('.settings-tab.active')?.dataset.tab || 'general');
 }
 
 function clearTimeline() {
+  clearInterval(questionTimer);
+  questionTimer = undefined;
+  currentQuestion = null;
+  answeredQuestionId = null;
   msgEls.clear();
   messageData.clear();
   $<HTMLDivElement>('#timeline').innerHTML = '';
@@ -290,6 +313,146 @@ function emptyEl() {
   d.id = 'empty'; d.className = 'empty';
   d.innerHTML = `<div class="empty-icon">◎</div><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
   return d;
+}
+
+// ---------- 檔案改動(紅綠 diff) ----------
+// 成員可以直接改使用者的檔案,但介面原本只看得到成員「說」它改了什麼。這裡把實際的
+// git 改動撈出來逐檔、逐行呈現,讓說的和做的能被對照。唯讀:不提供套用或還原。
+
+// 展開狀態要跨重新整理保留,否則每按一次 ↻ 使用者就得重新展開在看的那個檔案
+const diffExpanded = new Set<string>();
+
+async function openDiff(): Promise<void> {
+  $<HTMLDivElement>('#diff-modal').classList.remove('hidden');
+  await loadDiff();
+}
+
+async function loadDiff(): Promise<void> {
+  const body = $<HTMLDivElement>('#diff-body');
+  const summary = $<HTMLDivElement>('#diff-summary');
+  const refresh = $<HTMLButtonElement>('#diff-refresh');
+  refresh.disabled = true;
+  summary.textContent = '';
+  body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.loading'))}</div>`;
+  try {
+    const result = await window.api.getDiff();
+    if (!result.ok) {
+      const key = result.reason === 'no-workdir' ? 'diff.noWorkdir' : result.reason === 'not-a-repo' ? 'diff.notRepo' : 'diff.failed';
+      // detail 是 git 的原文(多半是英文),只在真正失敗時附上,不強行翻譯
+      const detail = result.reason === 'failed' && result.detail ? `\n${result.detail}` : '';
+      body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}</div>`;
+      return;
+    }
+    renderDiff(result.files, result.dir, result.totalFiles);
+  } catch (error) {
+    body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.failed') + '\n' + cleanIpcError(error))}</div>`;
+  } finally {
+    refresh.disabled = false;
+  }
+}
+
+function renderDiff(files: DiffFile[], dir: string, totalFiles: number): void {
+  const body = $<HTMLDivElement>('#diff-body');
+  const summary = $<HTMLDivElement>('#diff-summary');
+  body.innerHTML = '';
+  const added = files.reduce((n, f) => n + f.added, 0);
+  const removed = files.reduce((n, f) => n + f.removed, 0);
+  // 超過上限時 files 只是前面一段,增刪統計也只涵蓋這一段。
+  // 把「顯示了幾個 / 一共幾個」講明白,不要讓截斷後的數字看起來像完整結果。
+  const capped = totalFiles > files.length;
+  const head = capped
+    ? t('diff.summaryCapped', { shown: files.length, total: totalFiles, added, removed })
+    : t('diff.summary', { files: files.length, added, removed });
+  summary.textContent = totalFiles ? `${head}　·　${t('diff.dirLabel', { dir })}` : t('diff.dirLabel', { dir });
+  if (!files.length) {
+    body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.clean'))}</div>`;
+    return;
+  }
+  for (const file of files) body.appendChild(diffFileEl(file));
+  if (capped) {
+    const note = document.createElement('div');
+    note.className = 'diff-note diff-cap-note';
+    note.textContent = t('diff.cappedNote', { shown: files.length, total: totalFiles });
+    body.appendChild(note);
+  }
+}
+
+function diffFileEl(file: DiffFile): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'diff-file';
+  const open = diffExpanded.has(file.path);
+
+  const head = document.createElement('button');
+  head.className = 'diff-file-head';
+  head.setAttribute('aria-expanded', String(open));
+  const arrow = document.createElement('span');
+  arrow.className = 'diff-arrow';
+  arrow.textContent = open ? '▾' : '▸';
+  const status = document.createElement('span');
+  status.className = `diff-status ${file.status}`;
+  status.textContent = t(`diff.status.${file.status}`);
+  const name = document.createElement('span');
+  name.className = 'diff-path';
+  name.textContent = file.path;
+  const counts = document.createElement('span');
+  counts.className = 'diff-counts';
+  // 即使檔案內容被截斷,這裡的數字仍是完整統計
+  counts.innerHTML = `<span class="diff-plus">+${file.added}</span> <span class="diff-minus">−${file.removed}</span>`;
+  head.append(arrow, status, name, counts);
+  if (file.oldPath) {
+    const from = document.createElement('span');
+    from.className = 'diff-renamed-from';
+    from.textContent = t('diff.renamedFrom', { from: file.oldPath });
+    head.appendChild(from);
+  }
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'diff-lines';
+  bodyEl.hidden = !open;
+  // 行數多的檔案展開時才建 DOM,一次把幾百個檔案全部渲染會讓視窗開不起來
+  if (open) fillDiffLines(bodyEl, file);
+
+  head.onclick = () => {
+    const nowOpen = bodyEl.hidden;
+    bodyEl.hidden = !nowOpen;
+    arrow.textContent = nowOpen ? '▾' : '▸';
+    head.setAttribute('aria-expanded', String(nowOpen));
+    if (nowOpen) {
+      diffExpanded.add(file.path);
+      if (!bodyEl.childElementCount) fillDiffLines(bodyEl, file);
+    } else diffExpanded.delete(file.path);
+  };
+
+  wrap.append(head, bodyEl);
+  return wrap;
+}
+
+function fillDiffLines(el: HTMLElement, file: DiffFile): void {
+  if (file.binary) {
+    el.innerHTML = `<div class="diff-note">${escapeHtml(t('diff.binary'))}</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const line of file.lines) {
+    const row = document.createElement('div');
+    row.className = `diff-line ${line.kind}`;
+    const sign = document.createElement('span');
+    sign.className = 'diff-sign';
+    sign.textContent = line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : '';
+    const text = document.createElement('span');
+    text.className = 'diff-text';
+    // 一律用 textContent:diff 內容是任意檔案的原始碼,絕不能當 HTML 解析
+    text.textContent = line.text;
+    row.append(sign, text);
+    frag.appendChild(row);
+  }
+  if (file.truncated) {
+    const note = document.createElement('div');
+    note.className = 'diff-note';
+    note.textContent = t('diff.truncated', { lines: file.lines.length });
+    frag.appendChild(note);
+  }
+  el.appendChild(frag);
 }
 
 // ---------- 歷史對話 ----------
@@ -500,8 +663,13 @@ function formatHistoryTime(value: string | number | undefined): string {
   });
 }
 
-async function checkClis() {
-  cliStatus = await window.api.checkCli();
+// probeCredentialed:打開設定時帶 true,真的連線驗證有 key 的雲端 API。
+// 啟動時不帶,避免每開一次 app 就打一輪付費端點。
+async function checkClis(opts: { probeCredentialed?: boolean } = {}) {
+  cliStatus = await window.api.checkCli(opts);
+  // 側邊欄也要重畫:成員卡上的健康徽章讀的就是 cliStatus,不重畫的話它永遠停在
+  // 「還沒檢查」那一刻的樣子——也就是什麼警告都不顯示。
+  renderSidebar();
   renderExtensions();
   renderCliSummary();
 }
@@ -515,11 +683,38 @@ function renderCliSummary() {
     el.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(t('cli.checking'))}</span>`;
     return;
   }
-  const ok = checked.filter((t) => cliStatus[t.id].ok);
-  const level = broken || ok.length === 0 ? 'bad' : ok.length < checked.length ? 'warn' : 'ok';
-  const text = `${t('cli.summary', { ok: ok.length, total: checked.length })}${broken ? ` · ${t('cli.broken', { n: broken })}` : ''}`;
+  const ready = checked.filter((type) => cliStatus[type.id].state === 'ready');
+  // 設定本身沒問題、只差登入或啟動服務的狀態:不算「沒有可用的成員」,也不該畫成空心圓
+  const fixable = (state?: string) => state === 'unauthenticated' || state === 'unreachable';
+  const anyFixable = checked.some((type) => fixable(cliStatus[type.id].state));
+  const level = broken || (!ready.length && !anyFixable) ? 'bad' : ready.length < checked.length ? 'warn' : 'ok';
+  const text = `${t('cli.summary', { ok: ready.length, total: checked.length })}${broken ? ` · ${t('cli.broken', { n: broken })}` : ''}`;
   el.innerHTML = `<span class="status-dot ${level}"></span><span>${escapeHtml(text)}</span>`;
-  el.title = checked.map((t) => `${cliStatus[t.id].ok ? '●' : '○'} ${t.label}:${cliStatus[t.id].ok ? cliStatus[t.id].version : cliStatus[t.id].error}`).join('\n');
+  renderEmptySetup(ready.length);
+  el.title = checked.map((type) => {
+    const status = cliStatus[type.id];
+    const label = status.state === 'ready' ? t('cli.ready')
+      : status.state === 'unauthenticated' ? t('cli.unauthenticated')
+      : status.state === 'unreachable' ? t('cli.unreachable')
+      : t('cli.missing');
+    return `${status.state === 'ready' ? '●' : fixable(status.state) ? '◐' : '○'} ${type.label}: ${status.version || status.error || label}`;
+  }).join('\n');
+}
+
+// 空狀態原本只描述「圓桌會怎麼運作」,沒有告訴使用者現在該做什麼。
+// 一個成員都還不能用的時候,那段說明其實是誤導——照著送出任務只會失敗。
+function renderEmptySetup(readyCount: number): void {
+  const box = document.getElementById('empty-setup');
+  const label = document.getElementById('empty-setup-text');
+  const btn = document.getElementById('empty-setup-btn') as HTMLButtonElement | null;
+  if (!box || !label || !btn) return;
+  const usable = config.agents.filter((a) => a.enabled !== false && cliTypes[a.cli]
+    && (!cliStatus[a.cli] || cliStatus[a.cli].state === 'ready'));
+  const show = !usable.length;
+  box.hidden = !show;
+  if (!show) return;
+  label.textContent = readyCount ? t('empty.setupSomeReady') : t('empty.setupNone');
+  btn.onclick = () => openSettings('clis');
 }
 
 // ---------- CLI 與擴充 ----------
@@ -540,6 +735,79 @@ async function reloadExtensions() {
   await refreshCatalog();
 }
 
+// ---------- 一鍵連接本機模型(Ollama) ----------
+// 使用者反映「cli 與 api 與各種東西的連結太複雜,不是技術背景的使用者根本看不懂」。
+// 這個流程刻意只留一個決定:選一個模型。端點、API key、JSON、逾時、歷史上限全部
+// 留在 adapter 層,介面連顯示它們的機會都沒有。
+
+function setQuickStatus(message: string, kind: 'ok' | 'warn' | 'error' | '' = ''): void {
+  const el = $<HTMLDivElement>('#quick-status');
+  el.hidden = !message;
+  el.textContent = message;
+  el.className = `quick-status${kind ? ' ' + kind : ''}`;
+}
+
+async function detectOllama(): Promise<void> {
+  const btn = $<HTMLButtonElement>('#quick-detect');
+  btn.disabled = true;
+  $<HTMLDivElement>('#quick-pick').hidden = true;
+  setQuickStatus(t('quick.detecting'));
+  try {
+    const r = await window.api.quickSetupOllama();
+    if (!r.ok) {
+      // hint 是可以照做的下一步(例如「請先執行 ollama serve」);
+      // error 是 fetch 的原始訊息,多半是英文且對一般使用者沒有意義,不顯示。
+      setQuickStatus(r.hint || t('quick.notFound'), 'warn');
+      return;
+    }
+    if (!r.models.length) {
+      setQuickStatus(t('quick.noModels'), 'warn');
+      return;
+    }
+    const select = $<HTMLSelectElement>('#quick-model');
+    select.innerHTML = '';
+    for (const m of r.models) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.id;
+      select.appendChild(opt);
+    }
+    // 預設選中後端建議的模型,使用者不必自己判斷哪個好
+    if (r.recommendedModel) select.value = r.recommendedModel;
+    $<HTMLDivElement>('#quick-pick').hidden = false;
+    setQuickStatus(t('quick.found', { count: r.models.length }), 'ok');
+  } catch (error) {
+    // 主程序已經把 registry 的例外轉成 { ok:false }，所以走到這裡代表 IPC 本身出事。
+    // 即使如此也先給一句能照做的話，原始訊息只當補充,不要讓使用者只看到一行英文。
+    setQuickStatus(`${t('quick.notFound')}\n${cleanIpcError(error)}`, 'warn');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function applyOllamaModel(): Promise<void> {
+  const btn = $<HTMLButtonElement>('#quick-apply');
+  const model = $<HTMLSelectElement>('#quick-model').value;
+  if (!model) return;
+  btn.disabled = true;
+  setQuickStatus(t('quick.applying'));
+  try {
+    const r = await window.api.quickSetupOllama(model);
+    if (!r.installed) {
+      setQuickStatus(r.hint || r.error || t('quick.failed'), 'error');
+      return;
+    }
+    setQuickStatus(t('quick.done', { model: r.selectedModel || model }), 'ok');
+    $<HTMLDivElement>('#quick-pick').hidden = true;
+    // 設定已經寫進 adapter,重載後成員設定的清單才看得到它
+    await reloadExtensions();
+  } catch (error) {
+    setQuickStatus(`${t('quick.failed')}\n${cleanIpcError(error)}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderExtensions() {
   const list = $<HTMLDivElement>('#ext-list');
   if (!list) return;
@@ -547,14 +815,29 @@ function renderExtensions() {
   // 已載入的轉接器(內建 + 擴充)
   for (const type of Object.values(cliTypes)) {
     const st = cliStatus[type.id];
-    const dot = `<span class="status-dot ${!st ? '' : st.ok ? 'ok' : 'bad'}"></span>`;
-    const sub = st ? (st.ok ? st.version : st.error) : type.bin ? t('ext.checking') : t('ext.noCheck');
+    // unauthenticated 與 unreachable 都是「設定在,只差一步」——畫成 warn,和左下角摘要
+    // 的 fixable 判定一致(以前 unreachable 在這裡畫紅、在摘要算可修復,同一狀態兩種說法)。
+    const dotClass = !st ? '' : st.state === 'ready' ? 'ok' : st.state === 'unauthenticated' || st.state === 'unreachable' ? 'warn' : 'bad';
+    const dot = `<span class="status-dot ${dotClass}"></span>`;
+    // hint 是唯一「照做就能修好」的一句話(例如「請先執行 ollama serve」)。
+    // 以前只有 unauthenticated 讀 hint,unreachable 落到 st.error,使用者看到的是
+    // fetch 原文那種開發者訊息。錯誤原文改放 title,需要時才看得到。
+    const sub = st
+      ? st.state === 'ready' ? st.version || t('cli.ready')
+        : st.state === 'unauthenticated' ? st.hint || t('cli.unauthenticated')
+        : st.state === 'unreachable' ? st.hint || t('cli.unreachable')
+        : st.error || t('cli.missing')
+      : type.bin ? t('ext.checking') : t('ext.noCheck');
+    const subTitle = st && st.error && st.hint && st.error !== st.hint ? ` title="${escapeHtml(st.error)}"` : '';
+    // 目前只有 Codex 宣告 authCheck；待狀態契約提供獨立 command 欄位後可移除此窄幅對應。
+    const loginCommand = st?.state === 'unauthenticated' && type.id === 'codex' ? 'codex login' : '';
+    const auth = loginCommand ? `<div class="cli-auth"><code class="cli-auth-command">${escapeHtml(loginCommand)}</code><button type="button" class="cli-copy" data-copy-login="${escapeHtml(loginCommand)}">${escapeHtml(t('cli.copyLogin'))}</button></div>` : '';
     const badges = [`<span class="badge">${escapeHtml(typeLabel(type.type))}</span>`];
     if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
     const entry = extSummary.entries.find((e) => e.file === type.file);
     if (entry && entry.overrides) badges.push(`<span class="badge warn">${escapeHtml(t('ext.overrides'))}</span>`);
     if (type.modelError) badges.push(`<span class="badge warn">${escapeHtml(t('ext.modelListFailed'))}</span>`);
-    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub" title="${escapeHtml(sub || '')}">${escapeHtml(sub || '')}</div>${type.modelError ? `<div class="ext-err">${escapeHtml(type.modelError)}</div>` : ''}</div>` });
+    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub"${subTitle || ` title="${escapeHtml(sub || '')}"`}>${escapeHtml(sub || '')}</div>${auth}${type.modelError ? `<div class="ext-err">${escapeHtml(type.modelError)}</div>` : ''}</div>` });
   }
   // 載入失敗的擴充
   for (const e of extSummary.entries.filter((x) => x.error)) {
@@ -566,6 +849,14 @@ function renderExtensions() {
     el.className = `ext-item${r.file ? ' clickable' : ''}${r.broken ? ' broken' : ''}`;
     el.innerHTML = r.html;
     if (r.file) { const file = r.file; el.title = t('ext.clickToEdit', { file }); el.onclick = () => { void openExtEditor(file); }; }
+    const copy = el.querySelector<HTMLButtonElement>('[data-copy-login]');
+    if (copy) copy.onclick = (event) => {
+      event.stopPropagation();
+      void navigator.clipboard.writeText(copy.dataset.copyLogin || '').then(() => {
+        copy.textContent = t('cli.copied');
+        setTimeout(() => { if (copy.isConnected) copy.textContent = t('cli.copyLogin'); }, 1400);
+      });
+    };
     list.appendChild(el);
   }
 }
@@ -842,10 +1133,24 @@ function renderSidebar() {
     const el = document.createElement('div');
     el.className = 'agent-card' + (a.enabled === false ? ' disabled' : '');
     el.dataset.agentId = a.id;
+    // 健康狀態要畫在成員卡上。以前只在「轉接器沒註冊」時給徽章,所以綁到一個沒安裝的
+    // CLI 的成員看起來完全正常——使用者要等送出任務失敗才知道,而那時已經浪費一輪。
+    const health = cliTypes[a.cli] ? cliStatus[a.cli] : null;
+    const healthBadge = !cliTypes[a.cli]
+      ? `<span class="badge bad">${escapeHtml(t('agent.cliMissing'))}</span>`
+      : health && health.state === 'missing'
+        ? `<span class="badge bad" title="${escapeHtml(health.error || '')}">${escapeHtml(t('agent.notInstalled'))}</span>`
+        : health && health.state === 'unauthenticated'
+          ? `<span class="badge warn" title="${escapeHtml(health.hint || health.error || '')}">${escapeHtml(t('agent.needsKey'))}</span>`
+          : health && health.state === 'unreachable'
+            ? `<span class="badge warn" title="${escapeHtml(health.hint || health.error || '')}">${escapeHtml(t('agent.offline'))}</span>`
+            : '';
+    const editBadge = cliTypes[a.cli] && !(a.canEdit && cliTypes[a.cli].supportsEdit)
+      ? `<span class="badge">${escapeHtml(t('agent.readOnly'))}</span>` : '';
     el.innerHTML = `
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
-        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${!cliTypes[a.cli] ? `<span class="badge bad">${escapeHtml(t('agent.cliMissing'))}</span>` : a.canEdit && cliTypes[a.cli].supportsEdit ? '' : `<span class="badge">${escapeHtml(t('agent.readOnly'))}</span>`}</div>
+        <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${healthBadge}${editBadge}</div>
         <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort || t('agent.defaultEffort'))}</div>
         ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
       </div>`;
@@ -1065,6 +1370,125 @@ function setState(s: ChatState): void {
   updateComposerHint();
   if (openHistoryId) updateResumeButton();
   updateSpeakingHighlight();
+  if (Object.prototype.hasOwnProperty.call(s, 'question')) renderQuestion(s.question || null);
+}
+
+function renderQuestion(question: PendingQuestion | null): void {
+  const previous = currentQuestion;
+  currentQuestion = question;
+  if (!question) {
+    clearInterval(questionTimer);
+    questionTimer = undefined;
+    answeredQuestionId = null;
+    document.querySelector('#pending-question')?.remove();
+    return;
+  }
+  if (previous?.id === question.id && document.querySelector('#pending-question')) {
+    updateQuestionCountdown();
+    return;
+  }
+  clearInterval(questionTimer);
+  answeredQuestionId = null;
+  document.querySelector('#pending-question')?.remove();
+  const card = document.createElement('section');
+  card.id = 'pending-question';
+  card.className = 'question-card';
+  card.setAttribute('aria-labelledby', 'pending-question-title');
+
+  const head = document.createElement('div');
+  head.className = 'question-card-head';
+  head.innerHTML = `<strong>${escapeHtml(t('question.label', { name: question.agentName }))}</strong><span class="question-countdown"></span>`;
+  card.appendChild(head);
+  const text = document.createElement('div');
+  text.id = 'pending-question-title';
+  text.className = 'question-text';
+  text.textContent = question.question;
+  card.appendChild(text);
+
+  if (question.options.length) {
+    const options = document.createElement('div');
+    options.className = 'question-options';
+    for (const option of question.options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'question-option';
+      button.innerHTML = `<span class="question-option-id">${escapeHtml(option.id.toUpperCase())}</span><span class="question-option-copy"><b>${escapeHtml(option.label)}</b>${option.detail ? `<small>${escapeHtml(option.detail)}</small>` : ''}</span>`;
+      button.onclick = () => submitQuestion({ id: question.id, optionIds: [option.id], decision: 'answered' });
+      options.appendChild(button);
+    }
+    card.appendChild(options);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'question-actions';
+  if (question.allowFree) {
+    const free = document.createElement('form');
+    free.className = 'question-free';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = t('question.freePlaceholder');
+    input.setAttribute('aria-label', t('question.freePlaceholder'));
+    const send = document.createElement('button');
+    send.type = 'submit';
+    send.className = 'primary';
+    send.textContent = t('question.send');
+    free.onsubmit = (event) => {
+      event.preventDefault();
+      const answer = input.value.trim();
+      if (!answer) { input.focus(); return; }
+      submitQuestion({ id: question.id, text: answer, decision: 'answered' });
+    };
+    free.append(input, send);
+    actions.appendChild(free);
+  }
+  const defer = document.createElement('button');
+  defer.type = 'button';
+  defer.className = 'ghost';
+  defer.textContent = t('question.defer');
+  defer.onclick = () => submitQuestion({ id: question.id, decision: 'defer' });
+  actions.appendChild(defer);
+  card.appendChild(actions);
+  const status = document.createElement('div');
+  status.className = 'question-card-status';
+  status.setAttribute('aria-live', 'polite');
+  card.appendChild(status);
+
+  const timeline = $<HTMLDivElement>('#timeline');
+  const empty = $<HTMLDivElement>('#empty');
+  if (empty) empty.style.display = 'none';
+  timeline.appendChild(card);
+  updateQuestionCountdown();
+  questionTimer = setInterval(updateQuestionCountdown, 1000);
+  timeline.scrollTop = timeline.scrollHeight;
+}
+
+function submitQuestion(answer: QuestionAnswer): void {
+  if (!currentQuestion || currentQuestion.id !== answer.id || answeredQuestionId === answer.id || Date.now() >= currentQuestion.expiresAt) return;
+  answeredQuestionId = answer.id;
+  void window.api.answerQuestion(answer);
+  disableQuestionCard('answered');
+}
+
+function updateQuestionCountdown(): void {
+  if (!currentQuestion) return;
+  const remaining = Math.max(0, currentQuestion.expiresAt - Date.now());
+  const seconds = Math.ceil(remaining / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const time = `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+  const countdown = document.querySelector<HTMLElement>('#pending-question .question-countdown');
+  if (countdown) countdown.textContent = remaining > 0 ? t('question.remaining', { time }) : t('question.expired');
+  if (remaining <= 0 && answeredQuestionId !== currentQuestion.id) disableQuestionCard('expired');
+}
+
+function disableQuestionCard(reason: 'answered' | 'expired'): void {
+  clearInterval(questionTimer);
+  questionTimer = undefined;
+  const card = document.querySelector<HTMLElement>('#pending-question');
+  if (!card) return;
+  card.classList.add(reason);
+  card.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach((control) => { control.disabled = true; });
+  const status = card.querySelector<HTMLElement>('.question-card-status');
+  if (status) status.textContent = t(reason === 'answered' ? 'question.sent' : 'question.expired');
 }
 
 // ---------- @ 指定成員 ----------
@@ -1258,7 +1682,7 @@ const STAGE_OF_CODE: Record<string, string> = {
 };
 
 // 顯示文字一律在 renderer 這側依介面語言組出。
-const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'divide', 'execute', 'review', 'repair', 'summary']);
+const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'ask', 'divide', 'execute', 'review', 'repair', 'summary']);
 
 function phaseText(phase: PhaseValue | undefined | null): string {
   if (!phase) return '';
@@ -1346,7 +1770,35 @@ function userHtml(m: ChatMessage): string {
   return `<div class="avatar" style="background:var(--user-avatar)">${escapeHtml(t('msg.me'))}</div><div class="bubble"><div class="body">${md(m.text || '')}</div>${attachmentsMarkup(m.attachments)}</div>`;
 }
 function systemHtml(m: ChatMessage): string {
+  if (m.tag === 'tool-audit' && Array.isArray(m.toolAudit) && m.toolAudit.length) return toolAuditHtml(m);
   return `<div class="bubble"><div class="body">${md(m.text || '')}</div></div>`;
+}
+
+// 檔案工具的稽核紀錄。這是「成員實際做了什麼」,和它自己在報告裡說的話是兩回事;
+// 失敗要看得出來——靜默失敗會讓使用者以為改好了,實際上什麼也沒發生。
+function toolAuditHtml(m: ChatMessage): string {
+  const rows = (m.toolAudit || []).map((e) => {
+    // 統計退化成整檔行數時會嚴重高估,不標出來使用者會把它當精確數字
+    const approx = e.statsApproximate
+      ? `<span class="tool-approx" title="${escapeHtml(t('tool.approxTitle'))}">${escapeHtml(t('tool.approx'))}</span>`
+      : '';
+    const counts = e.added != null || e.removed != null
+      ? `<span class="tool-counts"><span class="diff-plus">+${e.added || 0}</span> <span class="diff-minus">−${e.removed || 0}</span>${approx}</span>`
+      : '';
+    const note = e.ok
+      ? (e.reason ? `<div class="tool-note">${escapeHtml(e.reason)}</div>` : '')
+      : `<div class="tool-note error">${escapeHtml(e.error || t('tool.unknownError'))}</div>`;
+    return `<div class="tool-row ${e.ok ? 'ok' : 'bad'}">`
+      + `<span class="tool-mark">${e.ok ? '✓' : '✗'}</span>`
+      + `<span class="tool-name">${escapeHtml(e.tool)}</span>`
+      + `<span class="tool-path">${escapeHtml(e.path || '')}</span>`
+      + counts
+      + note
+      + '</div>';
+  }).join('');
+  // 標題沿用主程序組好的第一行(含成員名稱),語系已經在那邊決定
+  const title = (m.text || '').split('\n')[0].replace(/\*\*/g, '');
+  return `<div class="bubble"><div class="body tool-audit"><div class="tool-audit-title">${escapeHtml(title)}</div>${rows}</div></div>`;
 }
 
 function renderUserMessage(el: HTMLElement, m: ChatMessage): void {
@@ -1401,13 +1853,34 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   shell.avatar.style.background = m.color || '#6c8cff';
   setTextIfChanged(shell.avatar, initials(m.agentName));
   shell.bubble.style.setProperty('--c', m.color || '#6c8cff');
-  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${status}`);
+  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${m.unreviewed ? `<span class="badge unreviewed" title="${escapeHtml(t('review.unreviewedTitle'))}">${escapeHtml(t('review.unreviewed'))}</span>` : ''}${status}`);
   renderThinking(shell.thinking, m.thinking || '');
   renderActivities(shell.activities, m.activities || []);
-  const body = text ? md(text) : (m.status === 'running' ? '<span class="hint">…</span>' : '');
+  // 回合結束卻沒有任何內容時,以前留下一個完全空白的泡泡——使用者無從判斷是
+  // 成員沒話說、還是出了什麼事。討論與總結階段都會這樣收尾,必須講出來。
+  const body = text
+    ? md(text)
+    : m.status === 'running' ? '<span class="hint">…</span>'
+      : m.error ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
+  if (shell.unreviewed) {
+    shell.unreviewed.hidden = !m.unreviewed;
+    if (m.unreviewed && !shell.unreviewed.dataset.built) {
+      shell.unreviewed.dataset.built = '1';
+      shell.unreviewed.textContent = '';
+      const text = document.createElement('span');
+      text.textContent = t('review.unreviewedHint');
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'unreviewed-open';
+      open.textContent = t('diff.open');
+      // 提示講「開啟上方的檔案改動」,那就讓它直接可按,不要只是敘述。
+      open.onclick = () => { void openDiff(); };
+      shell.unreviewed.append(text, open);
+    }
+  }
   const usage = usageText(m.usage);
   shell.usage.hidden = !usage;
   setTextIfChanged(shell.usage, usage);
@@ -1431,12 +1904,16 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     body.className = 'body';
     const error = document.createElement('div');
     error.className = 'error-text';
+    // 「沒有人審查過這次改動」是這個產品最不希望被忽略的訊號,不能只靠標頭一個小徽章。
+    const unreviewed = document.createElement('div');
+    unreviewed.className = 'unreviewed-note';
+    unreviewed.hidden = true;
     const usage = document.createElement('div');
     usage.className = 'usage';
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
     statusLine.textContent = t('msg.streaming');
-    bubble.append(head, thinking, activities, body, error, usage, statusLine);
+    bubble.append(head, thinking, activities, body, error, unreviewed, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
@@ -1454,6 +1931,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     activities: el.querySelector<HTMLElement>('.activities')!,
     body: el.querySelector<CachedEl>('.body')!,
     error: el.querySelector<CachedEl>('.error-text')!,
+    unreviewed: el.querySelector<HTMLElement>('.unreviewed-note'),
     usage: el.querySelector<CachedEl>('.usage')!,
     statusLine: el.querySelector<CachedEl>('.bubble-status')!,
   };

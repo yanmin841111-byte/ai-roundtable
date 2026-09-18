@@ -19,6 +19,9 @@ export const IPC_CHANNELS = {
   chatStop: 'chat:stop',
   chatReset: 'chat:reset',
   chatResume: 'chat:resume',
+  chatAnswer: 'chat:answer',
+  diffChanges: 'diff:changes',
+  ollamaQuickSetup: 'ollama:quickSetup',
   chatMessage: 'chat:message',
   chatState: 'chat:state',
   sessionSaved: 'session:saved',
@@ -85,7 +88,9 @@ export type PhaseCode =
   | 'execute'
   | 'review'
   | 'repair'
-  | 'summary';
+  | 'summary'
+  // 成員在討論階段提問,流程停在這裡等使用者回答
+  | 'ask';
 
 export interface PhaseInfo {
   code: PhaseCode;
@@ -150,10 +155,33 @@ export interface CliType {
   modelError?: string;
 }
 
+// 'missing' = 找不到指令;'unauthenticated' = 指令在但尚未登入 / 缺 API key;'ready' = 可用。
+// 判斷一律只看 exit code,不解析 CLI 的輸出文字(文案與語系都會隨版本改變)。
+//
+// 'unreachable' 只給「已配置、免驗證(沒有 apiKeyEnv / secretRef)但連不上」的 HTTP 型
+// 轉接器使用,典型例子是本機 Ollama 沒有啟動。這類端點不需要登入,套用
+// 'unauthenticated' 會讓使用者去找根本不存在的 API key;也不是 'missing',因為設定本身在。
+// CLI 型轉接器一律不使用這個值,其 missing / unauthenticated 判定維持原樣。
+export type CliState = 'missing' | 'unauthenticated' | 'unreachable' | 'ready';
+
+// 轉接器 check() / testConnection() 的回傳。多數轉接器只填 ok/version/error,
+// state 由 registry.checkAll() 統一補齊後才送到介面。
 export interface CliStatus {
   ok: boolean;
   version?: string;
   error?: string;
+  state?: CliState;
+  hint?: string;
+}
+
+// cli:check 給介面的正規化結果:state 一定有值,介面不必比對錯誤字串。
+export interface CliHealth {
+  state: CliState;
+  ok: boolean;
+  version?: string;
+  error?: string;
+  // 未登入時要顯示給使用者的指令,例如「請在終端機執行 codex login」
+  hint?: string;
 }
 
 export interface ExtEntry {
@@ -244,8 +272,10 @@ export interface ChatMessage {
   cli?: string;
   model?: string;
   phase?: PhaseValue;
-  // 系統訊息的結構標記(例如 'plan' = 分工結果),讓程式不必比對文案
+  // 系統訊息的結構標記(例如 'plan' = 分工結果、'tool-audit' = 檔案工具稽核),讓程式不必比對文案
   tag?: string;
+  // tag === 'tool-audit' 時的結構化內容;text 是同一份資料的可讀版本
+  toolAudit?: ToolAuditEntry[];
   color?: string;
   group?: string;
   directed?: boolean;
@@ -255,6 +285,42 @@ export interface ChatMessage {
   attachments?: AttachmentMeta[];
   mentions?: Array<{ id?: string; name: string }>;
   usage?: UsageInfo | null;
+  // 這則訊息改了檔案,但沒有其他成員審查過。只有一位成員、或審查階段失敗時會發生;
+  // 介面必須明講,否則使用者會把「跑完了」當成「有人看過了」。
+  // 由 orchestrator 在執行階段結束時填入(工具呼叫層接線時)。
+  unreviewed?: boolean;
+}
+
+// ---------- 選項式提問 ----------
+// 成員在討論階段(唯一循序執行的階段)可以用 [ASK] 區塊反問使用者,
+// orchestrator 會停下來等回答。執行/審查/指定階段是平行的,一律不開放提問。
+
+export interface QuestionOption {
+  // 回答時回傳這個;由 parseAsk 依順序指派 a、b、c…,不取用模型自己寫的編號
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+export interface PendingQuestion {
+  id: string;
+  agentId: string;
+  agentName: string;
+  question: string;
+  // 可為空陣列:模型只寫了問題沒給選項時,卡片只顯示自由輸入
+  options: QuestionOption[];
+  // 目前恆為 true:選項是捷徑,使用者永遠可以自己打字回答
+  allowFree: boolean;
+  // epoch ms。逾時由 orchestrator 負責結算成 defer,UI 只依這個顯示倒數
+  expiresAt: number;
+}
+
+export interface QuestionAnswer {
+  id: string;
+  optionIds?: string[];
+  text?: string;
+  // defer =「你決定」、逾時、或等待中按下停止
+  decision: 'answered' | 'defer';
 }
 
 export interface ChatState {
@@ -262,6 +328,8 @@ export interface ChatState {
   phase?: PhaseValue;
   sessionId?: string | null;
   messages?: ChatMessage[];
+  // null 表示目前沒有待答問題
+  question?: PendingQuestion | null;
 }
 
 // ---------- 歷史紀錄 ----------
@@ -331,6 +399,88 @@ export interface ExtReadResult {
   migrationError: string;
 }
 
+// ---------- 檔案改動(紅綠 diff) ----------
+// 成員會直接改使用者的檔案,但介面原本只看得到文字描述。這組型別讓介面能逐檔、逐行
+// 呈現實際改了什麼。目前是唯讀呈現:不提供套用或還原,避免介面變成第二個版本控制工具。
+export type DiffLineKind = 'add' | 'del' | 'ctx' | 'hunk';
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+}
+
+// status 沿用 git 的語意,但把未追蹤檔一律歸成 'added':對使用者來說
+// 「git 還不知道這個檔案」和「新增的檔案」是同一件事。
+export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
+
+export interface DiffFile {
+  path: string;
+  // 改名前的路徑;只有 status === 'renamed' 才有值
+  oldPath?: string;
+  status: DiffFileStatus;
+  added: number;
+  removed: number;
+  // 二進位檔沒有逐行內容,只顯示檔名與狀態
+  binary?: boolean;
+  // 超過行數上限時只帶前段內容,truncated 為 true,介面要說明「僅顯示前 N 行」
+  truncated?: boolean;
+  lines: DiffLine[];
+}
+
+export type DiffResult =
+  // totalFiles 是工作目錄實際的改動檔案數。files 可能因上限而較少,介面必須比對兩者,
+  // 否則會把「只顯示前 N 個」呈現成精確的總數與完整增刪統計。
+  | { ok: true; dir: string; files: DiffFile[]; totalFiles: number }
+  // reason 是給介面判斷要顯示哪一種說明,不是直接給使用者看的文字
+  | { ok: false; reason: 'no-workdir' | 'not-a-repo' | 'failed'; detail?: string };
+
+// ---------- 檔案工具稽核紀錄 ----------
+// 成員用工具改檔時,它「說」自己做了什麼和「實際」做了什麼可能對不上。這份紀錄是實際發生的事,
+// 會一併寫進 transcript 讓審查者看得到——否則交叉審查只是在審一篇作文。
+//
+// 刻意不含檔案內容:read_file 的回傳動輒數萬字,放進 transcript 會把每一回合的提示詞撐爆。
+// replaced 只留片段,讓審查者知道改了什麼形狀的東西,細節請看紅綠 diff。
+export interface ToolAuditEntry {
+  tool: string;
+  path?: string;
+  ok: boolean;
+  error?: string;
+  // 修改前後的 SHA-256。前者目前取自模型提供的 expectedSha256,後者是寫入後的實際值。
+  shaBefore?: string;
+  shaAfter?: string;
+  added?: number;
+  removed?: number;
+  // 增刪行數是近似值。逐行 diff 超過運算保護值時會退回「整檔行數」,
+  // 那個數字看起來精確但會嚴重高估;不標出來的話,審查者會拿它當事實。
+  statsApproximate?: boolean;
+  replacements?: number;
+  // 模型自述的修改目的(write_file 的 reason)
+  reason?: string;
+  // replace_text 實際換掉的片段;已截斷,不是完整檔案內容
+  replaced?: { before: string; after: string; truncated: boolean };
+}
+
+// ---------- 一鍵連接本機模型(Ollama) ----------
+// 目的是讓「接上本機模型」只剩一個決定:選哪個模型。端點、API key、JSON 這些
+// 技術細節全部留在 adapter 層,不進到這個契約,介面也就沒有機會把它們顯示出來。
+export interface OllamaSetupResult {
+  ok: boolean;
+  // 實際偵測與寫入用的端點。介面不顯示,但錯誤排查時有用
+  baseUrl: string;
+  models: Model[];
+  // 建議預設選中的模型;沒有已安裝模型時為 null
+  recommendedModel: string | null;
+  // 偵測失敗時的原始錯誤(英文居多),介面優先顯示 hint 而不是這個
+  error?: string | null;
+  // 可以照做的下一步,例如「請先執行 ollama serve」
+  hint?: string | null;
+  // 是否已經寫入設定。只有帶 model 呼叫且成功時才是 true
+  installed: boolean;
+  selectedModel?: string;
+  adapterId?: string;
+  file?: string;
+}
+
 export type OkResult = { ok: true } | { ok: false; error: string };
 export type SessionReadResult = { ok: true; session: SessionDetail } | { ok: false; error: string };
 
@@ -340,7 +490,7 @@ export interface IpcContract {
   'config:get': { args: []; result: AppConfig };
   'config:save': { args: [cfg: SaveConfigPayload<AppConfig>]; result: AppConfig };
   'cli:types': { args: []; result: Record<string, CliType> };
-  'cli:check': { args: []; result: Record<string, CliStatus> };
+  'cli:check': { args: [opts?: { probeCredentialed?: boolean }]; result: Record<string, CliHealth> };
   'dialog:pickDir': { args: []; result: string | null };
   'dialog:pickExecutable': { args: []; result: string | null };
   'shell:openPath': { args: [p: string]; result: string };
@@ -351,6 +501,9 @@ export interface IpcContract {
   'chat:stop': { args: []; result: void };
   'chat:reset': { args: []; result: void };
   'chat:resume': { args: [sessionId: string]; result: ResumeResult };
+  'chat:answer': { args: [answer: QuestionAnswer]; result: void };
+  'diff:changes': { args: []; result: DiffResult };
+  'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   'attachments:list': { args: []; result: AttachmentsResult };
   'attachments:pick': { args: []; result: AttachmentsResult };
   'attachments:add': { args: [payload: { items: AttachmentInput[] }]; result: AttachmentsResult };
@@ -392,7 +545,8 @@ export interface RendererApi {
   getConfig(): Promise<AppConfig>;
   saveConfig(cfg: AppConfig): Promise<AppConfig>;
   cliTypes(): Promise<Record<string, CliType>>;
-  checkCli(): Promise<Record<string, CliStatus>>;
+  // probeCredentialed:真的連線驗證有 key 的雲端 API(打開設定畫面時才帶)
+  checkCli(opts?: { probeCredentialed?: boolean }): Promise<Record<string, CliHealth>>;
   pickDir(): Promise<string | null>;
   pickExecutable(): Promise<string | null>;
   openPath(p: string): Promise<string>;
@@ -403,6 +557,12 @@ export interface RendererApi {
   stop(): Promise<void>;
   reset(): Promise<void>;
   resume(sessionId: string): Promise<ResumeResult>;
+  // 回答成員的提問。id 驗證與 first-answer-wins 都在 orchestrator,這裡只負責轉交。
+  answerQuestion(answer: QuestionAnswer): Promise<void>;
+  // 工作目錄目前的檔案改動;唯讀,不提供套用或還原
+  getDiff(): Promise<DiffResult>;
+  // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
+  quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
   attachments: {
     list(): Promise<AttachmentsResult>;
     pick(): Promise<AttachmentsResult>;
