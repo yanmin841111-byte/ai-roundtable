@@ -46,6 +46,11 @@
 
 /* ---------- 基礎元件 ---------- */
 * { box-sizing: border-box; }
+/* hidden 屬性必須永遠勝出。瀏覽器預設的 [hidden]{display:none} 優先度最低,任何一條
+   設了 display 的作者樣式(例如 .unreviewed-note{display:flex})都會把它蓋掉,元素就在
+   該隱藏時冒出來。這個錯誤在本檔已經出現過三次:#ext-cli-fields、.unreviewed-note、
+   .empty-setup。逐一加 :not([hidden]) 只會等下一個人再犯,所以從根源擋掉。 */
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--font-size); -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; white-space: nowrap; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 7px 14px; line-height: 1.35; transition: background .12s, border-color .12s, color .12s; }

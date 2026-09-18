@@ -107,6 +107,10 @@ async function main() {
       g.check(/圖片內容無法提供給 純文字/.test(g.text('#hint')), '圖片附件指向純文字成員時,送出前顯示能力警告');
       await g.shot('04-image-warning');
 
+      // 該隱藏的東西真的隱藏了嗎(例如沒有「尚未審查」時,那個提示框不該留下一個空框)
+      const leaks = g.hiddenLeaks();
+      g.check(leaks.length === 0, `沒有帶 hidden 卻仍佔版面的元素(${leaks.join(', ') || '無'})`);
+
       return { badges, rows: rows.map((x: any) => x.text.slice(0, 80)) };
     },
   });

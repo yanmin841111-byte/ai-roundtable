@@ -129,11 +129,17 @@ const send = async (msg, mode = 'divide', attachments = []) => {
   await w(700);
   return (await snapshot()).messages.slice(before);
 };
+// 帶 hidden 屬性、卻仍然佔據版面的元素。作者樣式的 display 會蓋掉 [hidden],
+// 這個錯誤在本專案出現過好幾次,而且肉眼很難發現(常是一個空框或一段空白)。
+// 每個情境結束前都該確認它是空的。
+const hiddenLeaks = () => Array.from(document.querySelectorAll('[hidden]'))
+  .filter((e) => e.offsetWidth > 0 || e.offsetHeight > 0)
+  .map((e) => (e.id ? '#' + e.id : '.' + String(e.className || e.tagName).split(' ')[0]));
 // 從訊息陣列抽出工具稽核紀錄,驗「成員真的改了檔案」時最常用
 const toolAudits = (msgs) => msgs.filter((m) => m.kind === 'system' && m.tag === 'tool-audit').flatMap((m) => m.toolAudit || []);
 // 也掛到 globalThis:劇本用 TypeScript 寫時看不到這裡的區域變數,只能透過 globalThis 取用。
 // api 不列入:它是 contextBridge 掛的唯讀屬性,劇本本來就能用 window.api。
-Object.assign(globalThis, { H, steps, w, check, $, text, shot, snapshot, waitFor, waitIdle, ready, send, toolAudits });
+Object.assign(globalThis, { H, steps, w, check, $, text, shot, snapshot, waitFor, waitIdle, ready, send, toolAudits, hiddenLeaks });
 `;
 
 function buildScenarioSource(opts: HarnessOptions): string {
