@@ -9,6 +9,7 @@ import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joi
 import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape } from './util';
 import { openDiff, loadDiff } from './diff-view';
 import { renderTaskSummary } from './task-card';
+import { setupLineups, renderLineupButton } from './lineup-menu';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth,
@@ -73,6 +74,18 @@ async function init() {
   [config, cliTypes, extSummary] = await Promise.all([window.api.getConfig(), window.api.cliTypes(), window.api.ext.list()]);
   applyAppearance();
   applyStaticText();
+  setupLineups({
+    config: () => config,
+    running: () => running,
+    commit: (next) => {
+      config.agents = next.agents;
+      config.settings = next.settings;
+      config.lineups = next.lineups;
+      $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
+      window.api.saveConfig(config);
+      renderSidebar();
+    },
+  });
   renderSidebar();
   renderExtensions();
   const snap = await window.api.snapshot();
@@ -192,7 +205,7 @@ async function init() {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveExtension(); }
   });
   $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
-  $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; window.api.saveConfig(config); };
+  $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; window.api.saveConfig(config); renderLineupButton(); };
 }
 
 // ---------- 設定視窗 ----------
@@ -1047,6 +1060,7 @@ function renderSidebar() {
   const sel = $<HTMLSelectElement>('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
   updateSpeakingHighlight();
+  renderLineupButton(); // 成員、角色、主持人或流程改了,陣容可能變成「已修改」
 }
 
 function saveSettings() {
@@ -1364,6 +1378,7 @@ function setState(s: ChatState): void {
   updateComposerHint();
   if (openHistoryId) updateResumeButton();
   updateSpeakingHighlight();
+  renderLineupButton(); // 會議進行中不能換陣容
   if (Object.prototype.hasOwnProperty.call(s, 'question')) renderQuestion(s.question || null);
 }
 

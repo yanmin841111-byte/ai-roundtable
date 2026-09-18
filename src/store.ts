@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import type { AppConfig } from './ipc-types';
+import { sanitizeLineups } from './lineups';
 
 function defaultConfig(): AppConfig {
   return {
@@ -58,7 +59,7 @@ class Store {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       const def = defaultConfig();
-      return { agents: Array.isArray(raw.agents) ? raw.agents : def.agents, settings: { ...def.settings, ...(raw.settings || {}) } };
+      return { agents: Array.isArray(raw.agents) ? raw.agents : def.agents, settings: { ...def.settings, ...(raw.settings || {}) }, lineups: sanitizeLineups(raw.lineups) };
     } catch {
       return defaultConfig();
     }

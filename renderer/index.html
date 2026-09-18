@@ -18,7 +18,9 @@
 
       <div class="side-scroll">
         <div class="side-section">
-          <div class="side-head"><span data-i18n="side.members">成員</span><button id="add-agent" class="ghost small" data-i18n="side.add">+ 新增</button></div>
+          <div class="side-head"><span data-i18n="side.members">成員</span><div class="row"><button id="lineup-btn" class="ghost small lineup-btn" aria-haspopup="true" aria-expanded="false" aria-controls="lineup-menu">陣容</button><button id="add-agent" class="ghost small" data-i18n="side.add">+ 新增</button></div></div>
+          <div id="lineup-menu" class="lineup-menu" hidden></div>
+          <div id="lineup-note" class="lineup-note" role="status" hidden></div>
           <div id="agent-list"></div>
         </div>
 

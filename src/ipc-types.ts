@@ -132,11 +132,24 @@ export interface AppSettings {
   fontSize?: number;
   // 介面語言:'system' 跟隨作業系統;沒設定時視同 system
   uiLocale?: 'system' | 'zh-Hant' | 'en';
+  // 最近一次套用或儲存的陣容;側欄據此標出目前是哪個陣容、之後有沒有改過
+  activeLineupId?: string | null;
+}
+
+// 陣容:一組「誰上場、各自的角色、誰主持、什麼流程、討論幾輪」(見 src/lineups.ts)
+export interface Lineup {
+  id: string;
+  name: string;
+  members: Array<{ id: string; persona: string }>;
+  leadAgentId: string | null;
+  mode: string;
+  maxRounds: number;
 }
 
 export interface AppConfig {
   agents: AgentConfig[];
   settings: AppSettings;
+  lineups?: Lineup[];
 }
 
 // API 成員所用模型的能力。true / false 是確定的(Ollama 回報、端點提供的模型資料,或實際測過);

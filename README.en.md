@@ -13,6 +13,7 @@ A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI, 
 - **Several AIs at one table**: Claude Code, Codex CLI and Cursor CLI are built in; Grok, Kimi, DeepSeek, Gemini, OpenRouter, Ollama and more can be added from templates in one click.
 - **Extensible**: describe any CLI or OpenAI-compatible API in JSON, or write a JS plugin; edit and reload extensions inside the app.
 - **Per-member settings**: role and personality, model, reasoning effort, and whether the member may edit files.
+- **Lineups**: save who takes part, their roles, the lead and the flow, and switch back with one click.
 - **Discuss → divide → execute in parallel → cross-review → summarize**, streamed live, including tool calls and thinking.
 - **Interject any time**: messages sent while a task runs are shown to the next member to speak.
 - **@-mention a member**: type `@Name` so only that member replies or acts, skipping the discussion flow; several members at once run in parallel.
@@ -80,6 +81,8 @@ Click a member card in the sidebar to edit it:
 | Custom command | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -` |
 
 The lead is chosen in Settings and is responsible for dividing the work and summarizing.
+
+**Lineups**: the "Lineups" button next to Members saves the current setup: which members take part, their roles and personalities, the lead, the flow and the number of discussion rounds. One click switches back: the lineup's members are enabled with the roles saved in it, and the others are paused. A lineup only remembers which members it includes; it never changes their CLI, model or keys. When the setup changes after a lineup is applied, the button marks it "modified" so you can update the lineup or save a new one.
 
 ## Adding other CLIs and APIs
 

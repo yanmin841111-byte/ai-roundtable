@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Lineups: save who takes part, their roles, the lead, the flow and the number of discussion rounds, and switch back with one click from the sidebar. A lineup only remembers which members it includes and never changes their CLI, model or keys; changes made after applying one are marked "modified".
 - API members (Ollama and the cloud API templates) can read and edit files through three restricted file tools. They are offered only when the template opts in, the member allows editing, and another member can review the change; every call is recorded in the transcript so the reviewer sees what actually happened.
 - In cross-review every reviewer sees the actual changes, in a way that fits it: CLI members open the files themselves; API members with file tools get a read-only `read_file` plus the file contents inline; everyone else gets the contents inline. Changes come from a snapshot of the working folder before and after execution, so git is not required.
 - Review messages show a verdict badge (approved, issues raised, review failed) and what the reviewer looked at; clicking a file name opens Changes on that file.
