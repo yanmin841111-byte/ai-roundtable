@@ -81,4 +81,4 @@ Commit 訊息用英文祈使句開頭,第一行簡短說明做了什麼,例如 `
 
 ## 授權
 
-送出的貢獻會以 [MIT 授權](LICENSE) 釋出。
+送出的貢獻會以本專案的授權 [PolyForm Noncommercial 1.0.0](LICENSE) 釋出。

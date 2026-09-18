@@ -179,4 +179,6 @@ Issues and pull requests are welcome; see [CONTRIBUTING.en.md](CONTRIBUTING.en.m
 
 ## License
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE): individuals, research, education and non-profit organizations may use, modify and share it for free; **commercial use is not permitted**. For a commercial license, please [contact the author](https://github.com/yanmin841111-byte).
+
+The source is public, but because commercial use is restricted, this is not an "open source" license as the OSI defines it. Versions published before the switch to this license (including v0.1.0) were released under the MIT License, and code obtained from those versions remains under MIT.

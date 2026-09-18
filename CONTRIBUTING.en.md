@@ -81,4 +81,4 @@ Scores for the model you use are welcome: run `npm run eval -- --runs 10 --save`
 
 ## License
 
-Contributions are released under the [MIT License](LICENSE).
+Contributions are released under the project's license, [PolyForm Noncommercial 1.0.0](LICENSE).

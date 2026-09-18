@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- The license changed from MIT to [PolyForm Noncommercial 1.0.0](LICENSE): free for personal, research, education and non-profit use; commercial use is not permitted. Versions published before the change (including v0.1.0) remain under MIT.
 - A visual refresh across the interface: cool-toned neutrals, brand-blue gradients and glows, a faint dot-grid background, a frosted top bar, thinner lines and tabular numerals; both the light and dark themes were retuned.
 - Once the lead's plan output (usually JSON) parses, it is folded away and only the plan card is shown; output that failed to parse stays fully visible.
 - System messages, errors and API adapter messages from the main process follow the interface language, and so do the file-tool descriptions, errors and memory placeholders the model reads, so an English meeting no longer gives the model mixed-language instructions.
