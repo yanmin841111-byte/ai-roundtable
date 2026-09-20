@@ -101,6 +101,15 @@ function applyWidth(next: number): void {
   const max = Math.max(MIN_WIDTH, Math.min(Math.round(window.innerWidth * MAX_RATIO), Math.round(room)));
   width = Math.min(max, Math.max(MIN_WIDTH, Math.round(next)));
   panel().style.width = `${width}px`;
+  // 上面那個保留寬度只是個估計:同一排按鈕在不同字體、不同介面語言下需要的寬度不一樣
+  // (英文比中文寬,CI 的機器又和開發機不同)。所以量一次真的放不放得下,放不下就把面板讓回去——
+  // 不要賭一個寫死的數字剛好夠,那排按鈕被擠出去就點不到了。
+  const bar = document.querySelector<HTMLElement>('#topbar');
+  if (!bar) return;
+  const overflow = bar.scrollWidth - bar.clientWidth;
+  if (overflow <= 0) return;
+  width = Math.max(MIN_WIDTH, width - overflow);
+  panel().style.width = `${width}px`;
 }
 
 export async function toggleTerminal(force?: boolean): Promise<void> {
@@ -354,7 +363,8 @@ export async function openTerminalWith(command: string): Promise<void> {
   tab.term.focus();
 }
 
-/** 切換介面語言時重畫分頁名稱 */
+/** 切換介面語言時重畫分頁名稱,並重新確認工具列還放得下(英文的按鈕比中文寬) */
 export function relocalizeTerminal(): void {
   for (const tab of tabs) renderTabButton(tab);
+  if (!panel().hidden) { applyWidth(width); fitActive(); }
 }

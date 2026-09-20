@@ -91,6 +91,15 @@ async function main() {
       const wider = await g.waitFor(() => (screen().match(/RT_WIDER_(\d+)/) || null), 20000, '拉寬後的欄數');
       g.check(Number(wider[1]) > Number(narrow[1]), `拉寬面板之後欄數變多(${narrow[1]} → ${wider[1]}）`);
 
+      // 換成英文:同一排按鈕變寬,面板要自己讓回去(CI 的機器字體和開發機不同,這條就是為它加的)
+      (document.querySelector('input[name="ui-locale"][value="en"]') as HTMLInputElement).click();
+      await g.w(500);
+      const barEn = g.$('#topbar') as HTMLElement;
+      g.check(barEn.scrollWidth <= barEn.clientWidth + 1, `英文介面下工具列仍然放得下(需要 ${barEn.scrollWidth}px,有 ${barEn.clientWidth}px)`);
+      g.check(panel().offsetWidth >= 340, `讓回去之後面板仍有可用寬度(${panel().offsetWidth}px)`);
+      (document.querySelector('input[name="ui-locale"][value="zh-Hant"]') as HTMLInputElement).click();
+      await g.w(500);
+
       // 一直拉也不能把對話擠掉:面板有上限,時間軸與工具列一定留得下
       press('ArrowLeft', 40);
       g.check(timelineWidth() >= 540, `拉到底時時間軸仍然留著(${timelineWidth()}px)`);
