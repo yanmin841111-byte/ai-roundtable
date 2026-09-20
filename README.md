@@ -171,11 +171,12 @@ CLI 的 session 不會寫進歷史紀錄。載入歷史對話繼續討論時,每
 | `src/adapters/` | 內建轉接器、擴充載入、CLI / API 通用轉接器 |
 | `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts` | 附件、歷史紀錄、API key 儲存 |
 | `src/terminal.ts`、`src/pty.exp`、`renderer/terminal.ts` | 終端分頁:pty(借 macOS 內建的 expect,不需要原生模組)與右側面板 |
+| `src/git-check.ts`、`renderer/env-fix.ts` | 環境問題:偵測這台機器的 git 能不能用,以及「照實說一句話 + 一個可照做的下一步」的統一卡片 |
 | `src/models.ts`、`src/model-rules.ts`、`src/usage.ts` | 模型清單、強度規則、用量正規化 |
 | `adapters/templates/` | 「+ 新增」裡的擴充範本 |
 | `docs/` | 擴充撰寫說明與介面文案規格 |
 | `test/` | `npm test` 執行的測試;`test/e2e/` 是端對端測試 |
-| `eval/` | 審查品質評測:真的模型當審查者,跑一組固定題目 |
+| `eval/` | 審查品質評測,以及「單人 vs 圓桌」對照實驗;都用真的模型跑固定題目,長時間的實驗可以用流水帳續跑 |
 | `dist/` | `npm run build` 的輸出,app 實際載入的是這裡(不進版控) |
 
 ## 貢獻

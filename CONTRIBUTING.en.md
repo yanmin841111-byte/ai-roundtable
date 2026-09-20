@@ -33,7 +33,7 @@ The code is TypeScript. `npm start` builds into `dist/` and then launches Electr
 | `npm run build` | Compile the main process with `tsc`, bundle the interface with esbuild, copy static files to `dist/` |
 | `npm run smoke:dist` | Confirm the CommonJS output in `dist/` loads |
 | `npm run e2e` | Build, then launch the real Electron app and run a full roundtable, attachments, @-mentions and history with fake members (`test/e2e/`); no CLI needs to be installed |
-| `npm run harness:ui` | Build, then run the interface scenarios (`test/harness/scenarios/`) to check that status lights, badges, review verdicts, model abilities and the like tell the truth, keeping screenshots; fake members only, about 1–2 minutes, also run in CI |
+| `npm run harness:ui` | Build, then run the interface scenarios (`test/harness/scenarios/`) to check that status lights, badges, review verdicts, model abilities and the like tell the truth, keeping screenshots; fake members only, about 5–6 minutes as scenarios accumulate, also run in CI |
 | `npm run eval` | Review-quality evaluation: a real model reviews a fixed set of tasks and gets a score (see [eval/README.en.md](eval/README.en.md)); needs a real model, not run in CI |
 
 Handy environment variables and flags during development:

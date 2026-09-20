@@ -33,7 +33,7 @@ npm test
 | `npm run build` | `tsc` 編譯主程序、esbuild 打包介面、複製靜態檔到 `dist/` |
 | `npm run smoke:dist` | 確認 `dist/` 的 CommonJS 輸出可以正常載入 |
 | `npm run e2e` | 建置後啟動真正的 Electron app,用假成員跑完整圓桌、附件、@ 指定與歷史紀錄(`test/e2e/`),不需要安裝任何 CLI |
-| `npm run harness:ui` | 建置後逐一跑介面情境(`test/harness/scenarios/`),檢查燈號、徽章、審查結論、模型能力等畫面有沒有說實話,並留下截圖;全假成員,約 1~2 分鐘,CI 也會跑 |
+| `npm run harness:ui` | 建置後逐一跑介面情境(`test/harness/scenarios/`),檢查燈號、徽章、審查結論、模型能力等畫面有沒有說實話,並留下截圖;全假成員,約 5~6 分鐘(情境愈加愈多),CI 也會跑 |
 | `npm run eval` | 審查品質評測:真的模型當審查者跑一組固定題目,輸出分數(見 [eval/README.md](eval/README.md));要跑真的模型,不進 CI |
 
 開發時好用的環境變數與參數:

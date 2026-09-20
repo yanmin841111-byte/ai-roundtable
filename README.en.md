@@ -171,11 +171,12 @@ Everything is under `~/Library/Application Support/AI Roundtable/`; `sessions/` 
 | `src/adapters/` | Built-in adapters, extension loading, generic CLI / API adapters |
 | `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts` | Attachments, history, API key storage |
 | `src/terminal.ts`, `src/pty.exp`, `renderer/terminal.ts` | Terminal tabs: the pty (borrowed from the expect that ships with macOS, so no native module) and the right-hand panel |
+| `src/git-check.ts`, `renderer/env-fix.ts` | Environment problems: whether git can run on this machine, and the shared card that states what happened plus one thing to do about it |
 | `src/models.ts`, `src/model-rules.ts`, `src/usage.ts` | Model lists, effort rules, usage normalization |
 | `adapters/templates/` | Extension templates shown under "+ Add" |
 | `docs/` | Extension guide and interface copy spec |
 | `test/` | Tests run by `npm test`; `test/e2e/` is the end-to-end run |
-| `eval/` | Review-quality evaluation: a real model reviews a fixed set of tasks |
+| `eval/` | Review-quality evaluation and the solo-vs-roundtable experiment: real models on a fixed set of tasks; long runs resume from a journal |
 | `dist/` | Output of `npm run build`, which is what the app loads (not committed) |
 
 ## Contributing
