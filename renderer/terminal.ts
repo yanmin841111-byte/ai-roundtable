@@ -102,10 +102,15 @@ function applyWidth(next: number): void {
   width = Math.min(max, Math.max(MIN_WIDTH, Math.round(next)));
   panel().style.width = `${width}px`;
   // 上面那個保留寬度只是個估計:同一排按鈕在不同字體、不同介面語言下需要的寬度不一樣
-  // (英文比中文寬,CI 的機器又和開發機不同)。所以量一次真的放不放得下,放不下就把面板讓回去——
-  // 不要賭一個寫死的數字剛好夠,那排按鈕被擠出去就點不到了。
+  // (英文比中文寬,別人的機器又和開發機不同)。所以量真的放不放得下,分兩段讓步:
+  //   1. 工具列自己縮一號(compact:小一點的字、工作目錄只留圖示)
+  //   2. 還是不夠,面板再把差額讓回去
+  // 不要賭一個寫死的數字剛好夠——那排按鈕被擠出畫面就點不到了。
   const bar = document.querySelector<HTMLElement>('#topbar');
   if (!bar) return;
+  bar.classList.remove('compact');
+  if (bar.scrollWidth <= bar.clientWidth) return;
+  bar.classList.add('compact');
   const overflow = bar.scrollWidth - bar.clientWidth;
   if (overflow <= 0) return;
   width = Math.max(MIN_WIDTH, width - overflow);
@@ -121,6 +126,8 @@ export async function toggleTerminal(force?: boolean): Promise<void> {
   if (!open) {
     // 收起來而已:分頁繼續跑,跑著的指令不會被打斷
     panel().hidden = true;
+    // 面板收起來之後 #main 恢復原本的寬度,工具列不必再縮
+    document.querySelector<HTMLElement>('#topbar')?.classList.remove('compact');
     toggleButton().classList.remove('on');
     toggleButton().setAttribute('aria-expanded', 'false');
     $<HTMLTextAreaElement>('#input').focus();

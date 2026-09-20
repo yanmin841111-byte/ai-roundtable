@@ -52,7 +52,8 @@ async function main() {
 
       // 工具列變窄之後每個按鈕都還要點得到(#main 一窄,不換行的按鈕列最容易被擠出去)
       const bar = g.$('#topbar') as HTMLElement;
-      g.check(bar.scrollWidth <= bar.clientWidth + 1, '工具列在變窄之後仍然放得下');
+      const barFit = () => `需要 ${bar.scrollWidth}px / 有 ${bar.clientWidth}px${bar.classList.contains('compact') ? ' · 已縮排' : ''} · 面板 ${panel().offsetWidth}px`;
+      g.check(bar.scrollWidth <= bar.clientWidth + 1, `工具列在變窄之後仍然放得下(${barFit()})`);
       const reset = (g.$('#reset-btn') as HTMLElement).getBoundingClientRect();
       g.check(reset.right <= bar.getBoundingClientRect().right + 1, '最右邊的「新對話」沒有被擠出畫面');
 
@@ -95,7 +96,7 @@ async function main() {
       (document.querySelector('input[name="ui-locale"][value="en"]') as HTMLInputElement).click();
       await g.w(500);
       const barEn = g.$('#topbar') as HTMLElement;
-      g.check(barEn.scrollWidth <= barEn.clientWidth + 1, `英文介面下工具列仍然放得下(需要 ${barEn.scrollWidth}px,有 ${barEn.clientWidth}px)`);
+      g.check(barEn.scrollWidth <= barEn.clientWidth + 1, `英文介面下工具列仍然放得下(${barFit()})`);
       g.check(panel().offsetWidth >= 340, `讓回去之後面板仍有可用寬度(${panel().offsetWidth}px)`);
       (document.querySelector('input[name="ui-locale"][value="zh-Hant"]') as HTMLInputElement).click();
       await g.w(500);
@@ -103,8 +104,7 @@ async function main() {
       // 一直拉也不能把對話擠掉:面板有上限,時間軸與工具列一定留得下
       press('ArrowLeft', 40);
       g.check(timelineWidth() >= 540, `拉到底時時間軸仍然留著(${timelineWidth()}px)`);
-      const bar2 = g.$('#topbar') as HTMLElement;
-      g.check(bar2.scrollWidth <= bar2.clientWidth + 1, '拉到底時工具列仍然放得下');
+      g.check(bar.scrollWidth <= bar.clientWidth + 1, `拉到底時工具列仍然放得下(${barFit()})`);
 
       // 在終端裡改檔案,工作目錄真的會變(harness 之後用 r.read 獨立驗一次)
       await api.terminal.write(id, "printf 'from-terminal\\n' > from-terminal.txt; echo RT_WROTE_$?\n");
