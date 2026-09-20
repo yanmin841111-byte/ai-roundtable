@@ -6,6 +6,7 @@
 //   npm run eval:ab                         # 每題每種各 3 次
 //   npm run eval:ab -- --runs 5 --save      # 結果寫進 eval/results/
 //   npm run eval:ab -- --tasks semver,csv   # 只跑某幾題
+//   npm run eval:ab -- --journal eval/results/run1.jsonl   # 每跑完一次記一行,中斷後同一個指令接著跑
 //   EVAL_REVIEWER_CLI=claude npm run eval:ab  # 圓桌的審查者換成另一個模型(Claude Code,會用到訂閱額度)
 //
 // 兩種條件都在真的 app 裡跑(test/harness),只差在審查者是誰:
@@ -24,6 +25,7 @@ import { AB_TASKS } from './ab-tasks';
 import type { AbTask } from './ab-tasks';
 import { runHiddenTests } from './hidden-tests';
 import { wilson, fisherExact, stratifiedPermutation } from './stats';
+import { readJournal, appendJournal, remaining, staleCount } from './journal';
 
 type Condition = 'solo' | 'roundtable';
 const CLI = process.env.EVAL_CLI || 'ollama';
@@ -164,6 +166,13 @@ async function main() {
   const reviewerLabel = `${REVIEWER_CLI}${REVIEWER_MODEL ? ` / ${REVIEWER_MODEL}` : ''}`;
   console.log(`執行者:${CLI}${MODEL ? ` / ${MODEL}` : ''} · 圓桌的審查者:${reviewerLabel} · ${tasks.length} 題 × ${conditions.length} 種 × ${runs} 次`);
 
+  // 流水帳:中斷後用同一個 --journal 接著跑(見 journal.ts)
+  const journalFile = arg('journal') || '';
+  const journal = readJournal(journalFile);
+  const stale = staleCount(journal, commit);
+  if (journalFile) {
+    console.log(`流水帳:${journalFile}(已有 ${journal.length - stale} 次可以沿用${stale ? `,另有 ${stale} 次是別的程式版本,不採用` : ''})`);
+  }
   const results: Record<string, Record<Condition, AbSummary>> = {};
   // 每次的測試通過比例(主要指標),依題目分層
   const rates: Record<string, { a: number[]; b: number[] }> = {};
@@ -171,8 +180,22 @@ async function main() {
   for (const task of tasks) {
     console.log(`\n[${task.id}] ${task.asks}`);
     const by: Record<Condition, AbRun[]> = { solo: [], roundtable: [] };
+    // 沿用流水帳裡同一個程式版本的結果
+    for (const cond of conditions) {
+      // 只沿用到這次要求的次數為止:上次用 --runs 8 跑過,這次只要 3 次時不能拿 8 次來算
+      for (const e of journal.filter((x) => x.task === task.id && x.condition === cond && x.commit === commit).slice(0, runs)) by[cond].push(e.run as unknown as AbRun);
+      const left = remaining(journal, task.id, cond, commit, runs);
+      if (left < runs) console.log(`  (沿用 ${runs - left} 次,還要跑 ${left} 次)`);
+    }
     // 交錯執行:兩種條件輪流跑,本機模型的狀態(快取、溫度)對兩邊的影響才會平均
-    for (let i = 1; i <= runs; i++) for (const cond of conditions) by[cond].push(await runOnce(task, cond, i));
+    for (let i = 1; i <= runs; i++) {
+      for (const cond of conditions) {
+        if (by[cond].length >= runs) continue;
+        const run = await runOnce(task, cond, i);
+        by[cond].push(run);
+        appendJournal(journalFile, { task: task.id, condition: cond, commit, run: run as unknown as Record<string, unknown> });
+      }
+    }
     results[task.id] = { solo: summarize(by.solo), roundtable: summarize(by.roundtable) };
     rates[task.id] = { a: rateOf(by.solo), b: rateOf(by.roundtable) };
   }

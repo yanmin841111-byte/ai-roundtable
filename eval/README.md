@@ -66,7 +66,10 @@ suspicious-but-correct     6/10 判對 · 有讀檔 9 次
 npm run eval:ab                          # 5 題 × 2 種 × 3 次
 npm run eval:ab -- --runs 5 --tasks csv  # 只跑某幾題
 EVAL_REVIEWER_CLI=claude npm run eval:ab # 圓桌的審查者換成另一個模型(這裡是 Claude Code,會用到你的訂閱額度)
+npm run eval:ab -- --journal eval/results/run1.jsonl   # 可續跑:每跑完一次記一行,中斷後同一個指令接著跑
 ```
+
+一輪實驗要好幾個小時,中間常常會被打斷。`--journal` 會把每一次的結果記成一行,再跑同一個指令時自動沿用、只補跑缺的次數。程式版本(commit)不同的紀錄不會被沿用,而且會在畫面上說明有幾次因此不採用——不同版本的結果不能混在一起算。
 
 同一個模型審自己的作品,盲點往往一樣。`EVAL_REVIEWER_CLI`、`EVAL_REVIEWER_MODEL`、`EVAL_REVIEWER_ADAPTER` 可以把圓桌裡的審查者換成別的模型(用法同上面的 `EVAL_*`),量「換一雙眼睛」有沒有用。
 

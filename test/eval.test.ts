@@ -4,6 +4,9 @@
 // 評測要跑真的模型,這裡不跑;這裡確保題目與計分沒有悄悄壞掉。
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { CASES } = require('../eval/cases');
 const { judged, scoreCase, buildResult, resultFileName } = require('../eval/score');
 const { REVIEW_INLINE_FILES } = require('../src/flow/review');
@@ -118,6 +121,26 @@ test('分層置換檢定:明顯的差距 p 小、沒有差距 p 大、只在同�
   const strat = stratifiedPermutation([{ a: [0, 0, 0], b: [0, 0, 0] }, { a: [1, 1, 1], b: [1, 1, 1] }]);
   assert.ok(strat.p > 0.9, JSON.stringify(strat));
   assert.deepStrictEqual(stratifiedPermutation([{ a: [0, 1, 0], b: [1, 1, 0] }], 2000, 7), stratifiedPermutation([{ a: [0, 1, 0], b: [1, 1, 0] }], 2000, 7));
+});
+
+test('實驗流水帳:中斷後接著跑,不同程式版本的紀錄不採用,壞掉的最後一行丟掉', () => {
+  const { readJournal, appendJournal, remaining, staleCount } = require('../eval/journal');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-journal-'));
+  const file = path.join(dir, 'runs.jsonl');
+  assert.deepStrictEqual(readJournal(file), [], '還沒有檔案時是空的');
+  assert.strictEqual(remaining([], 'cron', 'solo', 'abc', 8), 8);
+  for (let i = 0; i < 3; i++) appendJournal(file, { task: 'cron', condition: 'solo', commit: 'abc', run: { pass: i } });
+  appendJournal(file, { task: 'cron', condition: 'roundtable', commit: 'abc', run: { pass: 9 } });
+  appendJournal(file, { task: 'cron', condition: 'solo', commit: 'old', run: { pass: 0 } });
+  fs.appendFileSync(file, '{"task": "cron", "conditio');  // 中斷時寫到一半的那一行
+  const entries = readJournal(file);
+  assert.strictEqual(entries.length, 5, '壞掉的那一行丟掉,其餘照常');
+  assert.strictEqual(remaining(entries, 'cron', 'solo', 'abc', 8), 5, '已經跑過 3 次,還要 5 次');
+  assert.strictEqual(remaining(entries, 'cron', 'roundtable', 'abc', 8), 7);
+  assert.strictEqual(remaining(entries, 'pathnorm', 'solo', 'abc', 8), 8, '別題不算');
+  assert.strictEqual(remaining(entries, 'cron', 'solo', 'new', 8), 8, '換了程式版本就重新開始');
+  assert.strictEqual(staleCount(entries, 'abc'), 1, '別的版本有幾次要說出來');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 (async () => {

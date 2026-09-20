@@ -68,7 +68,10 @@ The evaluation above only measures whether a reviewer catches mistakes. This one
 npm run eval:ab                          # 5 tasks × 2 conditions × 3 runs
 npm run eval:ab -- --runs 5 --tasks csv  # only some tasks
 EVAL_REVIEWER_CLI=claude npm run eval:ab # use another model as the roundtable's reviewer (here Claude Code, which uses your subscription)
+npm run eval:ab -- --journal eval/results/run1.jsonl   # resumable: one line per finished run; the same command continues where it stopped
 ```
+
+A run takes hours and often gets interrupted. `--journal` records each finished run on its own line; running the same command again reuses them and only runs what is missing. Entries from a different code version (commit) are not reused, and the run says how many were skipped for that reason — results from different versions must not be mixed.
 
 A model reviewing its own work tends to share its blind spots. `EVAL_REVIEWER_CLI`, `EVAL_REVIEWER_MODEL` and `EVAL_REVIEWER_ADAPTER` switch the roundtable's reviewer to another model (same meaning as the `EVAL_*` variables above), to measure whether a second pair of eyes helps.
 
