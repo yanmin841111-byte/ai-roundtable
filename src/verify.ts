@@ -82,9 +82,14 @@ function checkJson(full: string): string | null {
   try { JSON.parse(fs.readFileSync(full, 'utf8')); return null; } catch (e) { return String((e as Error).message || e); }
 }
 
-// node --check 只解析、不執行:模組裡的程式碼不會被跑到,但語法錯誤一定抓得到
+// node --check 只解析、不執行:模組裡的程式碼不會被跑到,但語法錯誤一定抓得到。
+//
+// ELECTRON_RUN_AS_NODE 是必要的:在 app 裡 process.execPath 是 Electron 本身,不是 node。
+// 少了它,這行不是「檢查語法」而是「用 Electron 執行那個檔案」——實測過的後果是,
+// 有語法錯誤的檔案被判成通過,而成員自己寫的測試檔被實際執行、測試失敗被誤報成「載不起來」。
+// 單元測試在純 node 底下跑,看不到這個差別;test/harness/scenarios/verify.ts 在真的 app 裡驗。
 async function checkJs(full: string, locale: TextLocale): Promise<string | null> {
-  const r = await runProcess(process.execPath, ['--check', full], { timeoutMs: SYNTAX_TIMEOUT_MS, locale });
+  const r = await runProcess(process.execPath, ['--check', full], { timeoutMs: SYNTAX_TIMEOUT_MS, locale, env: { ELECTRON_RUN_AS_NODE: '1' } });
   if (r.spawnError) return null; // 檢查本身跑不起來,不能反過來說使用者的檔案壞了
   if (r.timedOut) return null;
   return r.code === 0 ? null : (r.stderr || '').trim() || `exit ${r.code}`;
