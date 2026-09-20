@@ -1,5 +1,6 @@
 // 工作目錄的 git 變更:給總結用的清單。不是 git repo 時安靜回 null,不影響主流程
 import { execFile } from 'child_process';
+import { gitAvailability } from '../git-check';
 import { RUNTIME_DIR } from '../attachments';
 import { tx } from '../text';
 import type { TextLocale } from '../text';
@@ -9,7 +10,9 @@ const MAX_GIT_FILES = 200;      // 總結提示裡最多列出的變更檔案數
 
 // ---------- git 變更 ----------
 // 讀工作目錄的 git 變更;不是 git repo、找不到 git、逾時都安靜回 null,絕不影響主流程。
-export function gitStatus(cwd: string): Promise<GitStatus | null> {
+export async function gitStatus(cwd: string): Promise<GitStatus | null> {
+  // git 不能用時連叫都不要叫:沒裝開發者工具的 Mac 上,每一次呼叫都可能彈出一個系統安裝視窗
+  if (!(await gitAvailability()).ok) return null;
   return new Promise((resolve) => {
     try {
       // --untracked-files=all:預設的 normal 模式會把整個未追蹤目錄收合成「?? dir/」,拿不到檔案清單

@@ -3,6 +3,7 @@
   "label": "Kimi Code CLI",
   "type": "cli",
   "description": "Moonshot Kimi Code CLI(指令 kimi)。依官方 print mode 文件撰寫,尚未在作者電腦實測。print mode 沒有輸出 session id,所以每回合會送完整對話紀錄。",
+  "docsUrl": "https://github.com/MoonshotAI/kimi-cli",
   "bin": "kimi",
   "input": "arg",
   "systemPrompt": "prepend",

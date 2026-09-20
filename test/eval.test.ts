@@ -54,6 +54,72 @@ test('結果檔只有數字與模型資訊,沒有對話內容;檔名安全', () 
   assert.strictEqual(resultFileName({ ...r, reviewer: { cli: 'openrouter', model: 'openai/gpt-5 ../x' } }), '2026-09-19-openrouter-openai-gpt-5-..-x.json');
 });
 
+test('單人 vs 圓桌的題目:參考解全過、常見錯解至少錯一項、原始檔(要修的題)不會全過', () => {
+  const { AB_TASKS } = require('../eval/ab-tasks');
+  const { runHiddenTests, materialize } = require('../eval/hidden-tests');
+  const ids = AB_TASKS.map((t: any) => t.id);
+  assert.strictEqual(new Set(ids).size, ids.length);
+  for (const task of AB_TASKS) {
+    const ref = runHiddenTests(materialize(task.reference), task);
+    assert.ok(ref.total > 0 && ref.pass === ref.total, `${task.id} 參考解 ${ref.pass}/${ref.total}`);
+    const naive = runHiddenTests(materialize(task.naive), task);
+    assert.ok(naive.pass < naive.total, `${task.id} 錯解竟然全過`);
+    if (task.files) {
+      const orig = runHiddenTests(materialize(task.files), task);
+      assert.ok(orig.pass < orig.total, `${task.id} 原始檔竟然全過`);
+    }
+  }
+});
+
+test('隱藏測試:模組載不起來或檔案不存在時每一項各自失敗、並記下原因;無窮迴圈會逾時', () => {
+  const { runHiddenTests, materialize } = require('../eval/hidden-tests');
+  const task = { id: 'x', entry: 'm.js', tests: "t('a', () => assert.ok(M().ok));\nt('b', () => assert.ok(M().ok));" };
+  const broken = runHiddenTests(materialize({ 'm.js': 'syntax error (' }), task);
+  assert.strictEqual(broken.pass, 0);
+  assert.strictEqual(broken.total, 2);
+  assert.ok(broken.loadError, '載不起來要說出原因,才分得出「邏輯錯」和「檔案壞了」');
+  assert.deepStrictEqual(runHiddenTests(materialize({ 'other.js': '' }), task), { pass: 0, total: 2, missing: true });
+  assert.deepStrictEqual(runHiddenTests(materialize({ 'm.js': 'module.exports = { ok: true };' }), task), { pass: 2, total: 2 });
+  const hang = runHiddenTests(materialize({ 'm.js': 'while (true) {}' }), task, 1500);
+  assert.strictEqual(hang.pass, 0);
+  assert.ok(hang.error);
+});
+
+test('單人 vs 圓桌的彙總:執行回合失敗照樣計分,app 沒跑完的不計', () => {
+  const { summarize } = require('../eval/ab');
+  const run = (o: any) => ({ pass: 5, total: 5, seconds: 10, inputTokens: 0, outputTokens: 0, repaired: false, execFailed: false, error: false, ...o });
+  const s = summarize([run({}), run({ pass: 2, execFailed: true, seconds: 30 }), run({ error: true, pass: 0 })]);
+  assert.deepStrictEqual(s, { runs: 3, errors: 1, allPass: 1, passRate: 0.7, execFailed: 1, avgSeconds: 20, avgTokens: 0 });
+});
+
+test('統計:Wilson 信賴區間、Fisher 精確檢定與所需次數跟教科書的數字一致', () => {
+  const { wilson, fisherExact, runsNeeded } = require('../eval/stats');
+  const near = (x: number, y: number, eps = 0.002) => assert.ok(Math.abs(x - y) < eps, `${x} ≠ ${y}`);
+  const [lo0, hi0] = wilson(0, 10);
+  near(lo0, 0); near(hi0, 0.2775);
+  const [lo, hi] = wilson(12, 15);
+  near(lo, 0.5481); near(hi, 0.9295);
+  // 經典的「女士品茶」:[[3,1],[1,3]] 雙尾 p = 0.4857
+  near(fisherExact(3, 1, 1, 3), 0.4857);
+  near(fisherExact(12, 3, 11, 3), 1);
+  near(fisherExact(10, 0, 0, 10), 0.0000108, 1e-6);
+  // 80% → 95% 每組約要 76 次(常態近似)
+  assert.ok(Math.abs(runsNeeded(0.8, 0.95) - 76) <= 2, String(runsNeeded(0.8, 0.95)));
+  assert.strictEqual(runsNeeded(0.5, 0.5), Infinity);
+});
+
+test('分層置換檢定:明顯的差距 p 小、沒有差距 p 大、只在同一題裡交換、結果可重現', () => {
+  const { stratifiedPermutation } = require('../eval/stats');
+  const big = stratifiedPermutation([{ a: [0, 0, 0, 0, 0, 0], b: [1, 1, 1, 1, 1, 1] }, { a: [0.1, 0.2, 0.1, 0.2, 0.1], b: [0.9, 1, 0.9, 1, 0.9] }]);
+  assert.ok(big.diff > 0.8 && big.p < 0.01, JSON.stringify(big));
+  const none = stratifiedPermutation([{ a: [0.5, 0.7, 0.6], b: [0.6, 0.5, 0.7] }]);
+  assert.ok(Math.abs(none.diff) < 1e-9 && none.p > 0.9, JSON.stringify(none));
+  // 題目難度差很多、但每題兩組一樣:不能因為混在一起算就出現差距
+  const strat = stratifiedPermutation([{ a: [0, 0, 0], b: [0, 0, 0] }, { a: [1, 1, 1], b: [1, 1, 1] }]);
+  assert.ok(strat.p > 0.9, JSON.stringify(strat));
+  assert.deepStrictEqual(stratifiedPermutation([{ a: [0, 1, 0], b: [1, 1, 0] }], 2000, 7), stratifiedPermutation([{ a: [0, 1, 0], b: [1, 1, 0] }], 2000, 7));
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

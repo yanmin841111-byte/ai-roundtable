@@ -33,11 +33,12 @@ function decideCodexLogin({ code }: LoginProbe): boolean | null {
 const claudeLoggedIn = () => checkLogin('claude', ['auth', 'status'], decideClaudeLogin);
 const codexLoggedIn = () => checkLogin('codex', ['login', 'status'], decideCodexLogin);
 
-// 指令在、而且沒有明確回報「沒登入」才算可用。沒登入時給一句照做就能修好的話。
-async function checkWithLogin(bin: string, locale: TextLocale | undefined, loggedIn: () => Promise<boolean | null>, loginCommand: string): Promise<CliStatus> {
+// 指令在、而且沒有明確回報「沒登入」才算可用。沒登入時給一句照做就能修好的話,
+// 以及那一行可以直接在內建終端執行的登入指令。
+async function checkWithLogin(bin: string, locale: TextLocale | undefined, loggedIn: () => Promise<boolean | null>, fixCommand: string): Promise<CliStatus> {
   const base = await checkCli(bin, undefined, locale);
   if (!base.ok || (await loggedIn()) !== false) return base;
-  return { ok: false, state: 'unauthenticated', version: base.version, hint: tx(locale || 'zh-Hant', 'cli.loginHint', { cmd: loginCommand }), loginCommand };
+  return { ok: false, state: 'unauthenticated', version: base.version, hint: tx(locale || 'zh-Hant', 'cli.loginHint', { cmd: fixCommand }), fix: { command: fixCommand } };
 }
 
 // 執行到一半才發現沒登入(登入過期、或啟動後才登出)時的錯誤訊息。原始錯誤接在後面,
@@ -247,6 +248,8 @@ const builtinAdapters: Adapter[] = [
     label: 'Claude Code',
     type: 'builtin',
     bin: 'claude',
+    // 沒安裝時介面要能指到官方安裝說明(安裝方式會變,不在 app 裡寫死一行指令)
+    docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
     supportsResume: true,
     supportsEdit: true,
     // 唯讀模式(--permission-mode dontAsk)會拒絕讀取工作目錄以外的檔案，附件要放一份副本到工作目錄
@@ -262,6 +265,7 @@ const builtinAdapters: Adapter[] = [
     label: 'Codex CLI',
     type: 'builtin',
     bin: 'codex',
+    docsUrl: 'https://github.com/openai/codex',
     supportsResume: true,
     supportsEdit: true,
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },

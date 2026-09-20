@@ -2,6 +2,7 @@
 import * as Marker from '../src/shared';
 import { t, localeTag } from './i18n';
 import { $, escapeHtml, cleanIpcError, cssEscape } from './util';
+import { envFixHtml, bindEnvFix } from './env-fix';
 import type { DiffFile } from './api';
 
 // 成員可以直接改使用者的檔案,但介面原本只看得到成員「說」它改了什麼。這裡把實際的
@@ -28,10 +29,23 @@ export async function loadDiff(): Promise<void> {
   try {
     const result = await window.api.getDiff();
     if (!result.ok) {
+      // git 本身不能用,和「這個資料夾不是 repo」是兩件事:叫使用者 git init 沒有用,
+      // 要修的是 git。照實說一句,再給一行可以直接在內建終端執行的修復指令。
+      if (result.reason === 'git-unavailable') {
+        const what = t(result.issue === 'license' ? 'diff.gitLicense' : 'diff.gitMissing');
+        body.innerHTML = `<div class="diff-empty">${escapeHtml(what)}\n${escapeHtml(t('diff.gitFallback'))}`
+          + `${envFixHtml(result.fix)}</div>`;
+        bindEnvFix(body);
+        return;
+      }
       const key = result.reason === 'no-workdir' ? 'diff.noWorkdir' : result.reason === 'not-a-repo' ? 'diff.notRepo' : 'diff.failed';
       // detail 是 git 的原文(多半是英文),只在真正失敗時附上,不強行翻譯
       const detail = result.reason === 'failed' && result.detail ? `\n${result.detail}` : '';
-      body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}</div>`;
+      // 說明裡提到「在資料夾執行 git init」時,就順手給那顆按鈕——指令一樣只是填進終端,
+      // 由使用者自己按 Enter(git init 會動到他的資料夾,不該由 app 代按)
+      const init = result.reason === 'not-a-repo' ? envFixHtml({ command: 'git init' }) : '';
+      body.innerHTML = `<div class="diff-empty">${escapeHtml(t(key) + detail)}${init}</div>`;
+      bindEnvFix(body);
       return;
     }
     renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '', result.source === 'task' ? result.since : undefined);

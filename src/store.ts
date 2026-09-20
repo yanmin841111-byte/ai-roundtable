@@ -41,6 +41,8 @@ function defaultConfig(): AppConfig {
       language: '繁體中文',
       // 不支援 resume 的成員每回合都要重送對話紀錄,超過這個字元數就截斷中段,避免撞上 context 上限
       maxTranscriptChars: 60000,
+      // 自動驗證指令:預設空的(只做內建語法檢查)。設了就在執行與修復後跑,結果交給審查與修復
+      verifyCommand: '',
     },
   };
 }

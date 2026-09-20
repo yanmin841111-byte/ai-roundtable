@@ -11,6 +11,8 @@
   --warn: #a8690f; --warn-soft: #fdf5e6; --warn-border: #efd9ad;
   --user-bubble: #eef1fd; --user-border: #d0d9fb; --user-avatar: #4f6bed;
   --code-bg: #f1f3f8; --overlay: rgba(16, 20, 32, .38);
+  /* 終端的底色要和 renderer/terminal.ts 的色盤一致,否則面板邊緣會露出一條色差 */
+  --term-bg: #fbfcff; --term-head: #f3f5fb;
   --shadow-sm: 0 1px 2px rgba(16, 20, 32, .05); --shadow-md: 0 6px 20px rgba(16, 20, 32, .07); --shadow-lg: 0 28px 72px rgba(16, 20, 32, .2);
   --radius: 12px; --font-size: 14px;
   --font: -apple-system, "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif;
@@ -29,6 +31,7 @@
   --warn: #ffc857; --warn-soft: #2d2616; --warn-border: #5e4b20;
   --user-bubble: #1c2647; --user-border: #2f4384; --user-avatar: #3d4d82;
   --code-bg: #0a0d14; --overlay: rgba(0, 0, 0, .6);
+  --term-bg: #0a0d14; --term-head: #10141d;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 8px 24px rgba(0, 0, 0, .35); --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55);
   color-scheme: dark;
 }
@@ -45,6 +48,7 @@
     --warn: #ffc857; --warn-soft: #2d2616; --warn-border: #5e4b20;
     --user-bubble: #1c2647; --user-border: #2f4384; --user-avatar: #3d4d82;
     --code-bg: #0a0d14; --overlay: rgba(0, 0, 0, .6);
+    --term-bg: #0a0d14; --term-head: #10141d;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 8px 24px rgba(0, 0, 0, .35); --shadow-lg: 0 24px 64px rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
@@ -153,19 +157,25 @@ textarea { resize: vertical; }
 
 /* 背景:極淡的點陣格線 + 上方一道品牌藍光暈,固定不隨捲動;時間線與輸入區透明,讓它透出來 */
 #main {
-  flex: 1; display: flex; flex-direction: column; min-width: 0;
+  /* overflow: hidden 是必要的:終端面板打開時 #main 變窄,工具列那排不換行的按鈕
+     會溢出去、蓋在終端上面(而且點不到)。溢出的部分改成可橫向捲動,按鈕仍然拿得到。 */
+  flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden;
   background:
     radial-gradient(700px 320px at 50% -80px, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
     radial-gradient(color-mix(in srgb, var(--text) 6%, transparent) 1px, transparent 1.3px) 0 0 / 18px 18px,
     var(--bg);
 }
-#topbar { position: relative; display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 72%, transparent); backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); }
+/* 終端打開時 #main 會變窄:工作目錄與用量先讓出空間(縮到剩圖示也沒關係),
+   按鈕列則完整保留——那幾個是動作,縮掉就點不到了 */
+#topbar > button:not(.chip) { flex-shrink: 0; }
+#topbar { position: relative; display: flex; align-items: center; gap: 8px; min-height: 52px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 8px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 72%, transparent); backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); }
+#topbar::-webkit-scrollbar { display: none; }
 #topbar .drag-region { position: absolute; left: 0; right: 0; top: 0; }
 #topbar > :not(.drag-region) { position: relative; -webkit-app-region: no-drag; }
 .phase { font-size: 12px; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); background: var(--panel-2); white-space: nowrap; }
 .phase.busy { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 3px var(--ring); animation: pulse 1.6s infinite; }
-.chip { display: flex; align-items: center; gap: 5px; max-width: 280px; font-size: 12px; line-height: 1.35; color: var(--muted); padding: 3px 10px; border-radius: 999px; background: transparent; border: 1px solid var(--border); transition: background .12s, border-color .12s, color .12s; }
-.chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip { display: flex; align-items: center; gap: 5px; max-width: 280px; min-width: 30px; flex-shrink: 1; font-size: 12px; line-height: 1.35; color: var(--muted); padding: 3px 10px; border-radius: 999px; background: transparent; border: 1px solid var(--border); transition: background .12s, border-color .12s, color .12s; }
+.chip span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip:hover { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
 .chip:active:not(:disabled) { background: var(--panel-2); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -386,10 +396,33 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .ext-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ext-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .ext-err { color: var(--danger); font-size: 12px; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
-.cli-auth { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
-.cli-auth-command { color: var(--warn); font-family: var(--mono); font-size: 11.5px; }
-.cli-copy { padding: 2px 7px; border-color: var(--warn-border); color: var(--warn); font-size: 11px; }
-.cli-copy:hover { border-color: var(--warn); background: var(--warn-soft); }
+/* ---------- 環境問題的修復卡片 ---------- */
+/* 缺 CLI、沒登入、本機模型沒開、git 不能用……全 app 都用這一張:
+   一句照實說的話 + 一顆「在終端執行」。使用者不必自己判斷該去哪裡做什麼。 */
+.env-fix { margin-top: 6px; }
+.env-fix-hint { font-size: 12px; color: var(--muted); margin-bottom: 5px; white-space: pre-wrap; }
+.env-fix-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.env-fix-cmd {
+  font-family: var(--mono); font-size: 11.5px; color: var(--warn);
+  background: var(--warn-soft); border: 1px solid var(--warn-border); border-radius: 7px;
+  padding: 2px 7px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.env-fix-row button { padding: 2px 8px; font-size: 11.5px; }
+/* 主要動作:直接在內建終端修好。次要的「複製」維持素面,方向才不會兩個一樣重 */
+.env-fix-row button[data-env-run], .env-fix-row button[data-env-url], .env-fix-row button[data-env-settings] { border-color: var(--accent-border); color: var(--accent); background: var(--accent-soft); }
+.env-fix-row button[data-env-run]:hover, .env-fix-row button[data-env-url]:hover, .env-fix-row button[data-env-settings]:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 成員設定裡的 CLI 狀態:選模型之前就看得到這個 CLI 能不能用 */
+.cli-status { margin: -4px 0 12px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); }
+.cli-status-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); }
+.cli-status-line + .cli-status-line { margin-top: 4px; }
+.cli-status-line span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 對話泡泡裡:接在紅字錯誤底下,縮排對齊錯誤訊息 */
+.msg-fix { margin-top: 2px; }
+.msg-fix .env-fix { margin-top: 4px; }
+/* 空狀態(例如「檔案改動」在 git 不能用時)是置中的,修復卡片跟著置中才不會孤零零靠在左邊 */
+.diff-empty .env-fix { margin-top: 14px; }
+.diff-empty .env-fix-row { justify-content: center; }
 .template-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .template-filters { display: inline-flex; flex-shrink: 0; padding: 2px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); }
 .template-filters button { padding: 5px 15px; border: 0; background: transparent; color: var(--muted); }
@@ -475,6 +508,7 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .quick-head > div:first-child { flex: 1; min-width: 0; }
 .quick-head .hint { margin-top: 2px; }
 .quick-status { margin-top: 10px; font-size: 12.5px; color: var(--muted); white-space: pre-wrap; }
+.quick-status .env-fix-hint, .quick-status .env-fix-cmd { color: inherit; }
 .quick-status.ok { color: var(--ok); }
 .quick-status.warn { color: var(--warn); }
 .quick-status.error { color: var(--danger); }
@@ -541,6 +575,10 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .ts-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ts-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--on-accent); background: linear-gradient(135deg, var(--accent), var(--accent-hover)); font-size: 15px; box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent); }
 .ts-title { font-size: 15px; letter-spacing: .02em; color: var(--text); }
+/* 自動驗證:app 自己跑出來的事實,和模型的審查結論分開呈現 */
+.ts-verify { font-size: 11.5px; font-weight: 600; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); background: var(--panel); }
+.ts-verify.passed { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-border); }
+.ts-verify.failed { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
 .ts-state { font-size: 11.5px; font-weight: 600; letter-spacing: .02em; padding: 2px 10px; border-radius: 999px; color: var(--tone); background: var(--tone-soft); border: 1px solid var(--tone-border); }
 /* 數字:小標籤在上、等寬數字在下,以細線分隔 */
 .ts-metrics { display: flex; align-items: stretch; }
@@ -598,6 +636,8 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .badge.verdict.pass { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); }
 .badge.verdict.issues { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
 .badge.verdict.failed { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+/* 修復後的複查:品牌藍,跟第一次審查區分開 */
+.badge.recheck { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
 
 /* 審查者看了什麼。看不到改動的審查(unknown)用警示色,讓人知道這份意見的根據有限 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 2px 0 6px; font-size: 12px; color: var(--muted); }
@@ -729,3 +769,96 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 /* 失敗的指定回覆:重試鍵緊跟在錯誤訊息下方,是出錯時最直接的下一步 */
 .retry-btn { margin-top: 8px; color: var(--danger); border-color: var(--danger-border); background: transparent; }
 .retry-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
+
+
+
+/* ---------- 終端面板 ---------- */
+/* 靠右直立、和時間軸並排:成員在討論什麼、自己下的指令輸出什麼,兩邊同時看得到,
+   也不必為了看終端把對話擠掉。收起來時完全不佔位置(hidden)。
+   底色刻意跟 xterm 的色盤同一組(--term-bg),面板與終端之間看不到接縫。 */
+.terminal-panel {
+  position: relative; z-index: 5; display: flex; flex-direction: column; min-width: 0; flex-shrink: 0;
+  width: 520px;
+  background: var(--term-bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -18px 0 38px -28px rgba(16, 20, 32, .55), inset 1px 0 0 color-mix(in srgb, var(--accent) 20%, transparent);
+  animation: term-slide .16s ease-out;
+}
+@keyframes term-slide { from { opacity: .35; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+
+/* 左緣的分隔線:平常只是一條細縫,滑過或拖曳時亮成品牌藍 */
+.term-resize {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; z-index: 4;
+  cursor: ew-resize; background: transparent; -webkit-app-region: no-drag;
+}
+.term-resize::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px;
+  background: transparent; transition: background .12s;
+}
+.term-resize:hover::after, .term-resize:focus-visible::after, body.term-resizing .term-resize::after { background: var(--accent); }
+.term-resize:focus-visible { outline: none; }
+/* 拖曳時整個視窗停用選取與 hover,游標不會在經過終端時變成 I 字 */
+body.term-resizing { cursor: ew-resize; user-select: none; }
+body.term-resizing .term-body { pointer-events: none; }
+
+/* 標題列與上方工具列等高,兩欄的按鈕在同一條水平線上 */
+.term-head {
+  position: relative; display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  min-height: 52px; padding: 8px 12px;
+  background: var(--term-head);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.term-head .drag-region { position: absolute; left: 0; right: 0; top: 0; }
+.term-head > :not(.drag-region) { position: relative; -webkit-app-region: no-drag; }
+.term-glyph { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: -.04em; opacity: .9; }
+.term-head button { padding: 3px 9px; font-size: 12px; }
+.term-head button.icon { padding: 3px 7px; }
+
+.term-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.term-tabs::-webkit-scrollbar { display: none; }
+.term-tab {
+  display: flex; align-items: center; gap: 6px; max-width: 170px;
+  padding: 3px 7px 3px 9px; font-size: 12px; line-height: 1.5;
+  color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px;
+}
+.term-tab:hover { background: color-mix(in srgb, var(--text) 7%, transparent); border-color: transparent; color: var(--text); }
+.term-tab.active {
+  color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.term-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 目前分頁亮著品牌藍;沒在看的分頁有新輸出時亮黃點 */
+.term-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex-shrink: 0; transition: background .12s; }
+.term-tab.active .term-tab-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.term-tab.unseen .term-tab-dot { background: var(--warn); }
+.term-tab-x { font-size: 10px; color: var(--faint); opacity: 0; transition: opacity .12s, color .12s; }
+.term-tab:hover .term-tab-x, .term-tab.active .term-tab-x { opacity: 1; }
+.term-tab-x:hover { color: var(--danger); }
+
+/* 目前分頁的工作目錄。自己一行:面板不寬,擠在標題列裡會先被截掉 */
+.term-cwd {
+  flex-shrink: 0; padding: 5px 12px 6px; font-family: var(--mono); font-size: 11px; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+.term-cwd:empty { display: none; }
+.term-error { flex-shrink: 0; padding: 8px 12px; font-size: 12.5px; color: var(--danger); background: var(--danger-soft); border-bottom: 1px solid var(--danger-border); }
+
+.term-body { position: relative; flex: 1; min-height: 0; padding: 8px 4px 8px 12px; background: var(--term-bg); }
+.term-pane { position: absolute; inset: 8px 4px 8px 12px; display: none; }
+.term-pane.on { display: block; }
+.term-pane .xterm { height: 100%; }
+/* xterm 的 viewport 預設是黑底(只有畫到字的那幾列會被主題蓋掉),
+   在淺色面板上就會露出一條黑邊;底色一律交給面板。 */
+.term-pane .xterm-viewport { background-color: transparent !important; }
+.term-pane .xterm-viewport::-webkit-scrollbar { width: 9px; }
+.term-pane .xterm-viewport::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--faint) 60%, transparent); border-radius: 10px; border: 2.5px solid transparent; background-clip: content-box; }
+
+/* 工具列按鈕:打開時亮起;收著的時候有新輸出就在右上角點一顆 */
+#terminal-btn { font-family: var(--mono); letter-spacing: -.02em; flex-shrink: 0; }
+#terminal-btn.on { color: var(--accent); background: var(--accent-soft); }
+#terminal-btn.busy { position: relative; }
+#terminal-btn.busy::after {
+  content: ''; position: absolute; top: 2px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warn); box-shadow: 0 0 0 2px var(--panel);
+}

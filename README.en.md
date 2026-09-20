@@ -18,6 +18,8 @@ A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI, 
 - **Interject any time**: messages sent while a task runs are shown to the next member to speak.
 - **@-mention a member**: type `@Name` so only that member replies or acts, skipping the discussion flow; several members at once run in parallel.
 - **Attachments**: drag and drop or click 📎 to attach images, text files or PDFs; each member gets a file path or inline content depending on its capabilities.
+- **One-click fixes for environment problems**: a CLI that is not installed or not signed in, a local model that is not running, a Mac where git cannot run — all of them say plainly what happened in the same place, with a "Run in terminal" button that types the fix into the built-in terminal (typed, never auto-run) or opens the official install guide when no single command applies. A member's model settings say up front whether that CLI or API works instead of failing after you send a task — and when a turn does fail, the same button sits right under the error in the conversation.
+- **Built-in terminal**: press ⌘J (or the "Terminal" button) for a real terminal docked on the right, opened in the same working directory — tabs, drag to resize, follows the theme — so `git diff` or `npm test` never means leaving the app.
 - **History**: every task is saved when it ends; preview, export to Markdown, or "Resume this conversation" to keep discussing.
 - **Side-by-side parallel replies**: in parallel phases such as execution and review, member messages sit three to a row.
 - **Usage totals**: input, cached, output tokens and cost normalized across CLIs and APIs.
@@ -59,8 +61,10 @@ After you send a task, depending on the mode:
   1. Members speak in turn, each seeing everything said before. A member who thinks there is agreement ends its reply with `[AGREED]`; when everyone agrees in the same round the work is divided, otherwise division is forced once "Max discussion rounds" is reached.
   2. The lead outputs a JSON work plan, keeping each member on different files where possible.
   3. All members execute their part **in parallel** in the working directory.
-  4. Each member reviews the next member's work (it actually opens the files).
-  5. The lead summarizes.
+  4. **The app verifies the work itself**: changed `.js` and `.json` files are syntax-checked so they can be loaded, and if a "verify command" is set (for example `npm test`) it runs in the working directory. No model is involved in this step.
+  5. Each member reviews the next member's work (it actually opens the files and checks each requirement of the task) and sees the verification result from the previous step. A member whose execution stopped partway but already changed files is reviewed too.
+  6. A member flagged by the review, or by a failed verification, repairs the work once; the app verifies again and the original reviewer re-checks it. Anything still wrong goes into the summary.
+  7. The lead summarizes.
 - **Discuss only, no execution**: after agreement or the round limit, the lead summarizes.
 
 When a message contains `@Name`, only the mentioned members reply (in parallel if there are several). If you mention someone while a task is running, they see the message on their next turn; if they do not get a turn before the task ends, they reply once at the end.
@@ -166,6 +170,7 @@ Everything is under `~/Library/Application Support/AI Roundtable/`; `sessions/` 
 | `src/snapshot.ts`, `src/task-changes.ts` | Working-directory snapshots and "what did this task change" |
 | `src/adapters/` | Built-in adapters, extension loading, generic CLI / API adapters |
 | `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts` | Attachments, history, API key storage |
+| `src/terminal.ts`, `src/pty.exp`, `renderer/terminal.ts` | Terminal tabs: the pty (borrowed from the expect that ships with macOS, so no native module) and the right-hand panel |
 | `src/models.ts`, `src/model-rules.ts`, `src/usage.ts` | Model lists, effort rules, usage normalization |
 | `adapters/templates/` | Extension templates shown under "+ Add" |
 | `docs/` | Extension guide and interface copy spec |

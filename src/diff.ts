@@ -9,6 +9,7 @@
 
 import { execFile } from 'child_process';
 import fs from 'fs';
+import { gitAvailability, gitFixCommand } from './git-check';
 import type { DiffFile, DiffFileStatus, DiffLine, DiffResult } from './ipc-types';
 
 // 逐檔行數上限。單一檔案動輒上萬行時,渲染成 DOM 會讓介面整個卡住,
@@ -147,11 +148,18 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
 
 export async function collectChanges(workDir: string): Promise<DiffResult> {
   if (!workDir || !fs.existsSync(workDir)) return { ok: false, reason: 'no-workdir' };
+  // 先確認 git 本身能用。以前這裡把「git 不能用」也算成「不是 repo」,
+  // 畫面就叫使用者去 git init——那台機器上的 git 根本跑不起來,照做也不會好。
+  const availability = await gitAvailability();
+  if (!availability.ok) {
+    return { ok: false, reason: 'git-unavailable', issue: availability.issue, fix: { command: gitFixCommand(availability.issue) }, detail: availability.detail };
+  }
+
   try {
     const inside = (await git(workDir, ['rev-parse', '--is-inside-work-tree'])).trim();
     if (inside !== 'true') return { ok: false, reason: 'not-a-repo' };
   } catch (e: any) {
-    // git 不存在、或這個目錄不是 repo,對使用者來說都是「這裡沒有版本控制,看不到改動」
+    // git 能用,但這個目錄不是 repo:對使用者來說是「這裡沒有版本控制,看不到改動」
     return { ok: false, reason: 'not-a-repo', detail: e?.message };
   }
 

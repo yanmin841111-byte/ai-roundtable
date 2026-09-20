@@ -3,6 +3,7 @@
   "label": "Gemini CLI",
   "type": "cli",
   "description": "Google Gemini CLI(指令 gemini)。依官方 headless 文件撰寫,尚未在作者電腦實測。",
+  "docsUrl": "https://github.com/google-gemini/gemini-cli",
   "bin": "gemini",
   "input": "arg",
   "systemPrompt": "prepend",

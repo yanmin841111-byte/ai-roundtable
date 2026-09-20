@@ -34,6 +34,23 @@ During development, the `AI_ROUNDTABLE_ADAPTERS_DIR` environment variable points
 | `timeoutMs` | No | Per-model-turn timeout, default 20 minutes; background work such as model downloads does not use this value. The extension editor's “Time limit per turn” sets the same field in minutes, and the timeout error points there |
 | `usageShape` | No | Convention for usage fields, see [Usage normalization](#usage-normalization). Detected from the fields when omitted |
 | `capabilities` | No | Attachment capabilities, see below |
+| `docsUrl` | No | Install or setup page. When this CLI or service is missing, the interface offers "Open install guide" |
+
+### The next step when something is wrong
+
+Whenever an environment problem is detected (not installed, not signed in, unreachable, missing key), the
+interface uses one card: a plain sentence about what happened, plus one action the user can take. A JS
+plugin can return `fix` from `check()` / `testConnection()` and from `run()`:
+
+```js
+return { ok: false, state: 'unauthenticated', hint: 'Run my-cli login first', fix: { command: 'my-cli login' } };
+```
+
+`fix` holds one of three, most specific first: `command` (a single command, typed into the built-in
+terminal but **never run automatically**), `settingsTab` (something to do inside the app, e.g. `'clis'`
+for an API key) and `url` (official documentation). JSON templates use the `fixCommand` and `docsUrl`
+fields instead. When `run()` returns no `fix`, the app asks `check()` once after a failed turn and fills
+it in — so most extensions need to do nothing.
 
 ### Attachment capabilities
 
@@ -214,6 +231,8 @@ Every JSON event is run through all rules whose `match` applies, in order.
 | `history` | `true` | Keep the conversation history in memory to resume; when off, the full transcript is sent every turn |
 | `maxHistoryMessages` | `80` | Number of history messages kept; must be a positive integer. Zero, negative values, and fractions fail validation |
 | `unreachableHint` | Generic hint | Guidance shown when a credential-free HTTP endpoint cannot be reached, e.g. `Run ollama serve first` |
+| `fixCommand` | None | A single command that fixes the problem, e.g. `ollama serve`. The interface shows a "Run in terminal" button next to the status; it types the command into the built-in terminal without running it |
+| `docsUrl` | None | Install or setup page. When this CLI or service is not present, the interface offers "Open install guide" |
 | `supportsEdit` | `false` | Must be explicitly `true` together with `fileTools.enabled: true`; the execution flow must still pass the reviewer gate |
 | `fileTools.enabled` | `false` | Enables restricted `read_file`, `replace_text`, and `write_file` tools; no shell or `apply_patch` is exposed |
 

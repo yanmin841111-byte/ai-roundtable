@@ -34,6 +34,21 @@ AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以�
 | `timeoutMs` | 否 | 單回合模型逾時,預設 20 分鐘；模型下載等背景工作不套用此值。擴充編輯器的「每回合逾時上限」以分鐘設定同一個欄位;逾時的錯誤訊息會提示在那裡調高 |
 | `usageShape` | 否 | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷 |
 | `capabilities` | 否 | 附件能力,格式見下方 |
+| `docsUrl` | 否 | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」 |
+
+### 出問題時的下一步
+
+偵測到環境問題時(沒安裝、沒登入、連不上、缺 key),介面一律用同一張卡片:照實說一句話,
+再給一個可照做的動作。JS 外掛的 `check()` / `testConnection()` 與 `run()` 都可以在回傳值裡帶 `fix`:
+
+```js
+return { ok: false, state: 'unauthenticated', hint: '請先執行 my-cli login', fix: { command: 'my-cli login' } };
+```
+
+`fix` 三選一,由具體到一般:`command`(一行指令,會填進內建終端但**不會自動執行**)、
+`settingsTab`(要在 app 裡做的事,例如填 API key 用 `'clis'`)、`url`(官方說明頁)。
+JSON 範本不寫 `fix`,改用 `fixCommand` 與 `docsUrl` 兩個欄位。
+`run()` 沒帶 `fix` 時,回合失敗後 app 會自己問一次 `check()` 補上——所以多數擴充什麼都不必做。
 
 ### 附件能力
 
@@ -214,6 +229,8 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 | `history` | `true` | 在記憶體保留對話歷史來續接;關閉後每回合送完整紀錄 |
 | `maxHistoryMessages` | `80` | 保留的歷史訊息數,必須是正整數；`0`、負數或非整數會驗證失敗 |
 | `unreachableHint` | 通用提示 | 免金鑰 HTTP 端點連不上時顯示的處理方式,例如 `請先執行 ollama serve` |
+| `fixCommand` | 無 | 照著跑就能修好的一行指令,例如 `ollama serve`。介面會在狀態旁放一顆「在終端執行」,按下去會把指令填進內建終端(不會自動執行) |
+| `docsUrl` | 無 | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」 |
 | `supportsEdit` | `false` | 必須明確設為 `true`，且同時設定 `fileTools.enabled: true` 才宣告可改檔；仍需執行流程通過 reviewer 閘門 |
 | `fileTools.enabled` | `false` | 啟用受限的 `read_file`、`replace_text`、`write_file` 工具；不提供 shell 或 `apply_patch` |
 

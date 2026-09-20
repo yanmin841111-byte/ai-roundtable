@@ -70,7 +70,8 @@ test('審查訊息帶著依據與結論,結論和流程的走向一致(通過 / 
   const ofBob = r.reviewOf('Bob');
   assert.strictEqual(ofBob.review.verdict, 'issues');
   assert.ok(r.repairedBy('Bob'), '徽章說提出問題,流程就要真的進修復回合');
-  assert.deepStrictEqual(r.whileRunning, [true, true], '審查進行中就要帶著依據(結論等回合結束才有)');
+  // 第三則是修復後的複查(Alice 再看一次 Bob)
+  assert.deepStrictEqual(r.whileRunning, [true, true, true], '審查進行中就要帶著依據(結論等回合結束才有)');
 });
 
 test('審查失敗:結論是 failed,被審者標成尚未審查', async () => {

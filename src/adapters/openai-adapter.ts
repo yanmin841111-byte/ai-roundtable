@@ -61,6 +61,8 @@ function validateOpenAISpec(spec: any, errors: any, locale: TextLocale = 'zh-Han
   if (spec.effortBody != null && (typeof spec.effortBody !== 'object' || Array.isArray(spec.effortBody))) e('spec.mustBeObject', { field: 'effortBody' });
   if (spec.maxHistoryMessages != null && (!Number.isInteger(spec.maxHistoryMessages) || spec.maxHistoryMessages <= 0)) e('spec.mustBePositiveInt', { field: 'maxHistoryMessages' });
   if (spec.unreachableHint != null && typeof spec.unreachableHint !== 'string') e('spec.mustBeString', { field: 'unreachableHint' });
+  // 連不上時「照做就能修好」的一行指令(例如 ollama serve)。介面會顯示成可直接在內建終端執行的按鈕。
+  if (spec.fixCommand != null && typeof spec.fixCommand !== 'string') e('spec.mustBeString', { field: 'fixCommand' });
   if (spec.supportsEdit != null && typeof spec.supportsEdit !== 'boolean') e('spec.mustBeBoolean', { field: 'supportsEdit' });
   if (spec.fileTools != null && (!spec.fileTools || typeof spec.fileTools !== 'object' || Array.isArray(spec.fileTools))) e('spec.mustBeObject', { field: 'fileTools' });
   else if (spec.fileTools?.enabled != null && typeof spec.fileTools.enabled !== 'boolean') e('spec.mustBeBoolean', { field: 'fileTools.enabled' });
@@ -185,7 +187,8 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         // 401/403 表示 key 存在但無效——這是最常見的失敗。以前只回一個沒有 state 的錯誤,
         // 設定畫面因此對過期的 key 亮綠燈,使用者要送出任務、等模型跑完才會發現。
         if (res.status === 401 || res.status === 403) {
-          return { ok: false, state: 'unauthenticated' as const, error: `HTTP ${res.status} ${body}`, hint: invalidApiKeyMessage(spec, locale()) };
+          // key 的問題要回 app 裡處理(設定 → CLI 與擴充),不是一行指令能修的
+          return { ok: false, state: 'unauthenticated' as const, error: `HTTP ${res.status} ${body}`, hint: invalidApiKeyMessage(spec, locale()), fix: { settingsTab: 'clis' } };
         }
         return { ok: false, error: `HTTP ${res.status} ${body}` };
       }
@@ -200,6 +203,8 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         error: connectionError,
         hint: (typeof spec.unreachableHint === 'string' && spec.unreachableHint.trim())
           || tx(locale(), hasCredentialSetting ? 'api.networkHint' : 'api.localHint'),
+        // 範本可以宣告一行修復指令(例如 ollama serve),介面統一提供「在終端執行」
+        fix: (typeof spec.fixCommand === 'string' && spec.fixCommand.trim()) ? { command: spec.fixCommand.trim() } : undefined,
       };
     } finally {
       clearTimeout(timer);
@@ -211,6 +216,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     label: spec.label || spec.id,
     type: 'openai',
     description: spec.description || '',
+    docsUrl: spec.docsUrl || undefined,
     bin: null,
     supportsResume: spec.history !== false,
     // OpenAI-compatible adapter 預設永遠唯讀；必須由規格同時明確開啟 supportsEdit 與 fileTools。
@@ -534,9 +540,10 @@ async function discoverOllama({ fetchImpl, baseUrl = OLLAMA_DEFAULT_BASE_URL, ge
     baseUrl,
     models: 'auto',
     unreachableHint: tx(getLocale?.() || 'zh-Hant', 'api.startOllama'),
+    fixCommand: 'ollama serve',
   }, { fetchImpl, getLocale });
   const health = adapter.testConnection ? await adapter.testConnection() : { ok: false, error: tx(getLocale?.() || 'zh-Hant', 'api.ollamaTestFailed') };
-  if (!health.ok) return { ok: false, baseUrl, models: [], error: health.error || tx(getLocale?.() || 'zh-Hant', 'api.ollamaConnectFailed'), hint: health.hint || null };
+  if (!health.ok) return { ok: false, baseUrl, models: [], error: health.error || tx(getLocale?.() || 'zh-Hant', 'api.ollamaConnectFailed'), hint: health.hint || null, fix: health.fix || null };
   if (adapter.refreshModels) await adapter.refreshModels();
   const list = adapter.listModels ? adapter.listModels() : { models: [], source: 'none' };
   if (list.error) return { ok: false, baseUrl, models: [], error: list.error, hint: health.hint || null };

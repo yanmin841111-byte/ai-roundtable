@@ -13,5 +13,5 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["app.ts", "i18n.ts", "util.ts", "diff-view.ts", "task-card.ts", "lineup-menu.ts", "../src/lineups.ts", "api.d.ts", "../src/shared.ts", "../src/model-rules.ts"]
+  "include": ["app.ts", "i18n.ts", "util.ts", "diff-view.ts", "task-card.ts", "lineup-menu.ts", "terminal.ts", "env-fix.ts", "css.d.ts", "../src/lineups.ts", "api.d.ts", "../src/shared.ts", "../src/model-rules.ts"]
 }

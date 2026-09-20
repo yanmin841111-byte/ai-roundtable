@@ -9,12 +9,24 @@ import { createCliAdapter, validateCliSpec } from './cli-adapter';
 import { canonicalModelId, createOpenAIAdapter, discoverOllama, validateOpenAISpec } from './openai-adapter';
 import { kit } from './kit';
 import type { Adapter, ModelList, RegisteredAdapter } from './types';
-import type { CliHealth, CliStatus } from '../ipc-types';
+import type { CliHealth, CliStatus, EnvFix } from '../ipc-types';
 import { tx, type TextLocale } from '../text';
 import { capabilityKey, capabilityStore } from '../capabilities';
 import type { ModelCapability } from '../ipc-types';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
+
+// 健康檢查結果 → 「照做就能修好」的下一步。
+// 這裡是唯一決定它的地方:設定畫面、成員的模型設定、回合失敗時的錯誤訊息都拿同一份答案,
+// 同一個狀態不會在三個地方變成三種說法。轉接器自己給了答案就尊重它,
+// 沒給、而且只是沒安裝時,退回官方安裝說明。
+export function fixFromStatus(adapter: Pick<Adapter, 'docsUrl'> | undefined, status: CliStatus | null | undefined): EnvFix | undefined {
+  if (!status || status.ok) return undefined;
+  if (status.fix) return status.fix;
+  const state = status.state || 'missing';
+  if (state === 'missing' && adapter && adapter.docsUrl) return { url: adapter.docsUrl };
+  return undefined;
+}
 
 class Registry {
   userDir: any;
@@ -178,11 +190,13 @@ class Registry {
         // testConnection 由 adapter 自己透過 getLocale 取語言;check 沒有 ctx,這裡把語言帶進去
         status = shouldProbe ? await a.testConnection!() : await a.check!({ locale: this.getLocale() });
       } catch (e: any) { status = { ok: false, error: e.message }; }
+      const state = status.state || (status.ok ? 'ready' : a.type === 'openai' ? 'unauthenticated' : 'missing');
       const normalized: CliHealth = {
         ...status,
         // CLI 維持原本的 ready / missing；需要金鑰的 API 缺 key 時維持 unauthenticated。
         // 免金鑰 HTTP adapter 會由上面的 checker 選用 testConnection 並明確回傳 unreachable。
-        state: status.state || (status.ok ? 'ready' : a.type === 'openai' ? 'unauthenticated' : 'missing'),
+        state,
+        fix: fixFromStatus(a as Adapter, { ...status, state }),
       };
       return [a.id, normalized];
     }));
@@ -269,7 +283,7 @@ class Registry {
     // 只保留使用者環境與偏好欄位；未列入的舊範本欄位由新版範本取代。
     const preservedKeys = [
       'baseUrl', 'path', 'modelsPath', 'headers', 'modelFilter',
-      'secretRef', 'apiKeyEnv', 'apiKeyOptional', 'unreachableHint',
+      'secretRef', 'apiKeyEnv', 'apiKeyOptional', 'unreachableHint', 'fixCommand', 'docsUrl',
       'timeoutMs', 'maxHistoryMessages', 'history', 'stream', 'streamUsage',
       'systemRole', 'reasoningFields',
     ];

@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { parseUnifiedDiff, collectChanges } = require('../src/diff');
+const { gitAvailability } = require('../src/git-check');
 
 // collectChanges 改成非同步了(在主程序同步跑 git 會凍結視窗),所以測試也要能 await。
 // 先收集再依序執行,保持輸出順序與臨時目錄互不干擾。
@@ -152,7 +153,10 @@ test('collectChanges:沒有工作目錄時回 no-workdir,非 repo 時回 not-a-r
   try {
     const r = await collectChanges(plain);
     assert.strictEqual(r.ok, false);
-    assert.strictEqual(r.reason, 'not-a-repo');
+    // 這台機器的 git 本身不能用時,答案是「git 不能用」而不是「不是 repo」——
+    // 兩者要修的東西不同,不能混為一談(見 test/git-check.test.ts)
+    const available = await gitAvailability();
+    assert.strictEqual(r.reason, available.ok ? 'not-a-repo' : 'git-unavailable');
   } finally {
     fs.rmSync(plain, { recursive: true, force: true });
   }

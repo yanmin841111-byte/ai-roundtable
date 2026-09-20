@@ -41,6 +41,8 @@ function validateCommon(spec: any, errors: any, locale: TextLocale = 'zh-Hant') 
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) { e('spec.contentObject'); return; }
   if (typeof spec.id !== 'string' || !ID_PATTERN.test(spec.id)) e('spec.badId');
   if (spec.label != null && typeof spec.label !== 'string') e('spec.mustBeString', { field: 'label' });
+  // 安裝/設定說明頁。這個 CLI 或服務不在時,介面把它當成可照做的下一步(「打開安裝說明」)
+  if (spec.docsUrl != null && typeof spec.docsUrl !== 'string') e('spec.mustBeString', { field: 'docsUrl' });
   if (spec.models != null && spec.models !== 'auto' && !Array.isArray(spec.models)) e('spec.modelsShape');
   if (spec.efforts != null && !Array.isArray(spec.efforts)) e('spec.mustBeArray', { field: 'efforts' });
   if (spec.timeoutMs != null && !(Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0)) e('spec.mustBePositive', { field: 'timeoutMs' });

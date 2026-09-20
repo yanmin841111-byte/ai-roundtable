@@ -56,10 +56,11 @@ export async function captureBaseline(cwd: string, snapshot: Snapshot, { fileMax
   return { cwd, at: Date.now(), snapshot, contents };
 }
 
-// 「檔案改動」:是 git repo 就照舊用 git;不是的話,用最近一次任務開始前記下的內容比對
+// 「檔案改動」:是 git repo 就照舊用 git;不是 repo、或這台機器的 git 根本不能用時,
+// 用最近一次任務開始前記下的內容比對——兩種情況下使用者要看的東西是一樣的。
 export async function workdirChanges(workDir: string, baseline: TaskBaseline | null): Promise<DiffResult> {
   const viaGit = await collectChanges(workDir);
-  if (viaGit.ok || viaGit.reason !== 'not-a-repo') return viaGit;
+  if (viaGit.ok || (viaGit.reason !== 'not-a-repo' && viaGit.reason !== 'git-unavailable')) return viaGit;
   if (!baseline || path.resolve(baseline.cwd) !== path.resolve(workDir)) return viaGit;
   return changesSince(baseline);
 }

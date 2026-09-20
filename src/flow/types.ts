@@ -54,6 +54,10 @@ export interface ExecReport {
   error: string | null;
   // 這位成員在執行階段實際做了哪些檔案操作;沒有使用工具時是空陣列
   toolEvents?: ToolAuditEntry[];
+  // 執行回合中途失敗、但已經動過檔案,照樣送審時的失敗原因(審查者要知道檔案可能只改了一半)
+  failedWith?: string;
+  // 修復後的複查:上一輪的審查意見(複查者要確認這些問題修好了、也沒有弄壞別的)
+  previousNotes?: string[];
 }
 
 export interface ReviewPair {
@@ -81,6 +85,12 @@ export interface FixOutcome {
   unresolved: Issue[];
   reviewFailed: Review[];
   fixFailed: FixFailure[];
+  // 修復回合成功跑完的成員與它的修復回報(之後會再複查一次)
+  repaired?: Array<{ item: Issue; report: string }>;
+  // 修復後的複查
+  rereviews?: Review[];
+  // 修復後重跑的自動驗證(形狀見 src/verify.ts 的 VerifyResult)
+  verify?: { syntax: Array<{ file: string; error: string }>; command?: { ok: boolean; code: number | null; output: string; timedOut: boolean }; checked: number; ran: boolean; ok: boolean };
 }
 
 export interface SummaryInput extends Partial<FixOutcome> {

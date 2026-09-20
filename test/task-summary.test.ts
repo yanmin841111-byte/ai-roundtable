@@ -60,8 +60,9 @@ test('每位成員的結果和流程的走向一致;改了哪些檔案、用量�
   assert.ok(card, '任務結束要有結果卡');
   const s = card.taskSummary;
   const outcome = Object.fromEntries(s.members.map((m: any) => [m.name, m.outcome]));
-  // 輪替審查:Alice 審 Bob、Bob 審 Carol、Carol 審 Alice
-  assert.deepStrictEqual(outcome, { Alice: 'approved', Bob: 'repaired', Carol: 'unresolved', Dave: 'failed' });
+  // 輪替審查:Alice 審 Bob、Bob 審 Carol、Carol 審 Alice。Bob 修完後 Alice 複查,仍然提出問題 → 沒解決。
+  // Dave 一開始就失敗、沒有改檔;別人平行改了檔案,也不能算到它頭上而送審
+  assert.deepStrictEqual(outcome, { Alice: 'approved', Bob: 'unresolved', Carol: 'unresolved', Dave: 'failed' });
   assert.deepStrictEqual(s.members.find((m: any) => m.name === 'Alice').reviewers, ['Carol']);
   const files = Object.fromEntries(s.files.map((f: any) => [f.path, f]));
   assert.deepStrictEqual(Object.keys(files).sort(), ['a.js', 'b.js']);

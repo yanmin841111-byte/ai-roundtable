@@ -60,6 +60,33 @@ suspicious-but-correct     6/10 判對 · 有讀檔 9 次
 
 Model output varies, so **one run is only a sample**. When comparing two models or two versions, run each task at least 10 times, and do not run two evaluations at once against the same local Ollama; they slow each other down.
 
+## Solo vs roundtable
+
+The evaluation above only measures whether a reviewer catches mistakes. This one asks whether the whole thing is worth it: **with the same model on the same task, does working alone, or working and then being reviewed and fixing the findings, get it right more often, and how long does each take?**
+
+```bash
+npm run eval:ab                          # 5 tasks × 2 conditions × 3 runs
+npm run eval:ab -- --runs 5 --tasks csv  # only some tasks
+EVAL_REVIEWER_CLI=claude npm run eval:ab # use another model as the roundtable's reviewer (here Claude Code, which uses your subscription)
+```
+
+A model reviewing its own work tends to share its blind spots. `EVAL_REVIEWER_CLI`, `EVAL_REVIEWER_MODEL` and `EVAL_REVIEWER_ADAPTER` switch the roundtable's reviewer to another model (same meaning as the `EVAL_*` variables above), to measure whether a second pair of eyes helps.
+
+- Both run in the real app. The lead is a script that hands the whole task to the same executor, so the division of work is identical.
+  - **Solo**: the review is a script that always approves, which amounts to no review.
+  - **Roundtable**: one more member with the same model joins the discussion and really reviews; if it finds problems, a repair round runs.
+- Every task has **hidden tests** the model never sees, used only for scoring afterwards. Each task ships a reference solution (must pass everything) and a common wrong solution (must fail at least one test), checked by `npm test`, so the tests themselves are known to be right.
+- A failed execution turn (for example, too many tool-call round trips) **is still scored**: whatever the files contain is what you would have got by handing it the task. Only runs where the app itself did not finish are left out.
+- The model's code is tested in a child process on your machine, with a timeout.
+
+| Task | What it tests |
+| --- | --- |
+| `semver` | Many spec details (pre-release precedence rules) |
+| `intervals` | Touching intervals must merge; the input must not change |
+| `duration` | More inputs to reject than to accept |
+| `cart-bugs` | The user reports one symptom; the file has three bugs |
+| `csv` | Quotes, escaped quotes, empty fields |
+
 ## Sharing scores
 
 Scores for the model you use are welcome as a PR: run `npm run eval -- --runs 10 --save` and send the one file it creates in `eval/results/`.

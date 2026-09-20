@@ -3,6 +3,7 @@
   "label": "Grok CLI",
   "type": "cli",
   "description": "xAI Grok Build CLI(指令 grok)。依官方 headless 文件撰寫,尚未在作者電腦實測;若參數不同請依你安裝的版本調整。",
+  "docsUrl": "https://docs.x.ai/build/overview",
   "bin": "grok",
   "input": "arg",
   "systemPrompt": "prepend",

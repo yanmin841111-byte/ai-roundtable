@@ -202,6 +202,7 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
 
   return {
     id: 'cursor',
+    docsUrl: 'https://cursor.com/cli',
     label: 'Cursor CLI',
     type: 'builtin',
     bin,

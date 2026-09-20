@@ -15,6 +15,7 @@ async function once(locale: 'zh-Hant' | 'en') {
         plan: { summary: zh ? '各寫一個檔案' : 'One file each', assignments: [{ agent: 'A1', task: zh ? '建立 a.js' : 'Create a.js' }, { agent: 'A2', task: zh ? '建立 b.js' : 'Create b.js' }] },
         writes: { 'a.js': 'module.exports = 1;\nmodule.exports.x = 2;\n' }, report: zh ? '已建立 a.js' : 'Created a.js',
         review: zh ? 'b.js 少了分號,請補上' : 'b.js is missing a semicolon',
+        recheck: zh ? '分號補上了\n[NO_ISSUES]' : 'The semicolon is there now\n[NO_ISSUES]',
       }),
       scriptedMember({
         id: 'b', name: 'Bob', canEdit: true,
@@ -33,11 +34,14 @@ async function once(locale: 'zh-Hant' | 'en') {
       const card = document.querySelector('#timeline .task-summary') as HTMLElement | null;
       g.check(!!card && card.offsetHeight > 0, '任務結束出現結果卡');
       const head = (card!.querySelector('.ts-head') as HTMLElement).textContent || '';
-      g.check(new RegExp(H.zh ? '任務結果.*已依審查意見修復.*秒' : 'Task result.*Fixed after review.*s').test(head), `標題、整體狀態與用時(${head})`);
-      g.check(card!.classList.contains('tone-info'), '有成員是修復後完成:整體狀態是「已修復」,不是「全部通過」');
+      g.check(new RegExp(H.zh ? '任務結果.*全部審查通過.*秒' : 'Task result.*All approved.*s').test(head), `標題、整體狀態與用時(${head})`);
+      g.check(card!.classList.contains('tone-ok'), 'Bob 修好後複查通過:整體狀態是「全部通過」');
       const rows = Array.from(card!.querySelectorAll('.ts-member')).map((r) => (r.textContent || '').replace(/\s+/g, ' '));
       g.check(rows.some((r) => new RegExp(H.zh ? 'Alice.*✓ 審查通過.*Bob 審查' : 'Alice.*✓ Approved.*reviewed by Bob').test(r)), `Alice:審查通過(${rows.join(' / ')})`);
-      g.check(rows.some((r) => new RegExp(H.zh ? 'Bob.*已修復\\(未再審查\\).*Alice 審查' : 'Bob.*Fixed \\(not re-reviewed\\).*reviewed by Alice').test(r)), `Bob:已修復、未再審查(${rows.join(' / ')})`);
+      g.check(rows.some((r) => new RegExp(H.zh ? 'Bob.*✓ 審查通過.*Alice 審查' : 'Bob.*✓ Approved.*reviewed by Alice').test(r)), `Bob:修好後複查通過(${rows.join(' / ')})`);
+      // 時間線上:修復之後有一則標著「複查」的審查,結論是通過
+      const recheck = Array.from(document.querySelectorAll('#timeline .msg')).find((m) => m.querySelector('.badge.recheck')) as HTMLElement | undefined;
+      g.check(!!recheck && !!recheck.querySelector('.badge.verdict.pass') && new RegExp(H.zh ? '複查' : 're-check').test(recheck.querySelector('.badge.recheck')!.textContent || ''), '修復後的複查標著「複查」,結論是通過');
       const files = Array.from(card!.querySelectorAll('.ts-file')).map((f) => (f.textContent || '').replace(/\s+/g, ' ').trim());
       g.check(files.some((f) => /a\.js\s*\+2\s*−0/.test(f)) && files.some((f) => /b\.js\s*\+1\s*−0/.test(f)), `列出改動的檔案與行數(${files.join(' / ')})`);
       await g.shot(`card-${H.zh ? 'zh' : 'en'}`);

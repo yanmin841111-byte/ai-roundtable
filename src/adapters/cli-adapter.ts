@@ -47,6 +47,7 @@ function createCliAdapter(spec: any): Adapter {
     label: spec.label || spec.id,
     type: 'cli',
     description: spec.description || '',
+    docsUrl: spec.docsUrl || undefined,
     bin: spec.bin,
     supportsResume: spec.supportsResume != null ? !!spec.supportsResume : hasSessionRule,
     supportsEdit: spec.supportsEdit != null ? !!spec.supportsEdit : true,

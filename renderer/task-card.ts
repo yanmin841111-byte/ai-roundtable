@@ -84,6 +84,14 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
   status.className = 'ts-state';
   status.textContent = state.label;
   titleRow.append(icon, title, status);
+  // app 自己跑的驗證:沒有驗證就直說「只有人工智慧讀過」,不讓「審查通過」看起來像跑過了
+  if (s.verify) {
+    const v = document.createElement('span');
+    v.className = `ts-verify ${s.verify}`;
+    v.textContent = t(`task.verify.${s.verify}`);
+    v.title = t(`task.verifyTitle.${s.verify}`);
+    titleRow.appendChild(v);
+  }
   const metrics = document.createElement('div');
   metrics.className = 'ts-metrics';
   metrics.appendChild(metric(t('task.metric.duration'), durationText(s.endedAt - s.startedAt), t('task.durationTitle')));

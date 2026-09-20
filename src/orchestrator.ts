@@ -15,8 +15,10 @@ import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachment
 import { FileToolSession } from './adapters/file-tools';
 import { snapshotDir, diffSnapshots } from './snapshot';
 import { captureBaseline, changesSince } from './task-changes';
+import { verifyChanges, verifyNotes } from './verify';
+import type { VerifyResult } from './verify';
 import type { TaskBaseline } from './task-changes';
-import type { LiveMessage, StagedAttachment, TurnOptions, TurnOutcome, Plan, ExecReport, Review, Issue, FixFailure, FixOutcome, SummaryInput, TranscriptEntry } from './flow/types';
+import type { LiveMessage, StagedAttachment, TurnOptions, TurnOutcome, Plan, ExecReport, Review, ReviewPair, Issue, FixFailure, FixOutcome, SummaryInput, TranscriptEntry } from './flow/types';
 import { SEP, truncateTranscript } from './flow/transcript';
 import { NO_ISSUES, hasQualifiedReviewer, pickReviewPairs, REVIEW_FILES_MAX, REVIEW_INLINE_FILES, REVIEW_INLINE_FILE_CHARS, REVIEW_INLINE_TOTAL_CHARS, reviewAccess, withoutImages, reviewVerdict, ownPaths, reviewFiles } from './flow/review';
 import { TASK_SUMMARY_FILES, taskSummaryText } from './flow/task-summary';
@@ -295,21 +297,31 @@ class Orchestrator extends EventEmitter {
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
   // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
-  async pushTaskSummary({ startedAt, startIndex, reports, failed, reviews, fix, baseline }: {
-    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null;
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify }: {
+    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult;
   }) {
     const unresolved = new Set([...fix.unresolved.map((u) => u.agent.id), ...fix.fixFailed.map((f) => f.item.agent.id)]);
+    const rescued = new Set(salvaged.map((s) => s.agent.id));
+    // 自動驗證沒過的人不算「審查通過」:模型說通過,但 app 跑出來是壞的
+    const brokeVerify = new Set(verify && verify.ran && !verify.ok ? this.verifyBlame([...reports, ...salvaged], verify).map((r) => r.agent.id) : []);
+    const rereviews = fix.rereviews || [];
     const outcomeOf = (report: ExecReport): TaskOutcome => {
-      if (failed.includes(report)) return 'failed';
+      // 中途失敗但照樣送審的成員,結論依審查而定:留下的檔案審查通過就是能用
+      if (failed.includes(report) && !rescued.has(report.agent.id)) return 'failed';
+      if (brokeVerify.has(report.agent.id)) return 'unresolved';
       const verdicts = reviews.filter((rv) => rv.target.agent.id === report.agent.id).map((rv) => reviewVerdict(rv.text, rv.error));
-      if (verdicts.includes('issues')) return unresolved.has(report.agent.id) ? 'unresolved' : 'repaired';
+      if (verdicts.includes('issues')) {
+        if (unresolved.has(report.agent.id)) return 'unresolved';
+        // 修好之後複查通過,才是真的「審查通過」;複查沒跑成就維持「已修復(未再審查)」
+        return rereviews.some((rv) => rv.target.agent.id === report.agent.id && reviewVerdict(rv.text, rv.error) === 'pass') ? 'approved' : 'repaired';
+      }
       return verdicts.includes('pass') ? 'approved' : 'unreviewed';
     };
     const members = [...reports, ...failed].map((r) => ({
       name: r.agent.name,
       color: r.agent.color,
       outcome: outcomeOf(r),
-      reviewers: reviews.filter((rv) => rv.target.agent.id === r.agent.id).map((rv) => rv.reviewer.name),
+      reviewers: [...new Set([...reviews, ...rereviews].filter((rv) => rv.target.agent.id === r.agent.id).map((rv) => rv.reviewer.name))],
     }));
     let files: TaskSummary['files'] = [];
     let moreFiles = 0;
@@ -331,6 +343,7 @@ class Orchestrator extends EventEmitter {
       files,
       moreFiles,
       usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
+      ...(verify ? { verify: !verify.ran ? 'none' as const : verify.ok ? 'passed' as const : 'failed' as const } : {}),
     };
     this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
   }
@@ -434,14 +447,22 @@ class Orchestrator extends EventEmitter {
         const gitChanges = describeGitChanges(gitBefore, gitAfter, this.locale);
         const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
         if (this.stopped) return;
-        const reviews = await this.reviewPhase(agents, reports, changed, failed);
+        const salvaged = this.salvageFailed(failed, reports, changed);
+        const reviewed = [...reports, ...salvaged];
+        // 先由 app 自己驗證(語法檢查與使用者設定的驗證指令),結果交給審查者:
+        // 評測量到審查者讀完檔案照樣放行載不起來的程式,讀是看不出執行時的錯的
+        const verify = await this.verifyPhase(cwd, changed);
         if (this.stopped) return;
-        this.markUnreviewed(reports, reviews);
-        const fix = await this.fixPhase(reviews);
+        const reviews = await this.reviewPhase(agents, reviewed, changed, failed, undefined, verify);
+        if (this.stopped) return;
+        this.markUnreviewed(reviewed, reviews);
+        const fix = await this.fixPhase(reviews, reviewed, verify);
+        if (this.stopped) return;
+        await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd);
         if (this.stopped) return;
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
         if (this.stopped) return;
-        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, reviews, fix, baseline });
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: fix.verify || verify });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
         await this.summaryPhase(task, 'discuss', {});
@@ -645,20 +666,53 @@ class Orchestrator extends EventEmitter {
     for (const r of all) this.writeToolAudit(r.agent, r.toolEvents || []);
     const reports = all.filter((r) => !r.error && (r.report || '').trim());
     const failed = all.filter((r) => r.error || !(r.report || '').trim());
-    if (failed.length) {
-      this.system(
-        this.text('sys.execFailed', { list: failed.map((f) => this.text('prompt.failedItem', { name: f.agent.name, error: f.error || this.text('sys.noReport') })).join('\n') }),
-        { level: 'error' },
-      );
-    }
     return { reports, failed };
+  }
+
+  // 執行回合中途失敗的成員:已經動過檔案的照樣送審。
+  // 以前一律跳過審查,結果最需要有人看的情況——工具呼叫撞到上限、檔案改到一半——
+  // 剛好沒有人看:評測裡就有執行者留下語法錯誤的檔案,流程照樣收尾。
+  // API 成員看它自己的工具紀錄。CLI 成員直接改工作目錄,只看得到所有人改動的總和:
+  // 只有它是唯一可能直接改檔的 CLI 成員、而且有 API 成員工具紀錄解釋不了的改動時,才算它改的。
+  // 否則一位一啟動就失敗的成員(例如 CLI 沒裝),會因為別人平行改了檔案而被送審、甚至被判「通過」。
+  salvageFailed(failed: ExecReport[], reports: ExecReport[], changed: string[] | null): ExecReport[] {
+    const tracked = (r: ExecReport) => getAdapter(r.agent.cli)?.type === 'openai';
+    const all = [...reports, ...failed];
+    const cliWriters = all.filter((r) => effectiveCanEdit(r.agent) && !tracked(r));
+    const explained = new Set(all.filter(tracked).flatMap((r) => [...ownPaths(r)]));
+    const unexplained = (changed || []).filter((f) => !explained.has(f));
+    const salvaged = failed
+      .filter((f) => effectiveCanEdit(f.agent)
+        && (tracked(f) ? ownPaths(f).size > 0 : cliWriters.length === 1 && unexplained.length > 0))
+      .map((f) => ({ ...f, report: f.report || '', failedWith: f.error || this.text('sys.noReport') }));
+    const item = (f: ExecReport) => this.text('prompt.failedItem', { name: f.agent.name, error: f.error || this.text('sys.noReport') });
+    const dropped = failed.filter((f) => !salvaged.some((s) => s.agent.id === f.agent.id));
+    if (dropped.length) this.system(this.text('sys.execFailed', { list: dropped.map(item).join('\n') }), { level: 'error' });
+    if (salvaged.length) this.system(this.text('sys.execSalvaged', { list: salvaged.map(item).join('\n') }), { level: 'warn' });
+    return salvaged;
+  }
+
+  // 自動驗證:不靠模型判斷,app 自己跑(見 src/verify.ts)。執行後與修復後各跑一次。
+  async verifyPhase(cwd: string, changed: string[] | null): Promise<VerifyResult> {
+    const result = await verifyChanges(cwd, changed, this.config.settings.verifyCommand || '', this.locale,
+      (child: any) => { this.procs.add(child); child.on('close', () => this.procs.delete(child)); });
+    const notes = verifyNotes(result, this.locale);
+    if (!result.ran) this.system(this.text('sys.verifyNone'));
+    // 指令根本不存在時,下一步是去設定改掉它——不是去讀程式碼找 bug
+    else if (notes) this.system(this.text('sys.verifyFailed', { notes }), {
+      level: 'warn',
+      tag: 'verify',
+      ...(result.command && result.command.notFound ? { fix: { settingsTab: 'general' } } : {}),
+    });
+    else this.system(this.text('sys.verifyOk'), { tag: 'verify' });
+    return result;
   }
 
   // 階段四:交叉審查
   // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
   // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
-  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = []): Promise<Review[]> {
-    const pairs = pickReviewPairs(agents, reports);
+  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = [], override?: ReviewPair[], verify?: VerifyResult): Promise<Review[]> {
+    const pairs = override || pickReviewPairs(agents, reports);
     if (pairs.length === 0) {
       if (reports.length >= 1) this.system(this.text('sys.noReviewer'), { level: 'warn' });
       return [];
@@ -713,6 +767,12 @@ class Orchestrator extends EventEmitter {
         this.text(opening, vars),
         toolLine ? this.text(toolLine, vars) : null,
         openLine ? this.text(openLine, vars) : null,
+        target.failedWith ? this.text('prompt.reviewExecFailed', { name: target.agent.name, error: target.failedWith }) : null,
+        target.previousNotes ? this.text('prompt.rereview', { name: target.agent.name, notes: target.previousNotes.join('\n\n') }) : null,
+        // app 自己跑出來的結果:通過與否都告訴審查者,它才知道哪些部分不必自己猜
+        !verify || !verify.ran ? null : verify.ok
+          ? this.text('prompt.reviewVerifyOk', { command: verify.command ? this.text('prompt.reviewVerifyCommand') : '' })
+          : this.text('prompt.reviewVerify', { notes: verifyNotes(verify, this.locale) || '' }),
         '',
         this.text('prompt.reviewTask', { task: target.task }),
         '',
@@ -728,7 +788,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
       ];
       const prompt = lines.filter((line): line is string => line !== null).join('\n');
-      const review: ReviewInfo = { target: target.agent.name, access, scope: state, files, more, omitted, unreadable };
+      const review: ReviewInfo = { target: target.agent.name, access, scope: state, files, more, omitted, unreadable, ...(target.previousNotes ? { recheck: true } : {}) };
       return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined, review })
         .then(({ text, error }) => ({ reviewer, target, text, error }));
     });
@@ -809,9 +869,20 @@ class Orchestrator extends EventEmitter {
     }
   }
 
+  // 自動驗證沒過時,要誰去修:能對應到工具紀錄的就找那個人,對應不到(CLI 直接改檔、
+  // 或驗證指令整個失敗)就找所有可能改過檔的人——沒有人認領的失敗等於沒人修。
+  verifyBlame(reviewed: ExecReport[], verify: VerifyResult): ExecReport[] {
+    const writers = reviewed.filter((r) => effectiveCanEdit(r.agent));
+    if (!writers.length) return [];
+    if (verify.command && !verify.command.ok) return writers;
+    const byFile = verify.syntax.map((s) => writers.filter((w) => ownPaths(w).has(s.file))).flat();
+    const named = [...new Set(byFile)];
+    return named.length ? named : writers;
+  }
+
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
-  async fixPhase(reviews: Review[]): Promise<FixOutcome> {
+  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult): Promise<FixOutcome> {
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
     const reviewFailed = reviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'failed');
     if (reviewFailed.length) {
@@ -830,6 +901,15 @@ class Orchestrator extends EventEmitter {
       issues.set(t.agent.id, issue);
       issue.notes.push(this.text('prompt.reviewNote', { reviewer: rv.reviewer.name, text: stripMarker(rv.text, NO_ISSUES) }));
     }
+    // 自動驗證沒過:不管審查者說什麼都要處理。這是 app 實際跑出來的結果,不是誰的意見
+    if (verify && verify.ran && !verify.ok) {
+      const note = this.text('prompt.fixVerify', { notes: verifyNotes(verify, this.locale) || '' });
+      for (const target of this.verifyBlame(reviewed, verify)) {
+        const issue = issues.get(target.agent.id) || { agent: target.agent, task: target.task, notes: [] };
+        issues.set(target.agent.id, issue);
+        issue.notes.push(note);
+      }
+    }
     if (issues.size === 0) {
       if (reviewFailed.length) this.system(this.text('sys.noSuccessfulReview'), { level: 'warn' });
       else if (reviews.length) this.system(this.text('sys.noIssues'));
@@ -837,7 +917,7 @@ class Orchestrator extends EventEmitter {
     }
 
     const unresolved: Issue[] = [];
-    const jobs: Array<Promise<FixFailure>> = [];
+    const jobs: Array<Promise<FixFailure & { text: string }>> = [];
     const group = crypto.randomUUID();
     for (const it of issues.values()) {
       if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
@@ -849,7 +929,7 @@ class Orchestrator extends EventEmitter {
         '',
         this.text('prompt.fixNotes', { notes: it.notes.join('\n\n') }),
       ].join('\n');
-      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group }).then(({ error }) => ({ item: it, error })));
+      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group }).then(({ error, text }) => ({ item: it, error, text })));
     }
 
     if (unresolved.length) {
@@ -860,11 +940,13 @@ class Orchestrator extends EventEmitter {
     }
 
     let fixFailed: FixFailure[] = [];
+    let repaired: FixOutcome['repaired'] = [];
     if (jobs.length) {
-    this.setPhase({ code: 'repair' });
+      this.setPhase({ code: 'repair' });
       const results = await Promise.all(jobs);
       // 修復本身也可能失敗(逾時、崩潰),那些問題等於沒修掉
-      fixFailed = results.filter((r) => r.error);
+      fixFailed = results.filter((r) => r.error).map(({ item, error }) => ({ item, error }));
+      repaired = results.filter((r) => !r.error).map(({ item, text }) => ({ item, report: text }));
       if (fixFailed.length) {
         this.system(
           this.text('sys.fixFailed', { list: fixFailed.map((r) => this.text('prompt.fixFailedItem', { name: r.item.agent.name, error: r.error || '' })).join('\n') }),
@@ -872,7 +954,40 @@ class Orchestrator extends EventEmitter {
         );
       }
     }
-    return { unresolved, reviewFailed, fixFailed };
+    return { unresolved, reviewFailed, fixFailed, repaired };
+  }
+
+  // 修復後的複查:修好的成員再給原本的審查者看一次(只複查一次,不再修)。
+  // 以前修完就算數,但評測裡修復回合會把原本對的地方改壞,修完卻沒有人看得到。
+  // 複查通過才算「審查通過」;還有問題就帶進總結;複查本身失敗則維持「已修復(未再審查)」。
+  async rereviewPhase(agents: AgentConfig[], reviews: Review[], fix: FixOutcome, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, cwd: string) {
+    fix.rereviews = [];
+    if (!(fix.repaired || []).length || this.stopped) return;
+    // 修復之後重跑一次自動驗證:修復可能修好、也可能改壞,兩種都要由 app 自己確認
+    const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
+    if (this.stopped) return;
+    const verify = await this.verifyPhase(cwd, changed);
+    fix.verify = verify;
+    if (this.stopped) return;
+    const pairs: ReviewPair[] = [];
+    for (const { item, report } of fix.repaired || []) {
+      // 原本提出問題的審查者優先;只有自動驗證找出問題(審查者說通過)時,沿用審過它的那一位
+      const first = reviews.find((rv) => rv.target.agent.id === item.agent.id && reviewVerdict(rv.text, rv.error) === 'issues')
+        || reviews.find((rv) => rv.target.agent.id === item.agent.id);
+      if (!first) continue;
+      pairs.push({ reviewer: first.reviewer, target: { ...first.target, report, failedWith: undefined, previousNotes: item.notes } });
+    }
+    if (!pairs.length) return;
+    const rereviews = await this.reviewPhase(agents, pairs.map((p) => p.target), changed, [], pairs, verify);
+    fix.rereviews = rereviews;
+    const still = rereviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'issues');
+    for (const rv of still) {
+      fix.unresolved.push({ agent: rv.target.agent, task: rv.target.task, notes: [this.text('prompt.reviewNote', { reviewer: rv.reviewer.name, text: stripMarker(rv.text, NO_ISSUES) })] });
+    }
+    if (still.length) {
+      const names = still.map((rv) => rv.target.agent.name);
+      this.system(this.text('sys.rereviewIssues', { names: this.locale === 'en' ? joinNames('en', names) : names.join('」、「') }), { level: 'warn' });
+    }
   }
 
   // 階段六:主持人總結
@@ -1045,6 +1160,8 @@ class Orchestrator extends EventEmitter {
       usage: result.usage,
       status: error ? 'error' : 'done',
       error,
+      // 環境問題的下一步(沒登入、沒裝、連不上…):介面在錯誤下方給同一顆修復按鈕
+      fix: error ? result.fix : undefined,
       // 只有 @ 指定回覆可以重試,理由見 retry()
       ...(error && isPhaseInfo(phase) && phase.code === 'direct' ? { retryable: true } : {}),
       ...(review ? { review: { ...review, verdict: reviewVerdict(display, error) } } : {}),

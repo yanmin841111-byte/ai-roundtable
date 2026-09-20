@@ -46,6 +46,13 @@ export const IPC_CHANNELS = {
   extDelete: 'ext:delete',
   extOpenDir: 'ext:openDir',
   extOpenDocs: 'ext:openDocs',
+  terminalCreate: 'terminal:create',
+  terminalWrite: 'terminal:write',
+  terminalResize: 'terminal:resize',
+  terminalClose: 'terminal:close',
+  terminalList: 'terminal:list',
+  terminalData: 'terminal:data',
+  terminalExit: 'terminal:exit',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -134,6 +141,10 @@ export interface AppSettings {
   uiLocale?: 'system' | 'zh-Hant' | 'en';
   // 最近一次套用或儲存的陣容;側欄據此標出目前是哪個陣容、之後有沒有改過
   activeLineupId?: string | null;
+  // 自動驗證指令(在工作目錄執行,例如 npm test)。空字串代表只做內建的語法檢查
+  verifyCommand?: string;
+  // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度
+  terminalWidth?: number;
 }
 
 // 陣容:一組「誰上場、各自的角色、誰主持、什麼流程、討論幾輪」(見 src/lineups.ts)
@@ -192,14 +203,27 @@ export type CliState = 'missing' | 'unauthenticated' | 'unreachable' | 'ready';
 
 // 轉接器 check() / testConnection() 的回傳。多數轉接器只填 ok/version/error,
 // state 由 registry.checkAll() 統一補齊後才送到介面。
+// ---------- 環境問題的「照做就能修好」 ----------
+// 全 app 統一的形狀:偵測到問題的地方填它,介面用同一張卡片呈現。
+// 三種下一步,依序是最具體到最一般:
+//   command    一行可以直接在內建終端執行的指令(claude auth login、ollama serve…)。
+//              永遠只填進終端,不自動執行——sudo、安裝、啟動服務要由使用者自己按 Enter。
+//   settingsTab 要在 app 裡做的事(例如填 API key),帶使用者到對的設定分頁
+//   url        以上都沒有時的官方說明頁
+export interface EnvFix {
+  command?: string;
+  settingsTab?: string;
+  url?: string;
+}
+
 export interface CliStatus {
   ok: boolean;
   version?: string;
   error?: string;
   state?: CliState;
   hint?: string;
-  // CLI 未登入時,使用者要在終端機執行的指令(例如 claude auth login)。介面會提供複製按鈕。
-  loginCommand?: string;
+  // 照做就能修好的下一步(見 EnvFix)
+  fix?: EnvFix;
 }
 
 // cli:check 給介面的正規化結果:state 一定有值,介面不必比對錯誤字串。
@@ -210,7 +234,7 @@ export interface CliHealth {
   error?: string;
   // 未登入時要顯示給使用者的指令,例如「請在終端機執行 codex login」
   hint?: string;
-  loginCommand?: string;
+  fix?: EnvFix;
 }
 
 export interface ExtEntry {
@@ -320,6 +344,9 @@ export interface ChatMessage {
   unreviewed?: boolean;
   // 失敗的 @ 指定回覆可以重試。由 orchestrator 決定並寫進訊息,介面只照旗標顯示按鈕。
   retryable?: boolean;
+  // 這次失敗如果是環境問題(沒登入、沒裝、連不上…),照做就能修好的下一步。
+  // 由 runTurn 在回合失敗時補上;不寫進歷史紀錄(環境會變,重新開啟時要重新判斷)。
+  fix?: EnvFix;
   // 交叉審查回合:審查者看了什麼、結論是什麼。介面靠它顯示結論徽章與「看了哪些檔案」,
   // 不必從文字猜。
   review?: ReviewInfo;
@@ -347,6 +374,8 @@ export interface TaskSummary {
   moreFiles: number;
   // 這次任務所有回合的用量加總。turnsWithUsage < turns 代表有些回合沒有回報用量,總數偏低
   usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
+  // app 自己跑的自動驗證(語法檢查與驗證指令):passed 通過、failed 沒過、none 沒有東西可驗
+  verify?: 'passed' | 'failed' | 'none';
 }
 
 // 審查者怎麼看到改動
@@ -376,6 +405,7 @@ export interface ReviewInfo {
   omitted: string[];   // 列了、但超過上限沒附上內容的檔案(access 不是 open 時才有意義)
   unreadable: string[]; // 列了、但讀不到內容的檔案(已刪除、不是文字檔、沙箱拒絕)
   verdict?: ReviewVerdict; // 回合結束後才有
+  recheck?: boolean;       // 修復後的複查
 }
 
 // ---------- 選項式提問 ----------
@@ -527,7 +557,10 @@ export type DiffResult =
   // source:'git' 是相對上一次 commit;'task' 是工作目錄不是 git repo 時,相對最近一次任務開始前(since 是那個時間)
   | { ok: true; dir: string; files: DiffFile[]; totalFiles: number; prefix: string; source?: 'git' | 'task'; since?: number }
   // reason 是給介面判斷要顯示哪一種說明,不是直接給使用者看的文字
-  | { ok: false; reason: 'no-workdir' | 'not-a-repo' | 'failed'; detail?: string };
+  | { ok: false; reason: 'no-workdir' | 'not-a-repo' | 'failed'; detail?: string }
+  // git 本身不能用(沒裝開發者工具、或沒同意 Xcode 授權)。這和「這裡不是 repo」是兩件事:
+  // 叫使用者去 git init 沒有用,要修的是 git。fix.command 可以直接丟進內建終端執行。
+  | { ok: false; reason: 'git-unavailable'; issue: 'missing' | 'license'; fix: EnvFix; detail?: string };
 
 // ---------- 檔案工具稽核紀錄 ----------
 // 成員用工具改檔時,它「說」自己做了什麼和「實際」做了什麼可能對不上。這份紀錄是實際發生的事,
@@ -569,12 +602,30 @@ export interface OllamaSetupResult {
   error?: string | null;
   // 可以照做的下一步,例如「請先執行 ollama serve」
   hint?: string | null;
+  // 那一步照做就能修好時的動作(見 EnvFix),例如「在終端執行 ollama serve」
+  fix?: EnvFix | null;
   // 是否已經寫入設定。只有帶 model 呼叫且成功時才是 true
   installed: boolean;
   selectedModel?: string;
   adapterId?: string;
   file?: string;
 }
+
+// ---------- 終端 ----------
+// 一個分頁就是一個跑在真 pty 上的互動式 shell。renderer 只認得 id 與大小,
+// pty、行程、訊號一律留在主程序(src/terminal.ts)。
+export interface TerminalSessionInfo {
+  id: string;
+  /** 實際的工作目錄。要求的目錄不存在時主程序會退回家目錄,所以這裡是「真正在哪裡」 */
+  cwd: string;
+  shell: string;
+  cols: number;
+  rows: number;
+}
+
+export type TerminalCreateResult =
+  | { ok: true; session: TerminalSessionInfo }
+  | { ok: false; error: string };
 
 export type OkResult = { ok: true } | { ok: false; error: string };
 export type SessionReadResult = { ok: true; session: SessionDetail } | { ok: false; error: string };
@@ -622,6 +673,11 @@ export interface IpcContract {
   'ext:delete': { args: [file: string]; result: ExtSummary };
   'ext:openDir': { args: []; result: string };
   'ext:openDocs': { args: []; result: void };
+  'terminal:create': { args: [payload?: { cols?: number; rows?: number; cwd?: string }]; result: TerminalCreateResult };
+  'terminal:write': { args: [payload: { id: string; data: string }]; result: void };
+  'terminal:resize': { args: [payload: { id: string; cols: number; rows: number }]; result: void };
+  'terminal:close': { args: [payload: { id: string }]; result: void };
+  'terminal:list': { args: []; result: TerminalSessionInfo[] };
 }
 
 export type InvokeChannel = keyof IpcContract;
@@ -634,6 +690,10 @@ export interface IpcEvents {
   'chat:state': ChatState;
   'chat:reset': void;
   'session:saved': { id: string | null };
+  // pty 的原始輸出。不在主程序解碼成字串:多位元組字元會被切在兩個 chunk 之間,
+  // 交給終端自己處理才不會出現半個字。
+  'terminal:data': { id: string; data: Uint8Array };
+  'terminal:exit': { id: string; code: number };
 }
 
 export type EventChannel = keyof IpcEvents;
@@ -691,6 +751,16 @@ export interface RendererApi {
     remove(file: string): Promise<ExtSummary>;
     openDir(): Promise<string>;
     openDocs(): Promise<void>;
+  };
+  // 終端分頁。開、輸入、改大小、關,其餘(pty、訊號、孤兒行程)都在主程序
+  terminal: {
+    create(payload?: { cols?: number; rows?: number; cwd?: string }): Promise<TerminalCreateResult>;
+    write(id: string, data: string): Promise<void>;
+    resize(id: string, cols: number, rows: number): Promise<void>;
+    close(id: string): Promise<void>;
+    list(): Promise<TerminalSessionInfo[]>;
+    onData(fn: (payload: IpcEvents['terminal:data']) => void): void;
+    onExit(fn: (payload: IpcEvents['terminal:exit']) => void): void;
   };
   onMessage(fn: (m: ChatMessage) => void): void;
   onState(fn: (s: ChatState) => void): void;

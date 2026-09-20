@@ -57,14 +57,17 @@ async function main() {
       const rows = await g.waitFor(() => {
         const list = Array.from(document.querySelectorAll('#ext-list > *')).map((e) => ({
           text: (e.textContent || '').replace(/\s+/g, ' ').trim(),
-          copy: (e.querySelector('[data-copy-login]') as HTMLElement | null)?.dataset.copyLogin || '',
+          // 修復卡片全 app 統一:主要動作是「在終端執行」,旁邊保留「複製」
+          fix: (e.querySelector('[data-env-run]') as HTMLElement | null)?.dataset.envRun || '',
+          copy: (e.querySelector('[data-env-copy]') as HTMLElement | null)?.dataset.envCopy || '',
         }));
         return list.some((x: any) => /Claude Code/.test(x.text) && /尚未登入/.test(x.text)) ? list : null;
       }, 20000, '設定頁的登入提示');
       const claude = rows.find((x: any) => /Claude Code/.test(x.text));
       const codex = rows.find((x: any) => /Codex/.test(x.text));
-      g.check(claude.copy === 'claude auth login', `Claude 提供可複製的登入指令(${claude.copy})`);
-      g.check(codex.copy === 'codex login', `Codex 提供可複製的登入指令(${codex.copy})`);
+      g.check(claude.fix === 'claude auth login', `Claude 的登入指令可以直接在終端執行(${claude.fix})`);
+      g.check(codex.fix === 'codex login', `Codex 的登入指令可以直接在終端執行(${codex.fix})`);
+      g.check(claude.copy === 'claude auth login' && codex.copy === 'codex login', '也保留「複製」給想自己貼的人');
       // 切到登入提示所在的分頁,並等設定視窗的淡入動畫跑完,截圖才拍得到重點
       (document.querySelector('.settings-tab[data-tab="clis"]') as HTMLElement).click();
       await g.w(600);

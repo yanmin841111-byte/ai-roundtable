@@ -13,6 +13,7 @@ import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcA
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 import { CapabilityStore, setCapabilityStore } from './src/capabilities';
 import { workdirChanges } from './src/task-changes';
+import { TerminalManager, MAX_SESSIONS as TERMINAL_MAX } from './src/terminal';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -42,6 +43,7 @@ let store: Store;
 let orchestrator: Orchestrator;
 let registry: Registry;
 let secrets: SecretStore;
+let terminals: TerminalManager;
 let activeTaskStart: number | null = null;
 let wasRunning = false;
 // 目前對話寫入的紀錄檔;同一段對話每次任務結束都覆寫這一份,新對話時清空
@@ -141,6 +143,8 @@ function send<C extends EventChannel>(channel: C, ...payload: IpcEvents[C] exten
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...payload);
 }
 function stopOrchestrator() { if (orchestrator) orchestrator.stop(); }
+// app 結束時終端裡的 shell 也要一起收掉,不留在背景跑
+function stopTerminals() { if (terminals) terminals.closeAll(); }
 
 app.whenReady().then(async () => {
   importShellEnv();
@@ -171,6 +175,11 @@ app.whenReady().then(async () => {
     wasRunning = !!s.running;
   });
   orchestrator.on('reset', () => { activeTaskStart = null; sessionFileId = null; resetPending(); send('chat:reset'); });
+
+  // 終端分頁:使用者自己動手的地方。輸出直接往 renderer 送,主程序不解讀也不記錄。
+  terminals = new TerminalManager();
+  terminals.on('data', (payload: IpcEvents['terminal:data']) => send('terminal:data', payload));
+  terminals.on('exit', (payload: IpcEvents['terminal:exit']) => send('terminal:exit', payload));
 
   // 啟動清理:
   //   1. 上次被強制關閉時可能在使用者的工作目錄留下 .roundtable-runtime,一定要清掉
@@ -342,6 +351,23 @@ app.whenReady().then(async () => {
       return { ok: false, baseUrl: '', models: [], recommendedModel: null, installed: false, error: error?.message || String(error) };
     }
   });
+  // 終端。開在目前的工作目錄——成員在哪裡動手,使用者就在哪裡下指令。
+  handle('terminal:create', (payload) => {
+    const result = terminals.create({
+      cwd: payload?.cwd || store.get().settings.workDir,
+      cols: payload?.cols,
+      rows: payload?.rows,
+    });
+    if (result.ok) return { ok: true, session: result.session };
+    if (result.code === 'tooMany') return { ok: false, error: text('terminal.tooMany', { max: TERMINAL_MAX }) };
+    if (result.code === 'noExpect') return { ok: false, error: text('terminal.noExpect') };
+    return { ok: false, error: text('terminal.spawnFailed', { detail: result.detail || '' }) };
+  });
+  handle('terminal:write', ({ id, data }) => terminals.write(String(id), String(data)));
+  handle('terminal:resize', ({ id, cols, rows }) => terminals.resize(String(id), cols, rows));
+  handle('terminal:close', ({ id }) => terminals.close(String(id)));
+  handle('terminal:list', () => terminals.list());
+
   handle('chat:stop', () => orchestrator.stop());
   handle('chat:reset', () => orchestrator.reset());
 
@@ -349,5 +375,5 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('window-all-closed', () => { stopOrchestrator(); app.quit(); });
-app.on('before-quit', stopOrchestrator);
+app.on('window-all-closed', () => { stopOrchestrator(); stopTerminals(); app.quit(); });
+app.on('before-quit', () => { stopOrchestrator(); stopTerminals(); });

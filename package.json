@@ -29,7 +29,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:node": "tsc -p tsconfig.build.json",
     "build:renderer": "esbuild renderer/app.ts --bundle --format=iife --platform=browser --outfile=dist/renderer/app.js --sourcemap",
-    "build:static": "node -e \"const f=require('fs');f.mkdirSync('dist/renderer',{recursive:true});f.copyFileSync('renderer/index.html','dist/renderer/index.html');f.copyFileSync('renderer/style.css','dist/renderer/style.css');f.cpSync('adapters/templates','dist/adapters/templates',{recursive:true})\"",
+    "build:static": "node -e \"const f=require('fs');f.mkdirSync('dist/renderer',{recursive:true});f.copyFileSync('renderer/index.html','dist/renderer/index.html');f.copyFileSync('renderer/style.css','dist/renderer/style.css');f.cpSync('adapters/templates','dist/adapters/templates',{recursive:true});f.copyFileSync('src/pty.exp','dist/src/pty.exp')\"",
     "build": "npm run clean && npm run build:node && npm run build:renderer && npm run build:static",
     "smoke:dist": "node -e \"const s=require('./dist/src/shared');const r=require('./dist/src/model-rules');require('./dist/src/orchestrator');if(!s.hasMarker||!r.resolveModelId)throw new Error('dist CommonJS exports incomplete');console.log('dist smoke passed')\"",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p renderer/tsconfig.json",
@@ -37,10 +37,11 @@
     "dist": "npm run build && electron-builder --mac --publish never",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "e2e": "npm run build && node --import tsx test/e2e/run.ts",
-    "harness:ui": "npm run build && node --import tsx test/harness/scenarios/ui-states.ts && node --import tsx test/harness/scenarios/i18n-en.ts && node --import tsx test/harness/scenarios/waiting.ts && node --import tsx test/harness/scenarios/retry.ts && node --import tsx test/harness/scenarios/review-visibility.ts && node --import tsx test/harness/scenarios/plan-output.ts && node --import tsx test/harness/scenarios/model-capability.ts && node --import tsx test/harness/scenarios/diff-without-git.ts && node --import tsx test/harness/scenarios/task-summary.ts && node --import tsx test/harness/scenarios/lineups.ts",
+    "harness:ui": "npm run build && node --import tsx test/harness/scenarios/ui-states.ts && node --import tsx test/harness/scenarios/i18n-en.ts && node --import tsx test/harness/scenarios/waiting.ts && node --import tsx test/harness/scenarios/retry.ts && node --import tsx test/harness/scenarios/review-visibility.ts && node --import tsx test/harness/scenarios/plan-output.ts && node --import tsx test/harness/scenarios/model-capability.ts && node --import tsx test/harness/scenarios/diff-without-git.ts && node --import tsx test/harness/scenarios/task-summary.ts && node --import tsx test/harness/scenarios/lineups.ts && node --import tsx test/harness/scenarios/terminal.ts && node --import tsx test/harness/scenarios/env-fix.ts",
     "harness:live": "npm run build && node --import tsx test/harness/scenarios/file-tools-live.ts",
     "harness:login": "npm run build && node --import tsx test/harness/scenarios/login-state.ts",
-    "eval": "npm run build && node --import tsx eval/run.ts"
+    "eval": "npm run build && node --import tsx eval/run.ts",
+    "eval:ab": "npm run build && node --import tsx eval/ab.ts"
   },
   "build": {
     "appId": "io.github.yanmin841111-byte.airoundtable",
@@ -70,6 +71,8 @@
     "afterPack": "scripts/after-pack.js"
   },
   "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",

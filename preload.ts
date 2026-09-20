@@ -62,6 +62,16 @@ const api: RendererApi = {
     openDir: () => invoke('ext:openDir'),
     openDocs: () => invoke('ext:openDocs'),
   },
+  // 終端分頁:只是轉交。這一層不保留 id 與狀態,分頁真正的生死在主程序。
+  terminal: {
+    create: (payload) => invoke('terminal:create', payload || {}),
+    write: (id, data) => invoke('terminal:write', { id, data }),
+    resize: (id, cols, rows) => invoke('terminal:resize', { id, cols, rows }),
+    close: (id) => invoke('terminal:close', { id }),
+    list: () => invoke('terminal:list'),
+    onData: (fn) => on('terminal:data', fn),
+    onExit: (fn) => on('terminal:exit', fn),
+  },
   onMessage: (fn) => on('chat:message', fn),
   onState: (fn) => on('chat:state', fn),
   onReset: (fn) => on('chat:reset', () => fn()),

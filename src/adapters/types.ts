@@ -2,7 +2,7 @@
 // orchestrator 與主程序只透過這份介面使用它們。
 
 import type { ChildProcess } from 'child_process';
-import type { Activity, AgentConfig, AttachmentMeta, CliStatus, Model, ModelCapability } from '../ipc-types';
+import type { Activity, AgentConfig, AttachmentMeta, CliStatus, EnvFix, Model, ModelCapability } from '../ipc-types';
 import type { NormalizedUsage } from '../usage';
 import type { StopHandle } from './process';
 import type { FileToolTranscriptEntry } from './file-tools';
@@ -61,6 +61,9 @@ export interface RunResult {
   sessionId?: string | null;
   usage?: unknown;
   error?: string | null;
+  // 這次失敗是環境問題時(沒登入、沒裝、連不上),照做就能修好的下一步。
+  // 轉接器知道原因時自己填;沒填的話 runTurn 會再問一次健康檢查補上。
+  fix?: EnvFix;
   // 下一輪由 orchestrator 寫入 transcript，讓 reviewer 看得到成功與失敗的工具紀錄。
   toolEvents?: FileToolTranscriptEntry[];
 }
@@ -72,6 +75,7 @@ export interface TurnResult {
   sessionId: string | null;
   usage: NormalizedUsage | null;
   error: string | null;
+  fix?: EnvFix;
   toolEvents?: FileToolTranscriptEntry[];
 }
 
@@ -81,6 +85,9 @@ export interface Adapter {
   type: AdapterType;
   description?: string;
   bin?: string | null;
+  // 安裝/設定說明頁。這個 CLI 或服務不在時,介面把它當成「可照做的下一步」顯示,
+  // 不在 app 裡寫死安裝指令(各家的安裝方式會變)。
+  docsUrl?: string;
   // 能否用 sessionId 續接;不能時每回合會送完整對話紀錄
   supportsResume: boolean;
   // 能否修改檔案 / 執行指令;不能時成員的「允許修改檔案」無效

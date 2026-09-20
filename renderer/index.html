@@ -5,6 +5,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
   <title>AI Roundtable</title>
   <link rel="stylesheet" href="style.css" />
+  <!-- 終端的樣式由 esbuild 從 @xterm/xterm 打包出來(見 package.json 的 build:renderer) -->
+  <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <!-- 靜態文案以 data-i18n* 標記,由 renderer/i18n.ts 的 applyStaticText 依介面語言填入;這裡的中文只是啟動瞬間的預設值 -->
@@ -49,6 +51,7 @@
         <button id="workdir-chip" class="chip"><span class="chip-icon">📁</span><span id="workdir-label"></span></button>
         <div id="usage-total" class="usage-total" hidden></div>
         <div class="spacer"></div>
+        <button id="terminal-btn" class="ghost small" aria-expanded="false" aria-controls="terminal-panel" data-i18n="topbar.terminal" data-i18n-title="topbar.terminalTitle" title="終端(⌘J)">›_ 終端</button>
         <button id="diff-btn" class="ghost small" data-i18n="topbar.diff" data-i18n-title="topbar.diffTitle" title="查看成員改了哪些檔案">◨ 檔案改動</button>
         <button id="export-btn" class="ghost small" data-i18n="topbar.export" disabled>⇩ 匯出</button>
         <button id="stop-btn" class="danger small" data-i18n="topbar.stop" disabled>■ 停止</button>
@@ -85,6 +88,25 @@
         </div>
       </footer>
     </main>
+
+    <!-- 終端:平常收著,工具列的「終端」或 ⌘J 叫出來。靠右直立,和時間軸並排——
+         一邊看成員在討論什麼,一邊自己下指令,兩邊都不用捲。
+         分頁跑在真正的 pty 上,開在跟成員同一個工作目錄。 -->
+    <section id="terminal-panel" class="terminal-panel" data-i18n-aria-label="term.panel" aria-label="終端" hidden>
+      <div id="term-resize" class="term-resize" role="separator" aria-orientation="vertical" tabindex="0" data-i18n-title="term.resize" title="拖曳調整寬度"></div>
+      <div class="term-head">
+        <div class="drag-region"></div>
+        <span class="term-glyph" aria-hidden="true">›_</span>
+        <div id="term-tabs" class="term-tabs" role="tablist" data-i18n-aria-label="term.tabs" aria-label="終端分頁"></div>
+        <button id="term-new" class="ghost small icon" data-i18n-title="term.new" title="新分頁(⌘T)">＋</button>
+        <div class="spacer"></div>
+        <button id="term-clear" class="ghost small" data-i18n="term.clear" data-i18n-title="term.clearTitle" title="清空畫面(⌘K)">清空</button>
+        <button id="term-hide" class="ghost small icon" data-i18n-title="term.hide" title="收起終端(⌘J)">✕</button>
+      </div>
+      <div id="term-cwd" class="term-cwd"></div>
+      <div id="term-error" class="term-error" hidden></div>
+      <div id="term-body" class="term-body"></div>
+    </section>
   </div>
 
   <!-- 設定 -->
@@ -140,6 +162,10 @@
                 <div class="setting-label"><b data-i18n="settings.maxTranscript">對話紀錄上限(字元)</b><span data-i18n="settings.maxTranscriptDesc">不支援續接的成員每回合重送紀錄的長度上限</span></div>
                 <input id="max-transcript" type="number" min="0" step="10000" />
               </div>
+            </div>
+            <div class="setting">
+              <div class="setting-label"><b data-i18n="settings.verifyCommand">驗證指令</b><span data-i18n="settings.verifyCommandDesc">執行與修復之後,app 會在工作目錄跑這個指令(例如 npm test),結果交給審查者,失敗就一定要修。留空只做內建的語法檢查。</span></div>
+              <input id="verify-command" data-i18n-placeholder="settings.verifyCommandPlaceholder" placeholder="例如 npm test(留空就不執行)" />
             </div>
           </section>
 
@@ -253,6 +279,9 @@
           <label class="field half"><span data-i18n="agent.cli">AI CLI</span><select id="f-cli"></select></label>
           <label class="field half"><span data-i18n="agent.model">模型 / 版本</span><select id="f-model-select"></select><input id="f-model" type="text" data-i18n-placeholder="agent.modelPlaceholder" placeholder="輸入模型名稱" spellcheck="false" style="margin-top:6px" /></label>
         </div>
+        <!-- 這個 CLI / API 現在能不能用。沒裝、沒登入、連不上時要在「選模型」的地方就說清楚,
+             不是讓人選好、儲存、送出任務之後才發現 -->
+        <div id="f-cli-status" class="cli-status" hidden></div>
         <div class="row gap">
           <label class="field half"><span data-i18n="agent.effort">強度(推理力度)</span><select id="f-effort"></select></label>
           <label class="field half checks">

@@ -21,6 +21,8 @@ export function scriptedMember(opts: {
   plan?: { summary: string; assignments: Array<{ agent: string; task: string }> };
   discuss?: string;
   review?: string;
+  /** 修復後複查時的回覆(沒給就沿用 review) */
+  recheck?: string;
   canEdit?: boolean;
   /** 執行階段寫進工作目錄的檔案(相對路徑 → 內容) */
   writes?: Record<string, string>;
@@ -31,6 +33,7 @@ export function scriptedMember(opts: {
     plan: opts.plan || null,
     discuss: opts.discuss || '同意直接進入分工\n[AGREED]',
     review: opts.review || '看過了,沒問題\n[NO_ISSUES]',
+    recheck: opts.recheck || null,
     writes: opts.writes || null,
     report: opts.report || null,
   }), 'utf8').toString('base64');

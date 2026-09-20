@@ -10,12 +10,14 @@ import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, clea
 import { openDiff, loadDiff } from './diff-view';
 import { renderTaskSummary } from './task-card';
 import { setupLineups, renderLineupButton } from './lineup-menu';
+import { setupTerminal, toggleTerminal, syncTerminalTheme, relocalizeTerminal } from './terminal';
+import { envFixHtml, bindEnvFix, describeCliHealth, setEnvFixHandlers } from './env-fix';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth,
   ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo, ModelCapability,
   AttachmentsResult, RendererApi,
-  PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity,
+  PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity, EnvFix,
 } from './api';
 
 // marked v15 的 parse() 型別是 string | Promise<string>;這裡一律同步使用。
@@ -30,6 +32,8 @@ interface AgentShell {
   activities: HTMLElement;
   body: CachedEl;
   error: CachedEl;
+  // 這個版本之前建立的訊息節點沒有這一格,所以允許 null
+  fix: HTMLElement | null;
   // 舊的訊息節點可能還沒有這個元素,所以允許 null
   unreviewed: HTMLElement | null;
   reviewScope: HTMLElement;
@@ -94,6 +98,14 @@ async function init() {
   setState(snap);
   checkClis();
   setupComposerAttachments();
+  // 修復卡片上的「打開設定」由這裡提供:env-fix 只負責畫面,不認得設定畫面
+  setEnvFixHandlers({ openSettings: (tab) => openSettings(tab) });
+  // 終端面板:平常收著。成員在工作目錄動手,使用者也該能在同一個目錄自己下指令。
+  setupTerminal({
+    workDir: () => config.settings.workDir,
+    width: () => Number(config.settings.terminalWidth) || 0,
+    saveWidth: (value) => { config.settings.terminalWidth = value; window.api.saveConfig(config); },
+  });
 
   window.api.onMessage((m) => renderMessage(m, { animate: true }));
   window.api.onState(setState);
@@ -137,6 +149,8 @@ async function init() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && closeTopModal()) e.preventDefault();
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+    // ⌘J 開關終端。終端自己聚焦時的 ⌘J / ⌘T / ⌘W / ⌘K 由 renderer/terminal.ts 處理
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); void toggleTerminal(); }
   });
   $<HTMLButtonElement>('#history-toggle').onclick = toggleHistory;
   $<HTMLButtonElement>('#history-refresh').onclick = () => loadHistory(true);
@@ -268,6 +282,8 @@ function applyAppearance() {
   if (themeInput) themeInput.checked = true;
   const sizeInput = document.querySelector<HTMLInputElement>(`input[name="font-size"][value="${fontSize}"]`);
   if (sizeInput) sizeInput.checked = true;
+  // 終端有自己的色盤(xterm 認不得 CSS 變數),跟著主題一起換
+  syncTerminalTheme();
 }
 
 function saveAppearance() {
@@ -286,6 +302,7 @@ function saveAppearance() {
 // 切換介面語言:靜態文案重填、側欄與時間軸重畫;訊息資料都還在 messageData,直接重新 render
 function relocalize(): void {
   applyStaticText();
+  relocalizeTerminal();
   renderSidebar();
   renderExtensions();
   renderCliSummary();
@@ -549,6 +566,9 @@ async function checkClis(opts: { probeCredentialed?: boolean } = {}) {
   renderSidebar();
   renderExtensions();
   renderCliSummary();
+  // 成員編輯視窗開著時,裡面那張狀態卡也要跟著更新:健康檢查是非同步的,
+  // 不重畫的話使用者看到的是「還沒檢查」那一刻的樣子
+  if (!$('#modal').classList.contains('hidden')) updateCliStatusNote($<HTMLSelectElement>('#f-cli').value);
 }
 
 // 側欄底部:需要安裝檢查的 CLI 有幾個可用
@@ -618,11 +638,13 @@ async function reloadExtensions() {
 // 這個流程刻意只留一個決定:選一個模型。端點、API key、JSON、逾時、歷史上限全部
 // 留在 adapter 層,介面連顯示它們的機會都沒有。
 
-function setQuickStatus(message: string, kind: 'ok' | 'warn' | 'error' | '' = ''): void {
+// 有下一步時,狀態底下多一張和其他地方一樣的修復卡片(例如「在終端執行 ollama serve」)
+function setQuickStatus(message: string, kind: 'ok' | 'warn' | 'error' | '' = '', fix?: EnvFix | null): void {
   const el = $<HTMLDivElement>('#quick-status');
   el.hidden = !message;
-  el.textContent = message;
+  el.innerHTML = `<div>${escapeHtml(message)}</div>${envFixHtml(fix)}`;
   el.className = `quick-status${kind ? ' ' + kind : ''}`;
+  bindEnvFix(el);
 }
 
 async function detectOllama(): Promise<void> {
@@ -635,7 +657,7 @@ async function detectOllama(): Promise<void> {
     if (!r.ok) {
       // hint 是可以照做的下一步(例如「請先執行 ollama serve」);
       // error 是 fetch 的原始訊息,多半是英文且對一般使用者沒有意義,不顯示。
-      setQuickStatus(r.hint || t('quick.notFound'), 'warn');
+      setQuickStatus(r.hint || t('quick.notFound'), 'warn', r.fix);
       return;
     }
     if (!r.models.length) {
@@ -693,23 +715,14 @@ function renderExtensions() {
   // 已載入的轉接器(內建 + 擴充)
   for (const type of Object.values(cliTypes)) {
     const st = cliStatus[type.id];
-    // unauthenticated 與 unreachable 都是「設定在,只差一步」——畫成 warn,和左下角摘要
-    // 的 fixable 判定一致(以前 unreachable 在這裡畫紅、在摘要算可修復,同一狀態兩種說法)。
-    const dotClass = !st ? '' : st.state === 'ready' ? 'ok' : st.state === 'unauthenticated' || st.state === 'unreachable' ? 'warn' : 'bad';
-    const dot = `<span class="status-dot ${dotClass}"></span>`;
-    // hint 是唯一「照做就能修好」的一句話(例如「請先執行 ollama serve」)。
-    // 以前只有 unauthenticated 讀 hint,unreachable 落到 st.error,使用者看到的是
-    // fetch 原文那種開發者訊息。錯誤原文改放 title,需要時才看得到。
-    const sub = st
-      ? st.state === 'ready' ? st.version || t('cli.ready')
-        : st.state === 'unauthenticated' ? st.hint || t('cli.unauthenticated')
-        : st.state === 'unreachable' ? st.hint || t('cli.unreachable')
-        : st.error || t('cli.missing')
-      : type.bin ? t('ext.checking') : t('ext.noCheck');
-    const subTitle = st && st.error && st.hint && st.error !== st.hint ? ` title="${escapeHtml(st.error)}"` : '';
-    // 登入指令由後端的健康檢查提供(claude auth login、codex login…),不在介面寫死某一個 CLI。
-    const loginCommand = st?.state === 'unauthenticated' ? st.loginCommand || '' : '';
-    const auth = loginCommand ? `<div class="cli-auth"><code class="cli-auth-command">${escapeHtml(loginCommand)}</code><button type="button" class="cli-copy" data-copy-login="${escapeHtml(loginCommand)}">${escapeHtml(t('cli.copyLogin'))}</button></div>` : '';
+    // 狀態怎麼說、下一步是什麼,全部來自 describeCliHealth:設定頁與成員的模型設定共用同一份,
+    // 同一個狀態不會再出現兩種說法。修復指令由後端的健康檢查提供(claude auth login、
+    // ollama serve…),不在介面寫死某一個 CLI;沒有單一指令的(例如還沒安裝)給官方說明頁。
+    const described = describeCliHealth(st, type);
+    const dot = `<span class="status-dot ${described.tone}"></span>`;
+    const sub = described.text;
+    const subTitle = described.detail ? ` title="${escapeHtml(described.detail)}"` : '';
+    const auth = envFixHtml(described.fix);
     const badges = [`<span class="badge">${escapeHtml(typeLabel(type.type))}</span>`];
     if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
     const entry = extSummary.entries.find((e) => e.file === type.file);
@@ -727,14 +740,7 @@ function renderExtensions() {
     el.className = `ext-item${r.file ? ' clickable' : ''}${r.broken ? ' broken' : ''}`;
     el.innerHTML = r.html;
     if (r.file) { const file = r.file; el.title = t('ext.clickToEdit', { file }); el.onclick = () => { void openExtEditor(file); }; }
-    const copy = el.querySelector<HTMLButtonElement>('[data-copy-login]');
-    if (copy) copy.onclick = (event) => {
-      event.stopPropagation();
-      void navigator.clipboard.writeText(copy.dataset.copyLogin || '').then(() => {
-        copy.textContent = t('cli.copied');
-        setTimeout(() => { if (copy.isConnected) copy.textContent = t('cli.copyLogin'); }, 1400);
-      });
-    };
+    bindEnvFix(el);
     list.appendChild(el);
   }
 }
@@ -964,14 +970,18 @@ async function testExtensionConnection() {
   $<HTMLButtonElement>('#ext-key-test').disabled = true;
   try {
     const result = await window.api.secrets.test(editingExtSpec?.id || '');
-    showExtResult(result.ok ? null : result.error, result.ok ? `✓ ${result.version || t('extEditor.connected')}` : null);
+    // 測試連線失敗時,hint 是照實說的那一句(例如「請先執行 ollama serve」),
+    // error 是原始訊息;下一步和 app 其他地方同一張卡片
+    showExtResult(result.ok ? null : result.hint || result.error, result.ok ? `✓ ${result.version || t('extEditor.connected')}` : null, result.ok ? null : result.fix);
   } catch (e) { showExtResult(cleanIpcError(e), null); }
   finally { $<HTMLButtonElement>('#ext-key-test').disabled = false; }
 }
 
-function showExtResult(error: string | null | undefined | false, ok: string | null): void {
-  $<HTMLDivElement>('#ext-error').hidden = !error;
-  $<HTMLDivElement>('#ext-error').textContent = error ? `⚠ ${error}` : '';
+function showExtResult(error: string | null | undefined | false, ok: string | null, fix?: EnvFix | null): void {
+  const box = $<HTMLDivElement>('#ext-error');
+  box.hidden = !error;
+  box.innerHTML = error ? `<div>⚠ ${escapeHtml(error)}</div>${envFixHtml(fix)}` : '';
+  bindEnvFix(box);
   $<HTMLDivElement>('#ext-ok').hidden = !ok;
   $<HTMLDivElement>('#ext-ok').textContent = ok || '';
 }
@@ -1054,6 +1064,7 @@ function renderSidebar() {
   $<HTMLInputElement>('#language').value = config.settings.language || '繁體中文';
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
+  $<HTMLInputElement>('#verify-command').value = config.settings.verifyCommand || '';
   const workDir = config.settings.workDir || '';
   $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
   $<HTMLButtonElement>('#workdir-chip').title = t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
@@ -1069,6 +1080,7 @@ function saveSettings() {
   config.settings.language = $<HTMLInputElement>('#language').value.trim() || '繁體中文';
   config.settings.leadAgentId = $<HTMLSelectElement>('#lead-agent').value || null;
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
+  config.settings.verifyCommand = $<HTMLInputElement>('#verify-command').value.trim();
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   $<HTMLSelectElement>('#mode').value = config.settings.mode;
@@ -1104,6 +1116,10 @@ async function openModal(id: string | null): Promise<void> {
   $<HTMLButtonElement>('#modal-delete').style.visibility = id ? 'visible' : 'hidden';
   $<HTMLDivElement>('#modal').classList.remove('hidden');
   $<HTMLInputElement>('#f-name').focus();
+  // 使用者可能剛在終端裡登入或裝好 CLI:每次打開都重新檢查一次,卡片才不會停在舊狀態。
+  // 帶 probeCredentialed:正要為這位成員挑模型,這時才值得花一次往返真的驗證端點與 key
+  // (和打開設定畫面同一個理由)。
+  void checkClis({ probeCredentialed: true });
 }
 // ---------- 模型與強度 ----------
 const CUSTOM_MODEL = '__custom__';
@@ -1128,8 +1144,24 @@ function fillCliDependentFields(cli: string, model?: string, effort?: string): v
   $<HTMLInputElement>('#f-model').style.display = manual ? '' : 'none';
   $('#f-custom-wrap').style.display = isCustomCli ? '' : 'none';
   updateEditCapability(cli);
+  updateCliStatusNote(cli);
   refreshModelDependents(effort);
   updateCapabilityRow();
+}
+
+// 在「選模型」的地方就把這個 CLI / API 的狀態說清楚。
+// 以前這裡只有一排模型可以選:CLI 沒裝、沒登入、端點連不上、模型清單讀不到時,畫面照樣
+// 讓人挑好模型按儲存,要送出任務、等它失敗才知道。說法與修復方式和設定頁共用同一份。
+function updateCliStatusNote(cli: string): void {
+  const box = $<HTMLDivElement>('#f-cli-status');
+  const described = describeCliHealth(cliStatus[cli], cliTypes[cli]);
+  // 一切正常時不佔版面。模型清單讀不到另有說明(#f-model-desc 就在模型欄位底下),
+  // 這張卡片只講「這個 CLI / API 本身能不能用」,不重複同一件事。
+  if (described.tone === 'ok' || described.tone === '') { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="cli-status-line"><span class="status-dot ${described.tone}"></span><span title="${escapeHtml(described.detail)}">${escapeHtml(described.text)}</span></div>`
+    + envFixHtml(described.fix);
+  bindEnvFix(box);
 }
 
 // 轉接器不支援修改檔案時(例如 API),停用勾選框並說明原因;成員原本的設定保留不動。
@@ -1667,7 +1699,7 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   if (m.kind === 'agent') renderAgentMessage(el, m);
   else if (m.kind === 'user') renderUserMessage(el, m);
   else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary);
-  else el.innerHTML = systemHtml(m);
+  else { el.innerHTML = systemHtml(m); bindEnvFix(el); }
   if (isNew && placed!.isNewNode) insertTimelineMarkers(placed!.node, m);
   if (el.parentElement && el.parentElement.classList.contains('msg-group')) el.classList.remove('msg-continue');
   else updateContinuation(el);
@@ -1793,7 +1825,8 @@ function userHtml(m: ChatMessage): string {
 }
 function systemHtml(m: ChatMessage): string {
   if (m.tag === 'tool-audit' && Array.isArray(m.toolAudit) && m.toolAudit.length) return toolAuditHtml(m);
-  return `<div class="bubble"><div class="body">${md(m.text || '')}</div></div>`;
+  // 系統訊息也可能帶「照做就能修好」的下一步(例如驗證指令根本不存在 → 打開設定)
+  return `<div class="bubble"><div class="body">${md(m.text || '')}</div>${envFixHtml(m.fix)}</div>`;
 }
 
 // 檔案工具的稽核紀錄。這是「成員實際做了什麼」,和它自己在報告裡說的話是兩回事;
@@ -1873,9 +1906,10 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   const text = m.review ? Marker.stripMarker(Marker.stripMarker(m.text || '', 'AGREED'), 'NO_ISSUES') : Marker.stripMarker(m.text || '', 'AGREED');
   // 結論與流程(要不要進修復回合)是同一個判斷,由主程序寫進訊息,介面不自己猜
   const verdict = m.review && m.status !== 'running' ? m.review.verdict : undefined;
-  const verdictBadge = verdict
-    ? `<span class="badge verdict ${escapeHtml(verdict)}" title="${escapeHtml(t(`review.verdictTitle.${verdict}`))}">${escapeHtml(t(`review.verdict.${verdict}`))}</span>`
-    : '';
+  const verdictBadge = (m.review?.recheck ? `<span class="badge recheck" title="${escapeHtml(t('review.recheckTitle'))}">${escapeHtml(t('review.recheck'))}</span>` : '')
+    + (verdict
+      ? `<span class="badge verdict ${escapeHtml(verdict)}" title="${escapeHtml(t(`review.verdictTitle.${verdict}`))}">${escapeHtml(t(`review.verdict.${verdict}`))}</span>`
+      : '');
   const status = m.status === 'running' ? `<span class="spinner" title="${escapeHtml(t('msg.generating'))}"></span>` : '';
   const shell = ensureAgentShell(el);
   shell.avatar.style.background = m.color || '#6c8cff';
@@ -1897,6 +1931,16 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
+  // 失敗如果是環境問題,錯誤訊息底下直接給下一步:和設定頁、檔案改動同一張卡片。
+  // 使用者不必看懂一段英文 stderr,也不必自己去別的地方找該做什麼。
+  if (shell.fix) {
+    const html = m.error ? envFixHtml(m.fix || null) : '';
+    if (shell.fix.innerHTML !== html) {
+      shell.fix.innerHTML = html;
+      bindEnvFix(shell.fix);
+    }
+    shell.fix.hidden = !html;
+  }
   if (shell.retry) {
     const retry = shell.retry;
     retry.hidden = !m.retryable;
@@ -1994,6 +2038,10 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     body.className = 'body';
     const error = document.createElement('div');
     error.className = 'error-text';
+    // 環境問題(沒登入、沒裝、連不上…)的修復卡片,和設定頁、檔案改動用的是同一張
+    const fix = document.createElement('div');
+    fix.className = 'msg-fix';
+    fix.hidden = true;
     // 失敗的 @ 指定回覆可以一鍵重試;能不能重試由 orchestrator 決定(message.retryable)
     const retry = document.createElement('button');
     retry.type = 'button';
@@ -2008,7 +2056,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
     statusLine.textContent = t('msg.streaming');
-    bubble.append(head, reviewScope, thinking, activities, body, error, retry, unreviewed, usage, statusLine);
+    bubble.append(head, reviewScope, thinking, activities, body, error, fix, retry, unreviewed, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
@@ -2026,6 +2074,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     activities: el.querySelector<HTMLElement>('.activities')!,
     body: el.querySelector<CachedEl>('.body')!,
     error: el.querySelector<CachedEl>('.error-text')!,
+    fix: el.querySelector<HTMLElement>('.msg-fix'),
     unreviewed: el.querySelector<HTMLElement>('.unreviewed-note'),
     reviewScope: el.querySelector<HTMLElement>('.review-scope') || insertReviewScope(el),
     retry: el.querySelector<HTMLButtonElement>('.retry-btn'),

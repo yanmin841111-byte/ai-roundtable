@@ -10,6 +10,7 @@
   "timeoutMs": 1200000,
   "maxHistoryMessages": 16,
   "unreachableHint": "請先執行 ollama serve",
+  "fixCommand": "ollama serve",
   "body": {
     "reasoning_effort": "none"
   },

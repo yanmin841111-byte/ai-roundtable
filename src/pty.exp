@@ -1,0 +1,43 @@
+# 終端分頁用的 pty。
+#
+# 為什麼是 expect:要拿到一個真正的 pty(互動式 shell、顏色、Ctrl-C、vim 都要),
+# 在 Node 只有 node-pty 這類原生模組做得到,而這個 app 到目前為止沒有任何原生相依,
+# 加進來就得在開發、CI、打包三處各自 rebuild。macOS 本來就內建 expect,借它的 pty
+# 只多一個 /usr/bin/expect 子行程,打包與安裝完全不變。
+#
+# argv: <tty 檔> <rows> <cols> <shell>
+
+set ttyfile [lindex $argv 0]
+set rows [lindex $argv 1]
+set cols [lindex $argv 2]
+set shell [lindex $argv 3]
+
+set stty_init "rows $rows cols $cols"
+log_user 1
+remove_nulls 0
+set timeout -1
+
+spawn -noecho $shell -i
+set shellpid [exp_pid]
+
+# 把 slave 裝置路徑交回主程序:改視窗大小時它直接 stty -f <tty>,
+# 這裡就不必為了 resize 處理訊號。
+set fd [open $ttyfile w]
+puts $fd $spawn_out(slave,name)
+close $fd
+
+# 關分頁時主程序送 SIGTERM:先送走 shell 再退出,不留孤兒行程。
+trap {
+  catch { exec kill -TERM $shellpid }
+  exit 0
+} {SIGTERM SIGHUP SIGINT}
+
+interact
+
+set code 0
+catch {
+  set status [wait]
+  if {[llength $status] >= 4 && [lindex $status 2] == 0} { set code [lindex $status 3] }
+}
+catch { exec kill -TERM $shellpid }
+exit $code

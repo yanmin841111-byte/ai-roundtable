@@ -18,8 +18,9 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
   const usage = u.turnsWithUsage
     ? tx(locale, 'sys.taskSummary.usage', { input: u.inputTokens.toLocaleString('en-US'), output: u.outputTokens.toLocaleString('en-US') }) + (u.costUsd != null ? ` · $${u.costUsd.toFixed(3)}` : '')
     : '';
+  const verify = summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '';
   return [
-    tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : ''),
+    tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
     members.join('\n'),
     files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
   ].join('\n\n');
@@ -45,6 +46,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     members,
     files,
     moreFiles: num(raw.moreFiles),
+    ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
     usage: {
       inputTokens: num(raw.usage.inputTokens),
       outputTokens: num(raw.usage.outputTokens),

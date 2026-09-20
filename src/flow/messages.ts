@@ -56,6 +56,9 @@ export function restoreMessage(m: any, locale: TextLocale = 'zh-Hant'): LiveMess
   if (m.status === 'running') { msg.status = 'error'; msg.error = m.error || tx(locale, 'sys.unfinishedOnSave'); }
   // 載入的歷史對話不提供重試:附件與 CLI 的 session 都已經跟當時不同,重跑的不是同一件事
   msg.retryable = false;
+  // 修復建議是當下的環境狀態,不是紀錄的一部分:存檔之後可能早就修好了,
+  // 而紀錄檔可能被手動改過——不能讓它決定按鈕上填進終端的指令
+  delete (msg as { fix?: unknown }).fix;
   const review = restoreReviewInfo(m.review);
   if (review) msg.review = review; else delete msg.review;
   if (m.rawPlan === true) msg.rawPlan = true; else delete msg.rawPlan;
@@ -85,5 +88,6 @@ function restoreReviewInfo(raw: any): ReviewInfo | null {
     omitted,
     unreadable,
     ...(REVIEW_VERDICTS.has(raw.verdict) ? { verdict: raw.verdict } : {}),
+    ...(raw.recheck === true ? { recheck: true } : {}),
   };
 }
