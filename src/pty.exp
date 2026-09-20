@@ -5,12 +5,13 @@
 # 加進來就得在開發、CI、打包三處各自 rebuild。macOS 本來就內建 expect,借它的 pty
 # 只多一個 /usr/bin/expect 子行程,打包與安裝完全不變。
 #
-# argv: <tty 檔> <rows> <cols> <shell>
+# argv: <tty 檔> <rows> <cols> <shell> <呼叫者的 pid>
 
 set ttyfile [lindex $argv 0]
 set rows [lindex $argv 1]
 set cols [lindex $argv 2]
 set shell [lindex $argv 3]
+set parentpid [lindex $argv 4]
 
 set stty_init "rows $rows cols $cols"
 log_user 1
@@ -27,17 +28,47 @@ puts $fd $spawn_out(slave,name)
 close $fd
 
 # 關分頁時主程序送 SIGTERM:先送走 shell 再退出,不留孤兒行程。
+# 用 HUP 不用 TERM——互動式 shell 會忽略 SIGTERM(TERM 殺不動 zsh -i,實測過)。
 trap {
-  catch { exec kill -TERM $shellpid }
+  catch { exec kill -HUP $shellpid }
   exit 0
 } {SIGTERM SIGHUP SIGINT}
 
-interact
+# interact 結束的原因有兩種,收尾完全不一樣,所以直接問 expect 是哪一種:
+#   stdin EOF  → app 那一端不見了(關掉、當掉、kill -9),shell 還活著,要把它收掉
+#   spawn EOF  → shell 自己結束了,要收它的結束代碼回報給介面
+# 不能用「shell 還在不在」來猜:剛結束的行程是 zombie,kill -0 照樣成功,兩種情況分不開。
+# shell 自己結束時,interact 會丟 "spawn id ... not open"(不是走 eof 動作),所以包在 catch 裡:
+# 有 stdin 的 eof 動作跑過就是 app 那端不見了,否則一律當成 shell 自己結束。
+set why shell
+catch {
+  interact {
+    eof { set why parent }
+    # app 被 kill -9 而 stdin 的 EOF 沒送到時的保險:閒置十秒就確認一次呼叫者還在不在
+    timeout 10 {
+      if {[catch {exec kill -0 $parentpid}]} {
+        catch { exec kill -HUP $shellpid }
+        exit 0
+      }
+    }
+  }
+}
+
+if {$why eq "parent"} {
+  # 千萬不要在這裡 wait:shell 還在跑,expect 會永遠卡住,shell 也就永遠沒人殺,
+  # 最後留下誰都看不到的孤兒行程(實測在開發機上累積過 23 個)。
+  # 送 HUP 不是 TERM:互動式 shell 會忽略 SIGTERM。expect 一退出,pty master 關閉,
+  # 核心還會再對前景行程群組補一個 SIGHUP,兩道保險。
+  catch { exec kill -HUP $shellpid }
+  exit 0
+}
 
 set code 0
 catch {
   set status [wait]
   if {[llength $status] >= 4 && [lindex $status 2] == 0} { set code [lindex $status 3] }
 }
-catch { exec kill -TERM $shellpid }
 exit $code
+}
+catch { exec kill -HUP $shellpid }
+exit 0

@@ -107,7 +107,8 @@ export class TerminalManager extends EventEmitter {
     try {
       const dir = this.workspace();
       ttyFile = path.join(dir, `${id}.tty`);
-      proc = spawn(EXPECT_BIN, ['-f', this.scriptFile, '--', ttyFile, String(rows), String(cols), shell], {
+      // 最後一個參數是自己的 pid:app 被強制結束時 pty.exp 會發現呼叫者不見了,自己收掉 shell
+      proc = spawn(EXPECT_BIN, ['-f', this.scriptFile, '--', ttyFile, String(rows), String(cols), shell, String(process.pid)], {
         cwd,
         env: childEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
