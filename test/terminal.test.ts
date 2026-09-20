@@ -94,6 +94,23 @@ test('改大小:shell 看到新的 cols/lines,前景程式收得到 SIGWINCH', a
   await s.exited;
 });
 
+// 面板一打開就會量一次、Resize 觀察器再量一次,第二次往往在 tty 還沒回報之前就發生。
+// 那一次如果沒補設定進去,shell 會一直用建立當下的大小,和畫面上畫出來的行數對不上。
+test('分頁剛建立就改大小:tty 還沒回報也要補設定進去', async () => {
+  const manager = newManager();
+  const s = session(manager, { cols: 100, rows: 30 });
+  manager.resize(s.id, 76, 21); // 立刻改:這時 tty 檔多半還沒寫出來
+  // 補設定是非同步的(要等 expect 把 tty 路徑寫出來),所以問到答案為止
+  for (let i = 0; i < 20 && !s.seen().includes('RT_EARLY_76x21'); i++) {
+    manager.write(s.id, 'echo RT_EARLY_$(tput cols)x$(tput lines)\n');
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  assert.ok(s.seen().includes('RT_EARLY_76x21'), `補設定沒有生效;目前輸出:\n${s.seen().slice(-400)}`);
+  assert.deepStrictEqual(manager.list().find((x: any) => x.id === s.id).cols, 76);
+  manager.closeAll();
+  await s.exited;
+});
+
 test('關分頁:shell 行程一起結束,不留孤兒', async () => {
   const manager = newManager();
   const s = session(manager);

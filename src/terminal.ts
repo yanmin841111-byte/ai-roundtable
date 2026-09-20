@@ -52,6 +52,13 @@ interface Session extends SessionInfo {
   tty: string | null;
   /** 在拿到 tty 之前要求過的大小,拿到後補套用 */
   wantedSize: { cols: number; rows: number } | null;
+  /**
+   * 真的用 stty 設進 pty 的大小。和 cols/rows(最後一次「要求」的大小)分開記,
+   * 否則會出現這種狀況:tty 還沒回來時先記下想要的大小,等 tty 回來要補設定時,
+   * 因為要求值早就寫進 cols/rows 而被當成「沒變化」跳過——shell 於是一直用建立當下的大小,
+   * 和畫面上畫出來的行數差一兩行(實測 app 記 38 行、shell 看到 39 行)。
+   */
+  applied: { cols: number; rows: number };
   closing: boolean;
 }
 
@@ -117,7 +124,8 @@ export class TerminalManager extends EventEmitter {
       return { ok: false, code: 'spawnFailed', detail: error instanceof Error ? error.message : String(error) };
     }
 
-    const session: Session = { id, cwd, shell, cols, rows, proc, tty: null, wantedSize: null, closing: false };
+    // 建立時的大小由 pty.exp 的 stty_init 直接套用,所以 applied 一開始就是它
+    const session: Session = { id, cwd, shell, cols, rows, proc, tty: null, wantedSize: null, applied: { cols, rows }, closing: false };
     this.sessions.set(id, session);
 
     proc.stdout?.on('data', (chunk: Buffer) => this.emit('data', { id, data: chunk }));
@@ -166,10 +174,11 @@ export class TerminalManager extends EventEmitter {
     if (!session || session.closing) return;
     const c = clamp(cols, COLS);
     const r = clamp(rows, ROWS);
-    if (session.cols === c && session.rows === r && session.tty) return;
     session.cols = c;
     session.rows = r;
     if (!session.tty) { session.wantedSize = { cols: c, rows: r }; return; }
+    if (session.applied.cols === c && session.applied.rows === r) return;
+    session.applied = { cols: c, rows: r };
     execFile(STTY_BIN, ['-f', session.tty, 'rows', String(r), 'cols', String(c)], () => {});
   }
 

@@ -170,10 +170,12 @@ textarea { resize: vertical; }
 #topbar > button:not(.chip) { flex-shrink: 0; }
 /* 真的擠不下時(字體較寬的機器、英文介面、小視窗)整排縮一號,工作目錄只留圖示。
    由 renderer/terminal.ts 量過之後才加上 compact——寬度夠的時候完全不會動到外觀。 */
-#topbar.compact { gap: 6px; padding-left: 12px; padding-right: 12px; }
-#topbar.compact > button { padding: 3px 7px; font-size: 11.5px; }
+#topbar.compact { gap: 5px; padding-left: 10px; padding-right: 10px; }
+#topbar.compact > button { padding: 2px 6px; font-size: 11px; }
 #topbar.compact .phase { padding: 2px 8px; font-size: 11px; }
-#topbar.compact #workdir-chip span:last-child { display: none; }
+/* 窄到這個地步時,工作目錄與用量整個讓位:動作按鈕不能被擠掉,而工作目錄在終端面板的
+   標題下方與設定裡都看得到,用量本來就是附帶資訊。 */
+#topbar.compact #workdir-chip { display: none; }
 #topbar.compact #usage-total { display: none; }
 #topbar { position: relative; display: flex; align-items: center; gap: 8px; min-height: 52px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 8px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 72%, transparent); backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); }
 #topbar::-webkit-scrollbar { display: none; }
