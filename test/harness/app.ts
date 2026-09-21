@@ -41,6 +41,8 @@ export interface HarnessOptions {
   settings?: Record<string, unknown>;
   /** 額外環境變數(例如故意塞一把無效的 API key) */
   env?: Record<string, string>;
+  /** app 啟動前的最後一手(例如把 config.json 改成唯讀,測寫入失敗時介面說什麼) */
+  beforeLaunch?: (paths: { tmp: string; userData: string; workDir: string }) => void;
   /**
    * 在 renderer 裡執行的劇本。會被序列化成字串送進去,所以**不能閉包**外部變數——
    * 要傳值請用 `constants`,劇本裡以 `H` 取用。
@@ -194,6 +196,8 @@ export async function runApp(opts: HarnessOptions): Promise<HarnessResult> {
       ...(opts.settings || {}),
     },
   }, null, 2));
+
+  if (opts.beforeLaunch) opts.beforeLaunch({ tmp, userData, workDir });
 
   const scriptPath = path.join(tmp, 'scenario.js');
   fs.writeFileSync(scriptPath, buildScenarioSource(opts));

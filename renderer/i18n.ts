@@ -256,6 +256,8 @@ const ZH: Record<string, Entry> = {
   'settings.tab.appearance': '外觀',
   'settings.tab.data': '資料與紀錄',
   'settings.saved': '✓ 已儲存',
+  'settings.saveFailed': '⚠ 沒有存到:{error}',
+  'folder.openFailed': '打不開這個資料夾:{reason}',
   'settings.close': '關閉(Esc)',
   'settings.workDir': '工作目錄',
   'settings.workDirDesc': '成員讀寫檔案與執行指令的位置',
@@ -403,6 +405,7 @@ const ZH: Record<string, Entry> = {
   'extEditor.keyCleared': '✓ 已清除「設定 → CLI 與擴充」裡填入的 API key',
   'extEditor.connected': '連線成功',
   'extEditor.saved': '✓ 已儲存並載入。成員編輯視窗的 CLI 選單已更新。',
+  'extEditor.deleteFailed': '刪不掉這個擴充:{reason}',
   'extEditor.confirmDelete': '確定刪除 {file}?使用這個 CLI 的成員會無法發言。',
 
   'agent.editTitle': '編輯成員',
@@ -770,6 +773,8 @@ const EN: Record<string, Entry> = {
   'settings.tab.appearance': 'Appearance',
   'settings.tab.data': 'Data & logs',
   'settings.saved': '✓ Saved',
+  'settings.saveFailed': '⚠ Not saved: {error}',
+  'folder.openFailed': 'Could not open that folder: {reason}',
   'settings.close': 'Close (Esc)',
   'settings.workDir': 'Working directory',
   'settings.workDirDesc': 'Where members read and write files and run commands',
@@ -916,6 +921,7 @@ const EN: Record<string, Entry> = {
   'extEditor.keyCleared': '✓ Cleared the API key entered under Settings → CLIs & extensions',
   'extEditor.connected': 'Connected',
   'extEditor.saved': '✓ Saved and loaded. The CLI menu in the member editor is up to date.',
+  'extEditor.deleteFailed': 'Could not delete this extension: {reason}',
   'extEditor.confirmDelete': 'Delete {file}? Members using this CLI will no longer be able to speak.',
 
   'agent.editTitle': 'Edit member',

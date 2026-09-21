@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const { FileToolSession, FILE_TOOL_MAX_CALLS, toTranscriptEntry } = require('../src/adapters/file-tools');
 const { createOpenAIAdapter, validateOpenAISpec } = require('../src/adapters/openai-adapter');
 
@@ -385,6 +386,56 @@ test('單回合工具呼叫次數有硬上限且錯誤會回傳', () => {
     assert.strictEqual(over.ok, false);
     assert.match(over.error, /不可超過/);
   } finally { f.cleanup(); }
+});
+
+// 串流是每個 API 成員的預設(所有內建範本都沒有關掉 stream),而工具呼叫在串流裡是
+// 一片一片來的:id 與函式名只出現在第一片,參數分好幾片接起來,後面的片段沒有 id。
+// 這條路以前完全沒有被測到——所有工具測試都關掉串流,用假的 fetch 回一顆完整的 JSON。
+// 這裡用真的 HTTP server 吐真的 SSE,而且看的是「磁碟上的檔案有沒有變」,不是參數長怎樣。
+test('串流回來的工具呼叫(分片的參數)接得回來,而且真的改到磁碟上的檔案', async () => {
+  const f = fixture();
+  const requests: any[] = [];
+  const server = http.createServer((req: any, res: any) => {
+    let body = '';
+    req.on('data', (d: any) => (body += d));
+    req.on('end', () => {
+      requests.push(JSON.parse(body));
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      const send = (o: any) => res.write('data: ' + JSON.stringify(o) + '\n\n');
+      if (requests.length === 1) {
+        const args = JSON.stringify({ path: 'streamed.txt', content: '串流寫進去的新內容\n', reason: '建立新檔', createOnly: true });
+        // 第一片:id + 函式名,參數是空的
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-stream-1', type: 'function', function: { name: 'write_', arguments: '' } } ] } }] });
+        // 函式名也可能被切開(實測 Ollama 會)
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'file' } }] } }] });
+        // 參數切三片,而且沒有 id
+        for (const piece of [args.slice(0, 12), args.slice(12, 30), args.slice(30)]) {
+          send({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: piece } }] } }] });
+        }
+        send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+      } else {
+        send({ choices: [{ delta: { content: '寫好了。' } }] });
+      }
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise((r: any) => server.listen(0, '127.0.0.1', r));
+  try {
+    const spec = {
+      id: 'local', type: 'openai', baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+      models: ['m'], supportsEdit: true, fileTools: { enabled: true },
+      // stream 不設:跟出廠的範本一樣走預設的串流
+    };
+    const adapter = createOpenAIAdapter(spec);
+    const result = await adapter.run({ name: 'Qwen', model: 'm', canEdit: true }, ctx(f.root, { fileToolsEnabled: true }));
+    assert.strictEqual(result.error, null, String(result.error));
+    assert.strictEqual(fs.readFileSync(path.join(f.root, 'streamed.txt'), 'utf8'), '串流寫進去的新內容\n', '模型的工具呼叫要真的落到磁碟上');
+    assert.strictEqual(requests.length, 2, '工具結果要送回去讓模型收尾');
+    assert.strictEqual(requests[1].messages.at(-1).role, 'tool');
+    assert.strictEqual(result.toolEvents.length, 1);
+    assert.strictEqual(result.toolEvents[0].name, 'write_file', '分片的函式名要接回完整的名字');
+    assert.strictEqual(result.toolEvents[0].ok, true);
+  } finally { server.close(); f.cleanup(); }
 });
 
 test('adapter 只有三重閘門全開才送工具，並回傳可寫入 transcript 的 toolEvents', async () => {

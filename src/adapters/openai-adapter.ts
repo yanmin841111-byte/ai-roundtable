@@ -281,6 +281,19 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     }
   }
 
+  // 回應裡真的有工具呼叫嗎。非串流的探測是一顆 JSON,但有些端點仍以 SSE 回覆,
+  // 所以整段文字掃過去就好——這裡只需要「有沒有」,不需要把它組回來。
+  function calledTool(text: string): boolean {
+    if (!/tool_calls|function_call/.test(text)) return false;
+    try {
+      const data = JSON.parse(text);
+      const message = data?.choices?.[0]?.message || data?.choices?.[0]?.delta || {};
+      return Array.isArray(message.tool_calls) ? message.tool_calls.length > 0 : !!message.function_call;
+    } catch {
+      return /"tool_calls"\s*:\s*\[\s*\{/.test(text); // 串流或非標準包裝
+    }
+  }
+
   // 實際測試:先送一個最簡單的請求確認端點與模型本身能用,再分別帶工具、帶圖片各送一次。
   // 沒有基準請求的話,任何 400(例如參數不合)都會被誤判成「不支援工具」。
   async function liveCapability(model: string): Promise<ModelCapability> {
@@ -304,7 +317,11 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     if (!base.ok) return { model, source: 'probe', at, error: base.status ? `HTTP ${base.status} ${truncate(base.text, 160)}` : base.text };
     // 2xx 就是收下了;被 4xx 拒絕才算不支援。其他狀況(5xx、逾時)不下結論
     const decide = (r: { ok: boolean; status: number }, rejects: number[]) => (r.ok ? true : rejects.includes(r.status) ? false : undefined);
-    const tools = decide(await post({ messages: [{ role: 'user', content: 'Call the ping tool.' }], tools: [PROBE_TOOL], tool_choice: 'auto' }), [400, 404, 422]);
+    // 工具那一題要看答案,不能只看狀態碼:很多相容端點(代理、轉送層)會把 tools 參數照單全收
+    // 回 200,然後從來不產生任何 tool_call。只看 200 的話會斬釘截鐵說「可以呼叫工具」,
+    // 使用者就把會改檔的工作派給一個其實不會呼叫工具的成員。收下了但沒呼叫 → 說「不確定」。
+    const toolProbe = await post({ messages: [{ role: 'user', content: 'Call the ping tool.' }], tools: [PROBE_TOOL], tool_choice: 'auto' });
+    const tools = toolProbe.ok ? (calledTool(toolProbe.text) || undefined) : decide(toolProbe, [400, 404, 422]);
     const images = decide(await post({ messages: [{ role: 'user', content: [{ type: 'text', text: 'What color is this image? Answer in one word.' }, { type: 'image_url', image_url: { url: PROBE_PIXEL } }] }] }), [400, 415, 422]);
     return { model, source: 'probe', at, ...(tools !== undefined ? { tools } : {}), ...(images !== undefined ? { images } : {}) };
   }

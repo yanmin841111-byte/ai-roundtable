@@ -90,6 +90,29 @@ test('實際測試:先確認基準請求,再分別帶工具、帶圖片', async 
   assert.strictEqual(bad.chats().length, 1, '基準失敗就停,不再多花錢');
 });
 
+test('端點收下 tools 卻從來不呼叫:說「不確定」,不說「可以呼叫工具」', async () => {
+  process.env.RT_TEST_KEY = 'k';
+  // 代理層、轉送層與部分 LM Studio 設定會把 tools 參數照單全收回 200,然後只回一段文字。
+  // 只看狀態碼的話會斬釘截鐵說「可以」,使用者就把改檔的工作派給一個不會呼叫工具的成員。
+  const silent = endpoint({
+    '/v1/models': () => ({ json: { data: [{ id: 'm' }] } }),
+    '/v1/chat/completions': () => ({ json: { choices: [{ message: { role: 'assistant', content: 'OK' } }] } }),
+  });
+  const a = createOpenAIAdapter({ id: 'x', type: 'openai', baseUrl: 'https://api.test/v1', models: 'auto', apiKeyEnv: 'RT_TEST_KEY' }, { fetchImpl: silent.fetchImpl });
+  const quiet = await a.modelCapability('m', { live: true });
+  assert.strictEqual(quiet.tools, undefined, '收下了但沒呼叫,就是不確定');
+
+  // 真的回了一顆 tool_call:這時才算數
+  const real = endpoint({
+    '/v1/models': () => ({ json: { data: [{ id: 'm' }] } }),
+    '/v1/chat/completions': (b: any) => (b.tools
+      ? { json: { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ping', arguments: '{}' } }] } }] } }
+      : { json: { choices: [{ message: { role: 'assistant', content: 'OK' } }] } }),
+  });
+  const b = createOpenAIAdapter({ id: 'y', type: 'openai', baseUrl: 'https://api.test/v1', models: 'auto', apiKeyEnv: 'RT_TEST_KEY' }, { fetchImpl: real.fetchImpl });
+  assert.strictEqual((await b.modelCapability('m', { live: true })).tools, true);
+});
+
 test('能力快取:實際測試與模型資料存檔;Ollama 的回報不存;換端點就是另一筆', () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rt-caps-')), 'caps.json');
   const s = new CapabilityStore(file);

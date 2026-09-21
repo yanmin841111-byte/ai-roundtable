@@ -364,6 +364,8 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .settings-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 15px; letter-spacing: -.005em; }
 .saved-hint { font-size: 12px; font-weight: 400; color: var(--ok); }
+/* 存不進去的時候要看得出來不一樣:同一個位置,但不是綠色的「好了」 */
+.saved-hint.failed { color: var(--danger); font-weight: 500; }
 .settings-body { flex: 1; overflow-y: auto; padding: 18px 22px 24px; }
 .setting { display: flex; flex-direction: column; gap: 7px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .setting:last-child { border-bottom: none; }

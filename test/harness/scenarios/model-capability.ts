@@ -4,7 +4,7 @@
 //
 // 起一個假的本機端點(像 Ollama):/api/show 說 gemma3 能看圖、不能呼叫工具;qwen3 能呼叫工具、不能看圖。
 // 卡片只標限制;編輯視窗列出完整能力與來源;按「測試」送出實際請求。
-// 這個端點實際上收下了工具,所以測試結果和 Ollama 的回報不同:測完之後卡片要跟著更新。
+// 這個端點實際上呼叫得動工具,所以測試結果和 Ollama 的回報不同:測完之後卡片要跟著更新。
 // Gemma 的設定只寫別名 gemma3(清單裡是 gemma3:latest)——卡片與編輯視窗用的名字不同,更新時容易對不上。
 
 import fs from 'fs';
@@ -26,6 +26,9 @@ function fakeEndpoint(): Promise<{ server: http.Server; port: number; chats: () 
       if (req.url === '/api/show') return send(200, { capabilities: body.model === 'gemma3:latest' ? ['completion', 'vision'] : ['completion', 'tools'] });
       if (req.url === '/v1/chat/completions') {
         chats++;
+        // 帶了工具就真的回一顆工具呼叫:能力測試看的是「有沒有真的呼叫」,不是「有沒有收下」。
+        // 假端點只回 200 純文字的話,測到的會是「不確定」,那才是誠實的答案。
+        if (body && body.tools) return send(200, { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ping', arguments: '{}' } }] } }] });
         return send(200, { choices: [{ message: { role: 'assistant', content: 'OK' } }] });
       }
       send(404, {});

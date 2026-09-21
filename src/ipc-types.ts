@@ -4,60 +4,6 @@ import type { Model } from './model-rules';
 
 export type { Model };
 
-export const IPC_CHANNELS = {
-  configGet: 'config:get',
-  configSave: 'config:save',
-  cliTypes: 'cli:types',
-  cliCheck: 'cli:check',
-  dialogPickDir: 'dialog:pickDir',
-  dialogPickExecutable: 'dialog:pickExecutable',
-  shellOpenPath: 'shell:openPath',
-  chatSnapshot: 'chat:snapshot',
-  chatSend: 'chat:send',
-  chatExport: 'chat:export',
-  chatOpenSessions: 'chat:openSessions',
-  chatStop: 'chat:stop',
-  chatReset: 'chat:reset',
-  chatResume: 'chat:resume',
-  chatAnswer: 'chat:answer',
-  chatRetry: 'chat:retry',
-  diffChanges: 'diff:changes',
-  taskRevert: 'task:revert',
-  ollamaQuickSetup: 'ollama:quickSetup',
-  chatMessage: 'chat:message',
-  chatState: 'chat:state',
-  sessionSaved: 'session:saved',
-  attachmentsList: 'attachments:list',
-  attachmentsPick: 'attachments:pick',
-  attachmentsAdd: 'attachments:add',
-  attachmentsRemove: 'attachments:remove',
-  attachmentsThumb: 'attachments:thumb',
-  sessionList: 'session:list',
-  sessionRead: 'session:read',
-  sessionDelete: 'session:delete',
-  secretsSet: 'secrets:set',
-  secretsStatus: 'secrets:status',
-  secretsClear: 'secrets:clear',
-  secretsTest: 'secrets:test',
-  extList: 'ext:list',
-  extReload: 'ext:reload',
-  extInstall: 'ext:install',
-  extRead: 'ext:read',
-  extWrite: 'ext:write',
-  extDelete: 'ext:delete',
-  extOpenDir: 'ext:openDir',
-  extOpenDocs: 'ext:openDocs',
-  terminalCreate: 'terminal:create',
-  terminalWrite: 'terminal:write',
-  terminalResize: 'terminal:resize',
-  terminalClose: 'terminal:close',
-  terminalList: 'terminal:list',
-  terminalData: 'terminal:data',
-  terminalExit: 'terminal:exit',
-} as const;
-
-export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
-
 export type IpcError = {
   code: string;
   params?: Record<string, string | number>;

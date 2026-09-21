@@ -87,7 +87,7 @@ async function init() {
       config.lineups = next.lineups;
       $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
       $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
-      window.api.saveConfig(config);
+      void saveConfig();
       renderSidebar();
     },
   });
@@ -105,7 +105,7 @@ async function init() {
   setupTerminal({
     workDir: () => config.settings.workDir,
     width: () => Number(config.settings.terminalWidth) || 0,
-    saveWidth: (value) => { config.settings.terminalWidth = value; window.api.saveConfig(config); },
+    saveWidth: (value) => { config.settings.terminalWidth = value; void saveConfig(); },
   });
 
   window.api.onMessage((m) => renderMessage(m, { animate: true }));
@@ -134,7 +134,7 @@ async function init() {
   $<HTMLButtonElement>('#stop-btn').onclick = () => window.api.stop();
   $<HTMLButtonElement>('#reset-btn').onclick = () => { if (!running || confirm(t('confirm.reset'))) window.api.reset(); };
   $<HTMLButtonElement>('#export-btn').onclick = exportConversation;
-  $<HTMLButtonElement>('#sessions-btn').onclick = () => window.api.openSessions();
+  $<HTMLButtonElement>('#sessions-btn').onclick = () => void openFolder(() => window.api.openSessions());
   $<HTMLButtonElement>('#settings-btn').onclick = () => openSettings();
   $<HTMLButtonElement>('#cli-summary').onclick = () => openSettings('clis');
   $<HTMLButtonElement>('#settings-close').onclick = closeSettings;
@@ -166,7 +166,7 @@ async function init() {
   $<HTMLButtonElement>('#f-cap-test').onclick = () => { void testCapability(); };
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
-  $<HTMLButtonElement>('#open-dir').onclick = () => window.api.openPath($<HTMLInputElement>('#work-dir').value);
+  $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
   for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
@@ -221,10 +221,10 @@ async function init() {
   });
   $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
   $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
-  $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; window.api.saveConfig(config); renderLineupButton(); };
+  $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; void saveConfig(); renderLineupButton(); };
   $<HTMLSelectElement>('#work-style').onchange = () => {
     config.settings.workStyle = $<HTMLSelectElement>('#work-style').value === 'general' ? 'general' : 'code';
-    window.api.saveConfig(config);
+    void saveConfig();
     updateComposerHint();
   };
 }
@@ -241,6 +241,17 @@ function openSettings(tab = 'general'): void {
   void checkClis({ probeCredentialed: true });
 }
 
+// shell.openPath 打不開時不會丟例外,而是回一段訊息(路徑不存在、沒有權限)。
+// 以前那段訊息被丟掉:按下去什麼都沒發生,也沒有人說為什麼。
+async function openFolder(open: () => Promise<string | void>): Promise<void> {
+  try {
+    const message = await open();
+    if (message) alert(t('folder.openFailed', { reason: String(message) }));
+  } catch (error) {
+    alert(t('folder.openFailed', { reason: cleanIpcError(error) }));
+  }
+}
+
 function closeSettings() { $<HTMLDivElement>('#settings').classList.add('hidden'); }
 
 function showSettingsTab(tab: string): void {
@@ -250,9 +261,35 @@ function showSettingsTab(tab: string): void {
 }
 
 let savedHintTimer: ReturnType<typeof setTimeout> | undefined;
+// 設定寫入失敗(磁碟滿了、沒有權限)時,介面以前照樣顯示「已儲存」,下次開 app 設定就不見了。
+// 一律走這裡:等寫入真的完成才說成功,失敗就把原因顯示出來。
+async function saveConfig({ saved = false }: { saved?: boolean } = {}): Promise<boolean> {
+  try {
+    await window.api.saveConfig(config);
+    if (saved) flashSaved();
+    return true;
+  } catch (error) {
+    showSaveFailed(cleanIpcError(error));
+    return false;
+  }
+}
+
+function showSaveFailed(detail: string): void {
+  const el = $('#settings-saved');
+  el.hidden = false;
+  el.classList.add('failed');
+  el.textContent = t('settings.saveFailed', { error: detail });
+  clearTimeout(savedHintTimer);
+  // 失敗訊息留久一點:使用者要看得完,也要知道剛才那一下沒有存到
+  savedHintTimer = setTimeout(() => { el.hidden = true; }, 8000);
+  console.error('儲存設定失敗', detail);
+}
+
 function flashSaved() {
   const el = $('#settings-saved');
   el.hidden = false;
+  el.classList.remove('failed');
+  el.textContent = t('settings.saved');
   clearTimeout(savedHintTimer);
   savedHintTimer = setTimeout(() => { el.hidden = true; }, 1600);
 }
@@ -301,8 +338,7 @@ function saveAppearance() {
   if (size) config.settings.fontSize = Number(size.value);
   if (locale) config.settings.uiLocale = locale.value as AppConfig['settings']['uiLocale'];
   applyAppearance();
-  window.api.saveConfig(config);
-  flashSaved();
+  void saveConfig({ saved: true });
   if (locale) relocalize();
 }
 
@@ -1024,7 +1060,13 @@ async function saveExtension({ quiet = false }: { quiet?: boolean } = {}): Promi
 
 async function deleteExtension() {
   if (!editingExtFile || !confirm(t('extEditor.confirmDelete', { file: editingExtFile }))) return;
-  await window.api.ext.remove(editingExtFile);
+  try {
+    await window.api.ext.remove(editingExtFile);
+  } catch (e) {
+    // 刪不掉就把編輯器留著:關掉視窗會讓人以為刪成功了
+    alert(t('extEditor.deleteFailed', { reason: cleanIpcError(e) }));
+    return;
+  }
   $<HTMLDivElement>('#ext-editor').classList.add('hidden');
   editingExtFile = null;
   await refreshCatalog();
@@ -1091,9 +1133,9 @@ function saveSettings() {
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   $<HTMLSelectElement>('#mode').value = config.settings.mode;
-  window.api.saveConfig(config);
+  // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
+  void saveConfig({ saved: true });
   renderSidebar();
-  flashSaved();
 }
 
 // ---------- 成員編輯 ----------
@@ -1360,7 +1402,7 @@ function saveModal() {
   const data = { name, cli: $<HTMLSelectElement>('#f-cli').value, model: ModelRules.resolveModelId(modelsOf($<HTMLSelectElement>('#f-cli').value), currentModel()), effort: $<HTMLSelectElement>('#f-effort').value, persona: $<HTMLTextAreaElement>('#f-persona').value.trim(), color: $<HTMLInputElement>('#f-color').value, canEdit: $<HTMLInputElement>('#f-canEdit').checked, enabled: $<HTMLInputElement>('#f-enabled').checked, customCommand: $<HTMLInputElement>('#f-custom').value.trim() };
   if (editingId) Object.assign(config.agents.find((x) => x.id === editingId) as AgentConfig, data);
   else config.agents.push({ id: crypto.randomUUID(), ...data });
-  window.api.saveConfig(config);
+  void saveConfig();
   renderSidebar();
   closeModal();
 }
@@ -1368,7 +1410,7 @@ function deleteAgent() {
   if (!editingId || !confirm(t('agent.confirmDelete'))) return;
   config.agents = config.agents.filter((x) => x.id !== editingId);
   if (config.settings.leadAgentId === editingId) config.settings.leadAgentId = null;
-  window.api.saveConfig(config);
+  void saveConfig();
   renderSidebar();
   closeModal();
 }

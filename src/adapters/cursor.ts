@@ -108,13 +108,8 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
   }
 
   async function run(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
-    const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--workspace', ctx.cwd];
-    if (agent.model) args.push('--model', resolveModelId(listModels().models, agent.model));
+    const args = cursorArgs(agent, ctx, agent.model ? resolveModelId(listModels().models, agent.model) : '');
     if (agent.effort) ctx.onActivity({ id: 'run-options', kind: 'note', title: tx(ctx.locale || 'zh-Hant', 'cursor.effortIgnored', { effort: agent.effort }), status: 'done' });
-    if (ctx.sessionId) args.push('--resume', ctx.sessionId);
-    // 不能改檔案時用 ask 模式(唯讀);可以改檔案時自動核准指令
-    if (agent.canEdit) args.push('--force');
-    else args.push('--mode', 'ask');
 
     let prompt = ctx.prompt;
     if (ctx.systemPrompt && !ctx.sessionId) prompt = `${ctx.systemPrompt}\n\n---\n\n${prompt}`;
@@ -216,6 +211,17 @@ function createCursorAdapter({ bin = 'cursor-agent' }: { bin?: string } = {}): A
     usageShape: 'cursor',
     run,
   };
+}
+
+// cursor-agent 的參數。抽出來是為了能對照「真的 CLI 支不支援」,見 test/cli-flags.test.ts。
+export function cursorArgs(agent: Pick<AgentConfig, 'canEdit'>, ctx: { cwd?: string; sessionId?: string | null }, modelId = ''): string[] {
+  const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--workspace', ctx.cwd || '.'];
+  if (modelId) args.push('--model', modelId);
+  if (ctx.sessionId) args.push('--resume', ctx.sessionId);
+  // 不能改檔案時用 ask 模式(唯讀);可以改檔案時自動核准指令
+  if (agent.canEdit) args.push('--force');
+  else args.push('--mode', 'ask');
+  return args;
 }
 
 export { createCursorAdapter, parseCursorModels, describeCursorTool };

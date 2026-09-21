@@ -67,7 +67,7 @@ export async function verifyChanges(
     checked++;
     const error = path.extname(file).toLowerCase() === '.json' ? checkJson(full) : await checkJs(full, locale);
     // 訊息裡的絕對路徑換成相對路徑:這段會進對話紀錄與匯出
-    if (error) syntax.push({ file, error: truncate(error.split(full).join(file), 500) });
+    if (error) syntax.push({ file, error: truncate(relativize(error, full, file), 500) });
   }
 
   // 一行一道,依序跑:先 lint、再 type check、再測試。第一道沒過就停——
@@ -105,21 +105,63 @@ export async function verifyChanges(
   };
 }
 
+// 錯誤訊息裡的絕對路徑換成相對路徑。要連實際路徑一起換:macOS 的 /var 是 /private/var 的
+// 連結,子行程印出來的是 realpath,只比對原本那個路徑會留下半截「/private」黏在檔名前面。
+function relativize(text: string, full: string, file: string): string {
+  // 長的先換:/var/... 是 /private/var/... 的一部分,先換短的會把長的切斷,
+  // 剩下半截「/private」黏在檔名前面(實測過的樣子:/privatebroken.js:2)
+  const paths = [...new Set([full, realpathOrNull(full)])].filter(Boolean).sort((a, b) => b!.length - a!.length);
+  let out = text;
+  for (const p of paths) out = out.split(p as string).join(file);
+  return out;
+}
+
+function realpathOrNull(full: string): string | null {
+  try { return fs.realpathSync(full); } catch { return null; }
+}
+
 function checkJson(full: string): string | null {
   try { JSON.parse(fs.readFileSync(full, 'utf8')); return null; } catch (e) { return String((e as Error).message || e); }
 }
 
 // node --check 只解析、不執行:模組裡的程式碼不會被跑到,但語法錯誤一定抓得到。
 //
-// ELECTRON_RUN_AS_NODE 是必要的:在 app 裡 process.execPath 是 Electron 本身,不是 node。
-// 少了它,這行不是「檢查語法」而是「用 Electron 執行那個檔案」——實測過的後果是,
-// 有語法錯誤的檔案被判成通過,而成員自己寫的測試檔被實際執行、測試失敗被誤報成「載不起來」。
-// 單元測試在純 node 底下跑,看不到這個差別;test/harness/scenarios/verify.ts 在真的 app 裡驗。
+// 這裡的環境是刻意寫死的,兩樣都實測過:
+//   ELECTRON_RUN_AS_NODE:在 app 裡 process.execPath 是 Electron 本身,不是 node。少了它,
+//     這行不是「檢查語法」而是「用 Electron 執行那個檔案」——後果是有語法錯誤的檔案被判成通過,
+//     而成員自己寫的測試檔被實際執行、測試失敗被誤報成「載不起來」。
+//   NODE_OPTIONS:子行程會繼承 process.env,而 app 是從使用者的登入 shell 匯進整份環境的
+//     (main.ts importShellEnv)。使用者的 NODE_OPTIONS 只要有一個這顆 Node 不認得的參數,
+//     檢查本身就以結束代碼 9 收場,然後每一個改動過的 .js 都被誣賴成語法錯誤。清掉它。
+// 單元測試在純 node 底下跑,看不到這些差別;test/harness/scenarios/verify.ts 在真的 app 裡驗。
+const CHECK_ENV = { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '' };
+
+// 回傳 null 代表「檢查本身沒跑成」——這種時候不能反過來說使用者的檔案壞了。
+async function nodeCheck(args: string[], stdin: string | undefined, locale: TextLocale): Promise<{ ok: boolean; error: string } | null> {
+  const r = await runProcess(process.execPath, args, { timeoutMs: SYNTAX_TIMEOUT_MS, locale, env: CHECK_ENV, ...(stdin != null ? { stdin } : {}) });
+  if (r.spawnError || r.timedOut) return null;
+  const stderr = (r.stderr || '').trim();
+  if (/not allowed in NODE_OPTIONS/.test(stderr)) return null; // 環境的問題,不是檔案的問題
+  return { ok: r.code === 0, error: stderr || `exit ${r.code}` };
+}
+
+// 一個 .js 檔要用哪一種解析方式,取決於最近的 package.json 有沒有 "type": "module"——
+// 而 Electron 內建的 Node 20 預設不會去猜(新版 node 會)。結果是:同一個 ESM 寫法的 .js,
+// 開發機上 node --check 過,在 app 裡卻被判成「Unexpected token 'export'」,
+// 然後修復回合被派去修一個根本沒壞的檔案。所以兩種解析都試,兩種都不過才算壞。
 async function checkJs(full: string, locale: TextLocale): Promise<string | null> {
-  const r = await runProcess(process.execPath, ['--check', full], { timeoutMs: SYNTAX_TIMEOUT_MS, locale, env: { ELECTRON_RUN_AS_NODE: '1' } });
-  if (r.spawnError) return null; // 檢查本身跑不起來,不能反過來說使用者的檔案壞了
-  if (r.timedOut) return null;
-  return r.code === 0 ? null : (r.stderr || '').trim() || `exit ${r.code}`;
+  const r = await nodeCheck(['--check', full], undefined, locale);
+  if (!r || r.ok) return null;
+  if (path.extname(full).toLowerCase() !== '.js') return r.error;
+  let source: string;
+  try { source = fs.readFileSync(full, 'utf8'); } catch { return r.error; }
+  const esm = await nodeCheck(['--input-type=module', '--check'], source, locale);
+  if (!esm || esm.ok) return null;
+  // 兩種都不過:如果 CommonJS 那次的錯就是在抱怨「這看起來是 ES module」,
+  // 那段訊息對使用者沒有意義,報 ES module 解析出來的錯比較貼近真正的問題。
+  if (!/ES module|import statement|Unexpected token '(export|import)'/.test(r.error)) return r.error;
+  // 走 stdin 檢查的錯誤訊息裡檔名會變成 [stdin],對照不回原本那個檔
+  return esm.error.split('[stdin]').join(path.basename(full));
 }
 
 // 給模型看的一段文字(審查提示與修復意見都用它);通過時回 null,沒什麼好說的

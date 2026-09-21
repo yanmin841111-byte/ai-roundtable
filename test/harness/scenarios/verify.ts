@@ -12,13 +12,16 @@ import { scriptedMember } from '../fixtures';
 async function main() {
   const r = await runApp({
     members: [
-      scriptedMember({ id: 'lead', name: '主持人', plan: { summary: '建立檔案', assignments: [{ agent: '執行者', task: '建立 broken.js 與 fine.js' }] } }),
+      scriptedMember({ id: 'lead', name: '主持人', plan: { summary: '建立檔案', assignments: [{ agent: '執行者', task: '建立 broken.js、fine.js 與 esm.js' }] } }),
       scriptedMember({
         id: 'exec', name: '執行者', canEdit: true,
         // broken.js 有語法錯誤;side-effect.js 會「執行到就留下痕跡」,用來確認檢查沒有真的執行它
         writes: {
           'broken.js': 'function x( {\n  return 1;\n}\n',
           'fine.js': 'module.exports = { ok: true };\n',
+          // ESM 寫法的 .js:Electron 內建的 Node 比開發機舊,預設不會去猜這是 ES module,
+          // 一路照 CommonJS 解析就會判成「Unexpected token 'export'」。這個檔沒有壞。
+          'esm.js': 'import fs from "fs";\nexport const ok = !!fs;\n',
           // 寫到自己旁邊,不是相對 cwd:檢查子行程的 cwd 是 app 的,真的被執行時
           // 相對路徑會落在 repo 根目錄,這條檢查就永遠不會響(實測過)
           'side-effect.js': "require('fs').writeFileSync(__dirname + '/ran.txt', 'executed');\n",
@@ -38,6 +41,9 @@ async function main() {
       g.check(/自動驗證沒過/.test(text), `語法錯誤的檔案要被抓到(${text.slice(0, 200)})`);
       g.check(/broken\.js/.test(text), 'broken.js 要被指名');
       g.check(!/fine\.js/.test(text), '正常的檔案不能被誤報');
+      g.check(!/esm\.js/.test(text), 'ESM 寫法的 .js 不能被誤報成語法錯誤');
+      // 訊息會進對話紀錄與匯出,不留這台機器的路徑(macOS 的 /private 半截也不行)
+      g.check(/`broken\.js`:broken\.js:\d/.test(text), `錯誤訊息裡的檔名是相對路徑(${text.slice(0, 160)})`);
       const card = msgs.find((m: any) => m.tag === 'task-summary');
       g.check(!!card && card.taskSummary && card.taskSummary.verify === 'failed', `結果卡標出驗證沒過(${card && card.taskSummary && card.taskSummary.verify})`);
       g.check(!/✓ 審查通過/.test(card.text), `驗證沒過就不能寫審查通過(${card.text.slice(0, 120)})`);

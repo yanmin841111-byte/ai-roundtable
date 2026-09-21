@@ -41,6 +41,22 @@ test('語法檢查:壞的 js 與 json 抓得到,好的不誤報,非程式檔不�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('使用者環境裡的 NODE_OPTIONS 不能讓檢查反咬使用者的檔案', async () => {
+  // app 會把使用者登入 shell 的環境整份匯進來(main.ts importShellEnv),
+  // 其中的 NODE_OPTIONS 只要有一個這顆 Node 不認得的參數,檢查子行程就以結束代碼 9 收場。
+  // 以前那會被當成「每一個改動的 .js 都有語法錯誤」。
+  const dir = dirWith({ 'good.js': 'module.exports = { a: 1 };\n', 'bad.js': 'function x( { return 1 }\n' });
+  const before = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = '--this-flag-does-not-exist';
+  try {
+    const r = await verifyChanges(dir, ['good.js', 'bad.js'], '');
+    assert.deepStrictEqual(r.syntax.map((s: any) => s.file), ['bad.js'], '好的檔案不能被誣賴,壞的還是要抓到');
+  } finally {
+    if (before === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before;
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('刪掉的檔案不算壞掉;沒有可檢查的東西就是「沒有驗證」', async () => {
   const dir = dirWith({ 'a.txt': 'x' });
   const gone = await verifyChanges(dir, ['deleted.js'], '');

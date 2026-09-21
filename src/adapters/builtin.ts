@@ -157,23 +157,28 @@ function describeClaudeTool(block: any, locale: TextLocale) {
 }
 
 // ---------- Codex CLI ----------
-async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
+// 跟 claudeArgs 一樣抽出來對照真的 CLI 支不支援,見 test/cli-flags.test.ts。
+export function codexArgs(agent: Pick<AgentConfig, 'canEdit'>, ctx: { sessionId?: string | null; cwd?: string }, run: { model?: string | null; effort?: string | null } = {}): string[] {
+  const sandbox = agent.canEdit ? 'workspace-write' : 'read-only';
   const args = ['exec'];
-  let prompt = ctx.prompt;
-  if (ctx.sessionId) {
-    args.push('resume', ctx.sessionId, '-');
-  } else {
-    args.push('-', '-C', ctx.cwd, '-s', agent.canEdit ? 'workspace-write' : 'read-only');
-    // Codex 沒有系統提示參數,把角色設定放進第一則訊息。
-    if (ctx.systemPrompt) prompt = `${ctx.systemPrompt}\n\n---\n\n${prompt}`;
-  }
+  if (ctx.sessionId) args.push('resume', ctx.sessionId, '-');
+  else args.push('-', '-C', ctx.cwd || '.', '-s', sandbox);
   args.push('--json', '--skip-git-repo-check');
-  const run = resolveRunOptions('codex', agent.model, agent.effort);
   if (run.model) args.push('-m', run.model);
   if (run.effort) args.push('-c', `model_reasoning_effort="${run.effort}"`);
-  reportRunNote(ctx, run);
-  if (ctx.sessionId) args.push('-c', `sandbox_mode="${agent.canEdit ? 'workspace-write' : 'read-only'}"`);
+  // resume 不吃 -s,沙箱要用設定值帶進去
+  if (ctx.sessionId) args.push('-c', `sandbox_mode="${sandbox}"`);
   if (agent.canEdit) args.push('-c', 'approval_policy="never"');
+  return args;
+}
+
+async function runCodex(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
+  let prompt = ctx.prompt;
+  // Codex 沒有系統提示參數,把角色設定放進第一則訊息(resume 時對面已經有了)。
+  if (!ctx.sessionId && ctx.systemPrompt) prompt = `${ctx.systemPrompt}\n\n---\n\n${prompt}`;
+  const run = resolveRunOptions('codex', agent.model, agent.effort);
+  const args = codexArgs(agent, ctx, run);
+  reportRunNote(ctx, run);
 
   const items = new Map(); // id -> item(含順序)
   let order = 0;
