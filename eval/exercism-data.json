@@ -1,0 +1,618 @@
+{
+  "book-store": {
+    "source": "https://raw.githubusercontent.com/exercism/problem-specifications/main/exercises/book-store/canonical-data.json",
+    "version": null,
+    "cases": [
+      {
+        "description": "Only a single book",
+        "property": "total",
+        "input": {
+          "basket": [
+            1
+          ]
+        },
+        "expected": 800
+      },
+      {
+        "description": "Two of the same book",
+        "property": "total",
+        "input": {
+          "basket": [
+            2,
+            2
+          ]
+        },
+        "expected": 1600
+      },
+      {
+        "description": "Empty basket",
+        "property": "total",
+        "input": {
+          "basket": []
+        },
+        "expected": 0
+      },
+      {
+        "description": "Two different books",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            2
+          ]
+        },
+        "expected": 1520
+      },
+      {
+        "description": "Three different books",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            2,
+            3
+          ]
+        },
+        "expected": 2160
+      },
+      {
+        "description": "Four different books",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "expected": 2560
+      },
+      {
+        "description": "Five different books",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "expected": 3000
+      },
+      {
+        "description": "Two groups of four is cheaper than group of five plus group of three",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            5
+          ]
+        },
+        "expected": 5120
+      },
+      {
+        "description": "Two groups of four is cheaper than groups of five and three",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            3,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        "expected": 5120
+      },
+      {
+        "description": "Group of four plus group of two is cheaper than two groups of three",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        "expected": 4080
+      },
+      {
+        "description": "Two each of first four books and one copy each of rest",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            4,
+            5
+          ]
+        },
+        "expected": 5560
+      },
+      {
+        "description": "Two copies of each book",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        "expected": 6000
+      },
+      {
+        "description": "Three copies of first book and two each of remaining",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            4,
+            5,
+            5,
+            1
+          ]
+        },
+        "expected": 6800
+      },
+      {
+        "description": "Three each of first two books and two each of remaining books",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            4,
+            5,
+            5,
+            1,
+            2
+          ]
+        },
+        "expected": 7520
+      },
+      {
+        "description": "Four groups of four are cheaper than two groups each of five and three",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            5,
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            4,
+            5
+          ]
+        },
+        "expected": 10240
+      },
+      {
+        "description": "Check that groups of four are created properly even when there are more groups of three than groups of five",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            3,
+            3,
+            3,
+            3,
+            3,
+            3,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        "expected": 14560
+      },
+      {
+        "description": "One group of one and four is cheaper than one group of two and three",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "expected": 3360
+      },
+      {
+        "description": "One group of one and two plus three groups of four is cheaper than one group of each size",
+        "property": "total",
+        "input": {
+          "basket": [
+            1,
+            2,
+            2,
+            3,
+            3,
+            3,
+            4,
+            4,
+            4,
+            4,
+            5,
+            5,
+            5,
+            5,
+            5
+          ]
+        },
+        "expected": 10000
+      }
+    ]
+  },
+  "dominoes": {
+    "source": "https://raw.githubusercontent.com/exercism/problem-specifications/main/exercises/dominoes/canonical-data.json",
+    "version": null,
+    "cases": [
+      {
+        "description": "empty input = empty output",
+        "property": "canChain",
+        "input": {
+          "dominoes": []
+        },
+        "expected": true
+      },
+      {
+        "description": "singleton input = singleton output",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              1
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "singleton that can't be chained",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        "expected": false
+      },
+      {
+        "description": "three elements",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              2,
+              3
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "can reverse dominoes",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              1,
+              3
+            ],
+            [
+              2,
+              3
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "can't be chained",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              4,
+              1
+            ],
+            [
+              2,
+              3
+            ]
+          ]
+        },
+        "expected": false
+      },
+      {
+        "description": "disconnected - simple",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              2
+            ]
+          ]
+        },
+        "expected": false
+      },
+      {
+        "description": "disconnected - double loop",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              4
+            ],
+            [
+              4,
+              3
+            ]
+          ]
+        },
+        "expected": false
+      },
+      {
+        "description": "disconnected - single isolated",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              4,
+              4
+            ]
+          ]
+        },
+        "expected": false
+      },
+      {
+        "description": "need backtrack",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              2,
+              4
+            ],
+            [
+              2,
+              4
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "separate loops",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              3,
+              3
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "nine elements",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              5,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              4
+            ],
+            [
+              1,
+              6
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              4
+            ],
+            [
+              5,
+              6
+            ]
+          ]
+        },
+        "expected": true
+      },
+      {
+        "description": "separate three-domino loops",
+        "property": "canChain",
+        "input": {
+          "dominoes": [
+            [
+              1,
+              2
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              3,
+              1
+            ],
+            [
+              4,
+              5
+            ],
+            [
+              5,
+              6
+            ],
+            [
+              6,
+              4
+            ]
+          ]
+        },
+        "expected": false
+      }
+    ]
+  }
+}

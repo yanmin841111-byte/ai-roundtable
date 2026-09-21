@@ -23,7 +23,9 @@ export interface AbTask {
   naive: Record<string, string>;
 }
 
-export const AB_TASKS: AbTask[] = [
+import { EXERCISM_TASKS } from './ab-tasks-exercism';
+
+const OWN_TASKS: AbTask[] = [
   {
     id: 'semver',
     set: 'basic',
@@ -537,3 +539,6 @@ module.exports = { LRU };
     },
   },
 ];
+
+// 自己出的題目 + 從 Exercism 官方標準測資轉進來的題目(見 ab-tasks-exercism.ts)
+export const AB_TASKS: AbTask[] = [...OWN_TASKS, ...EXERCISM_TASKS];
