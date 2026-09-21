@@ -377,6 +377,52 @@ test('write_file 新檔必須 createOnly 且不覆蓋競爭建立的檔案', () 
   } finally { f.cleanup(); }
 });
 
+// 兩個上限以前互相矛盾:工具額度 20 次,但寫檔回合的 API 往返只給 10 輪。
+// 一輪叫一個工具的模型永遠用不到一半額度,而且是在它已經動過檔案之後被切斷,
+// 留下改到一半的檔案。實測:留下來的 94 次不完美的跑裡,約四分之一是這樣被切掉的。
+test('會工作的模型可以用完工具額度,不會在第 10 輪被切斷', async () => {
+  const f = fixture();
+  try {
+    let round = 0;
+    const fetchImpl = async (_url: any, options: any) => {
+      const body = JSON.parse(options.body);
+      if (!body.tools) return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '好了' } }] }) };
+      round++;
+      // 連續 12 輪都做「有效」的事(每輪讀一次檔),第 13 輪才收尾
+      if (round <= 12) return {
+        ok: true, status: 200,
+        json: async () => ({ choices: [{ message: { content: null, tool_calls: [{ id: `r${round}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'sample.txt' }) } }] } }] }),
+      };
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '看完了' } }] }) };
+    };
+    const spec = { id: 'local', type: 'openai', baseUrl: 'http://local/v1', models: ['m'], stream: false, supportsEdit: true, fileTools: { enabled: true } };
+    const result = await createOpenAIAdapter(spec, { fetchImpl }).run({ name: 'Q', model: 'm', canEdit: true }, ctx(f.root, { fileToolsEnabled: true }));
+    assert.strictEqual(result.error, null, String(result.error));
+    assert.strictEqual(result.toolEvents.length, 12, '12 輪都要做得完');
+  } finally { f.cleanup(); }
+});
+
+test('連續整輪工具呼叫都失敗就停,不用把額度耗完', async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const fetchImpl = async (_url: any, options: any) => {
+      const body = JSON.parse(options.body);
+      if (!body.tools) return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '好了' } }] }) };
+      calls++;
+      // 一直用同一段找不到的 oldText 去換,每次都失敗——卡住了,不是在工作
+      return {
+        ok: true, status: 200,
+        json: async () => ({ choices: [{ message: { content: null, tool_calls: [{ id: `c${calls}`, type: 'function', function: { name: 'replace_text', arguments: JSON.stringify({ path: 'sample.txt', oldText: '這段文字根本不存在於檔案裡面喔喔喔', newText: '換成這一段夠長的新文字內容', expectedSha256: 'a'.repeat(64) }) } }] } }] }),
+      };
+    };
+    const spec = { id: 'local', type: 'openai', baseUrl: 'http://local/v1', models: ['m'], stream: false, supportsEdit: true, fileTools: { enabled: true } };
+    const result = await createOpenAIAdapter(spec, { fetchImpl }).run({ name: 'Q', model: 'm', canEdit: true }, ctx(f.root, { fileToolsEnabled: true }));
+    assert.match(String(result.error), /連續 3 輪/, `應該以「沒有進展」收場(${result.error})`);
+    assert.strictEqual(result.toolEvents.length, 3, `停在第 3 輪,不是耗到額度用完(實際 ${result.toolEvents.length} 輪)`);
+  } finally { f.cleanup(); }
+});
+
 test('單回合工具呼叫次數有硬上限且錯誤會回傳', () => {
   const f = fixture();
   try {

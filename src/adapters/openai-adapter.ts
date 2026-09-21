@@ -16,6 +16,8 @@ import type { ModelCapability } from '../ipc-types';
 const MODELS_TTL_MS = 10 * 60 * 1000;
 const MODELS_FETCH_TIMEOUT_MS = 8000;
 // 模型能力的實際測試:本機大模型第一次載入可能要半分鐘以上
+// 連續這麼多輪、每一個工具呼叫都失敗就停:再問下去只是重複同一個錯
+const DEAD_ROUNDS_LIMIT = 3;
 const PROBE_TIMEOUT_MS = 90000;
 const PROBE_TOOL = { type: 'function', function: { name: 'ping', description: 'Reply to a ping.', parameters: { type: 'object', properties: {} } } };
 // 1x1 的紅色 PNG
@@ -447,10 +449,14 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       let error: string | null = null;
       const toolEvents: any[] = [];
 
-      // 每輪工具本身另有 20 次硬上限；API 往返也設上限，避免模型反覆呼叫失敗工具。
-      // 唯讀回合(審查)多給幾輪:一次只讀一個檔案的模型,讀完清單上十個檔案就用光 10 輪,
-      // 整個審查被丟掉。讀檔不會改變任何東西,仍受工具次數上限與回合逾時約束。
-      const maxApiRounds = fileTools && fileTools.readOnly ? FILE_TOOL_MAX_CALLS + 2 : 10;
+      // 上限只留一個有意義的:工具次數額度(FILE_TOOL_MAX_CALLS)加幾輪緩衝。
+      // 以前寫檔回合另外壓在 10 輪,和 20 次的額度互相矛盾——一輪叫一個工具的模型
+      // 永遠只用得到一半額度,而且是在它已經動過檔案之後被切斷,留下改到一半的檔案。
+      // 實測:留下來的 94 次不完美的跑裡,約四分之一是被這個 10 輪切掉的。
+      // 真正要防的「反覆呼叫失敗工具」改由底下的 deadRounds 抓,比數輪數準,也停得更早。
+      const maxApiRounds = FILE_TOOL_MAX_CALLS + 2;
+      // 連續幾輪「每一個工具呼叫都失敗」就停:那是卡住了,不是在工作
+      let deadRounds = 0;
       for (let apiRound = 0; apiRound < maxApiRounds; apiRound++) {
         if (Date.now() >= deadline) { error = timeoutMessage(ctx.locale || locale(), timeoutMs); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
@@ -475,11 +481,13 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         }
 
         exchange.push({ role: 'assistant', content: result.text || null, tool_calls: result.toolCalls });
+        let anyOk = false;
         for (const call of result.toolCalls) {
           const name = call.function?.name || '';
           const args = call.function?.arguments || '{}';
           ctx.onActivity({ id: call.id, kind: 'tool', title: tx(ctx.locale || locale(), 'api.toolRunning', { name }), status: 'running' });
           const toolResult = fileTools.execute(name, args);
+          if (toolResult.ok) anyOk = true;
           const entry = toTranscriptEntry(call.id, name, args, toolResult, ctx.locale || locale());
           toolEvents.push(entry);
           ctx.onActivity({
@@ -490,6 +498,11 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
             status: toolResult.ok ? 'done' : 'error',
           });
           exchange.push({ role: 'tool', tool_call_id: call.id, name, content: JSON.stringify(toolResult) });
+        }
+        deadRounds = anyOk ? 0 : deadRounds + 1;
+        if (deadRounds >= DEAD_ROUNDS_LIMIT) {
+          error = tx(ctx.locale || locale(), 'api.toolNoProgress', { n: DEAD_ROUNDS_LIMIT });
+          break;
         }
       }
       if (!error) error = tx(ctx.locale || locale(), 'api.toolRoundsExceeded', { n: maxApiRounds });
