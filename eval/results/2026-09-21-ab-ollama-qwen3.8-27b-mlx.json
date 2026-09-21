@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "kind": "ab",
+  "set": "hard",
+  "primary": {
+    "metric": "passRate",
+    "diff": 0.011,
+    "p": 0.968
+  },
+  "secondary": {
+    "metric": "allPass",
+    "p": 1
+  },
+  "date": "2026-09-21",
+  "app": {
+    "version": "0.1.0",
+    "commit": "29aeb89-dirty"
+  },
+  "model": {
+    "cli": "ollama",
+    "model": "qwen3.8:27b-mlx"
+  },
+  "reviewer": {
+    "cli": "ollama",
+    "model": "qwen3.8:27b-mlx"
+  },
+  "runsPerCondition": 8,
+  "tasks": {
+    "cron": {
+      "solo": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 6,
+        "execFailed": 5,
+        "passRate": 0.984,
+        "avgSeconds": 472,
+        "avgTokens": 0
+      },
+      "roundtable": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 7,
+        "execFailed": 2,
+        "passRate": 0.995,
+        "avgSeconds": 577,
+        "avgTokens": 0
+      }
+    },
+    "pathnorm": {
+      "solo": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 1,
+        "execFailed": 3,
+        "passRate": 0.925,
+        "avgSeconds": 256,
+        "avgTokens": 0
+      },
+      "roundtable": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 0,
+        "execFailed": 0,
+        "passRate": 0.858,
+        "avgSeconds": 287,
+        "avgTokens": 0
+      }
+    },
+    "roman": {
+      "solo": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 6,
+        "execFailed": 3,
+        "passRate": 0.868,
+        "avgSeconds": 283,
+        "avgTokens": 0
+      },
+      "roundtable": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 6,
+        "execFailed": 0,
+        "passRate": 0.956,
+        "avgSeconds": 273,
+        "avgTokens": 0
+      }
+    }
+  }
+}
