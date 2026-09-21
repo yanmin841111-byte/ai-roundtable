@@ -54,6 +54,9 @@ function runElectron(userData: string, script: string): Promise<{ code: number |
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    // 不設 encoding 的話多位元組字會被切在 chunk 邊界,結果那行會壞掉
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, TIMEOUT_MS);
@@ -74,6 +77,8 @@ function runElectron(userData: string, script: string): Promise<{ code: number |
   if (timedOut) fail(`Electron ${TIMEOUT_MS / 1000} 秒內沒有結束\n${stderr}`);
   if (!result) fail(`沒有收到劇本結果(結束代碼 ${code})\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
   if (!result.ok) fail(`${result.error || '未知錯誤'}\n--- renderer ---\n${rendererLog}`);
+  // 劇本回報成功之後才崩潰的話,結束代碼是唯一看得出來的地方
+  if (code !== 0) fail(`Electron 異常退出(結束代碼 ${code})\n--- renderer ---\n${rendererLog}\n--- stderr ---\n${stderr}`);
 
   // app 結束後才檢查得到:工作目錄不能留下附件暫存,刪掉紀錄後附件目錄也要清空
   const runtimeDir = path.join(workDir, '.roundtable-runtime');
