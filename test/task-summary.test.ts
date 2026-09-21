@@ -109,10 +109,16 @@ test('載入紀錄:形狀正確的保留,壞掉的欄位丟掉', () => {
     startedAt: 1, endedAt: 5, members: [{ name: 'A', outcome: 'approved', reviewers: ['B', 3] }, { name: 'X', outcome: 'magic' }],
     files: [{ path: 'a.js', status: 'added', added: 2, removed: -1 }, { path: '', status: 'added' }], moreFiles: 0,
     usage: { inputTokens: 10, outputTokens: 'x', costUsd: null, turns: 3, turnsWithUsage: 1 },
+    rollback: { scope: 'repair', status: 'complete' },
   } });
   assert.deepStrictEqual(ok.taskSummary.members, [{ name: 'A', outcome: 'approved', reviewers: ['B'] }]);
   assert.deepStrictEqual(ok.taskSummary.files, [{ path: 'a.js', status: 'added', added: 2, removed: 0 }]);
   assert.strictEqual(ok.taskSummary.usage.outputTokens, 0);
+  assert.deepStrictEqual(ok.taskSummary.rollback, { scope: 'repair', status: 'complete' });
+  const { taskSummaryText, restoreTaskSummary } = require('../src/flow/task-summary');
+  assert.match(taskSummaryText(ok.taskSummary, 'zh-Hant'), /已自動收回修復回合/);
+  assert.match(taskSummaryText(ok.taskSummary, 'en'), /automatically rolled back/);
+  assert.strictEqual(restoreTaskSummary({ ...ok.taskSummary, rollback: { scope: 'repair', status: 'magic' } }).rollback, undefined);
   assert.strictEqual(O.restoreMessage({ id: 't', kind: 'system', taskSummary: { members: 'x' } }).taskSummary, undefined);
 });
 

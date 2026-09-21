@@ -185,8 +185,7 @@ test('改動的檔案很多時,比對不會卡住主程序;超過時間上限的
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// 只有不是 git repo 時才記:git repo 有自己的歷史可以比對,不必多占記憶體
-test('分工任務開始前:不是 git repo 才記下內容', async () => {
+test('分工任務開始前:Git 與非 Git 目錄都記下回退內容,Git 比對照舊', async () => {
   const run = async (dir: string) => {
     adapters.setRegistry({ get: (id: string) => (id === 'x' ? { id, supportsEdit: true, supportsResume: false, capabilities: { attachments: ['filePath'] },
       run: async (_a: any, ctx: any) => ({ text: /【分工】/.test(ctx.prompt) ? JSON.stringify({ summary: 's', assignments: [{ agent: 'A1', task: 't' }] }) : /【總結】/.test(ctx.prompt) ? '完成' : /【執行】/.test(ctx.prompt) ? '好' : '[AGREED]' }) } : null) });
@@ -204,7 +203,13 @@ test('分工任務開始前:不是 git repo 才記下內容', async () => {
   assert.ok(b && b.cwd === plain && b.contents.get('a.txt').toString() === 'a\n');
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-orcgit-'));
   execFileSync('git', ['init', '-q'], { cwd: repo });
-  assert.strictEqual(await run(repo), null);
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'user edit\n');
+  const gitBaseline = await run(repo);
+  assert.strictEqual(gitBaseline.contents.get('a.txt').toString(), 'user edit\n');
+  const diff = await T.workdirChanges(repo, gitBaseline);
+  assert.strictEqual(diff.ok, true);
+  assert.notStrictEqual(diff.source, 'task');
+  assert.ok(diff.files.some((file: any) => file.path === 'a.txt'));
   for (const d of [plain, repo]) fs.rmSync(d, { recursive: true, force: true });
 });
 

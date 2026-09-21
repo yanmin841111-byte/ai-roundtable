@@ -23,6 +23,9 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
     tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
     // 修復把事情弄糟時要講成一句人話:「驗證沒過」看不出是誰在哪一步弄壞的
     summary.repairBroke ? tx(locale, 'sys.taskSummary.repairBroke') : '',
+    summary.rollback ? tx(locale, summary.rollback.status === 'complete'
+      ? summary.rollback.scope === 'repair' ? 'sys.taskSummary.rollbackRepair' : 'sys.taskSummary.rollbackTask'
+      : summary.rollback.status === 'partial' ? 'sys.taskSummary.rollbackPartial' : 'sys.taskSummary.rollbackUnavailable') : '',
     members.join('\n'),
     files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
   ].filter(Boolean).join('\n\n');
@@ -51,6 +54,9 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
     ...(raw.testsTouched === true ? { testsTouched: true } : {}),
     ...(raw.repairBroke === true ? { repairBroke: true } : {}),
+    ...((raw.rollback?.scope === 'task' || raw.rollback?.scope === 'repair')
+      && ['complete', 'partial', 'unavailable'].includes(raw.rollback.status)
+      ? { rollback: { scope: raw.rollback.scope, status: raw.rollback.status } } : {}),
     usage: {
       inputTokens: num(raw.usage.inputTokens),
       outputTokens: num(raw.usage.outputTokens),

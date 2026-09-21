@@ -320,8 +320,8 @@ class Orchestrator extends EventEmitter {
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
   // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
-  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, testsTouched, repairBroke }: {
-    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; testsTouched?: boolean; repairBroke?: boolean;
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, testsTouched, repairBroke, rollback }: {
+    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; testsTouched?: boolean; repairBroke?: boolean; rollback?: TaskSummary['rollback'];
   }) {
     const unresolved = new Set([...fix.unresolved.map((u) => u.agent.id), ...fix.fixFailed.map((f) => f.item.agent.id)]);
     const rescued = new Set(salvaged.map((s) => s.agent.id));
@@ -331,10 +331,9 @@ class Orchestrator extends EventEmitter {
     const outcomeOf = (report: ExecReport): TaskOutcome => {
       // 中途失敗但照樣送審的成員,結論依審查而定:留下的檔案審查通過就是能用
       if (failed.includes(report) && !rescued.has(report.agent.id)) return 'failed';
-      if (brokeVerify.has(report.agent.id)) return 'unresolved';
-      const verdicts = reviews.filter((rv) => rv.target.agent.id === report.agent.id).map((rv) => reviewVerdict(rv.text, rv.error));
+      if (brokeVerify.has(report.agent.id) || unresolved.has(report.agent.id)) return 'unresolved';
+      const verdicts = [...reviews, ...rereviews].filter((rv) => rv.target.agent.id === report.agent.id).map((rv) => reviewVerdict(rv.text, rv.error));
       if (verdicts.includes('issues')) {
-        if (unresolved.has(report.agent.id)) return 'unresolved';
         // 修好之後複查通過,才是真的「審查通過」;複查沒跑成就維持「已修復(未再審查)」
         return rereviews.some((rv) => rv.target.agent.id === report.agent.id && reviewVerdict(rv.text, rv.error) === 'pass') ? 'approved' : 'repaired';
       }
@@ -369,6 +368,7 @@ class Orchestrator extends EventEmitter {
       ...(verify ? { verify: !verify.ran ? 'none' as const : verify.ok ? 'passed' as const : 'failed' as const } : {}),
       ...(testsTouched ? { testsTouched: true } : {}),
       ...(repairBroke ? { repairBroke: true } : {}),
+      ...(rollback ? { rollback } : {}),
     };
     this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
   }
@@ -463,7 +463,8 @@ class Orchestrator extends EventEmitter {
         // 記下任務開始前的檔案內容(見 task-changes.ts):結果卡用它列出「這次任務」改了什麼。
         // 不是 git repo 時,「檔案改動」也靠它比對;是 git repo 的話,那邊照舊相對上一次 commit。
         const baseline = snapBefore ? await captureBaseline(cwd, snapBefore) : null;
-        if (!gitBefore) this.taskBaseline = baseline;
+        this.taskBaseline = baseline;
+        this.fixBaseline = null;
         // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
         if (this.stopped) return;
         // 測試先行(tdd):先讓每位成員把驗收條件寫成測試,再實作。
@@ -505,13 +506,24 @@ class Orchestrator extends EventEmitter {
         if (this.stopped) return;
         await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding);
         if (this.stopped) return;
-        await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
-        if (this.stopped) return;
-        // 修復把事情弄糟了嗎:執行後驗證是通過的,修復之後變成不通過。
-        // app 知道這件事,就該說出來並給下一步,而不是只留一行紅字(實驗 7 有好幾次是這樣收場的)
         const afterFix = fix.verify as VerifyResult | undefined;
         const repairBroke = !!(verify && verify.ran && verify.ok && afterFix && afterFix.ran && !afterFix.ok);
-        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: afterFix || verify, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke });
+        const scope = afterFix && verify && changed !== null && !verify.syntax.length ? 'repair' : 'task';
+        const contained = await this.containUnloadable(cwd, afterFix || verify, scope);
+        if (this.stopped) return;
+        if (contained.rollback) {
+          const affected = scope === 'task'
+            ? reviewed.filter((report) => effectiveCanEdit(report.agent))
+            : [...(fix.repaired || []).map((result) => result.item), ...fix.fixFailed.map((result) => result.item)];
+          for (const item of affected) {
+            if (!fix.unresolved.some((issue) => issue.agent.id === item.agent.id)) {
+              fix.unresolved.push({ agent: item.agent, task: item.task, notes: [this.text('sys.rollbackUnresolved')] });
+            }
+          }
+        }
+        await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
+        if (this.stopped) return;
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke, rollback: contained.rollback });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
         await this.summaryPhase(task, 'discuss', {});
@@ -765,6 +777,30 @@ class Orchestrator extends EventEmitter {
     });
     else this.system(this.text('sys.verifyOk'), { tag: 'verify' });
     return result;
+  }
+
+  async containUnloadable(cwd: string, verify: VerifyResult | undefined, scope: 'task' | 'repair'): Promise<{ verify: VerifyResult | undefined; rollback?: TaskSummary['rollback'] }> {
+    if (!verify || !verify.syntax.length || this.stopped) return { verify };
+    const baseline = scope === 'repair' ? this.fixBaseline : this.taskBaseline;
+    if (!baseline || baseline.cwd !== cwd) {
+      this.system(this.text('sys.autoRevertUnavailable'), { level: 'error', tag: 'revert' });
+      return { verify, rollback: { scope, status: 'unavailable' } };
+    }
+    const r = await revertToBaseline(baseline).catch((error: unknown) => ({
+      restored: [], deleted: [], skipped: [], failed: [{ file: '.', error: String(error) }],
+    }));
+    const ok = !r.failed.length && !r.skipped.length;
+    const list = [...r.skipped, ...r.failed.map((f) => f.file)].map((f) => `- \`${f}\``).join('\n');
+    this.system(this.text(ok ? (scope === 'repair' ? 'sys.autoRevertedFix' : 'sys.autoReverted') : 'sys.autoRevertPartly', {
+      restored: r.restored.length,
+      deleted: r.deleted.length,
+      list,
+    }), { level: ok ? 'warn' : 'error', tag: 'revert' });
+    const rollback: NonNullable<TaskSummary['rollback']> = { scope, status: ok ? 'complete' : 'partial' };
+    if (this.stopped || r.failed.some((failure) => failure.file === '.')) return { verify, rollback };
+    const changed = diffSnapshots(this.taskBaseline?.snapshot || baseline.snapshot, await snapshotDir(cwd));
+    const recheck = [...new Set([...(changed || []), ...verify.syntax.map((item) => item.file), ...r.restored])];
+    return { verify: await this.verifyPhase(cwd, recheck), rollback };
   }
 
   // 階段二點五(只有測試先行流程):把驗收條件寫成測試。
@@ -1096,7 +1132,7 @@ class Orchestrator extends EventEmitter {
   // 複查通過才算「審查通過」;還有問題就帶進總結;複查本身失敗則維持「已修復(未再審查)」。
   async rereviewPhase(agents: AgentConfig[], reviews: Review[], fix: FixOutcome, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, cwd: string, touchedTests: string[] = [], coding = true) {
     fix.rereviews = [];
-    if (!(fix.repaired || []).length || this.stopped) return;
+    if ((!(fix.repaired || []).length && !fix.fixFailed.length) || this.stopped) return;
     // 修復之後重跑一次自動驗證:修復可能修好、也可能改壞,兩種都要由 app 自己確認
     const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
     if (this.stopped) return;

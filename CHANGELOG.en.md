@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-22
+
+This release adds the built-in terminal, test-first flow, automatic verification, environment repair, rollback, and lineups.
+
 ### Added
 
 - Cross-review now runs with a clean context: the reviewer sees the requirements, the other member's report, the actual changes and the verification result, but not the discussion or execution, and does not resume its own conversation memory. The file operations actually performed are attached to the prompt instead.
@@ -51,6 +55,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - After a member's turn fails, its next turn receives the messages it missed instead of losing the context.
 - Elements marked hidden no longer take up space because of a stylesheet rule (for example an empty warning box under every message).
 - A series of review fixes: Chinese file names, a working folder that is a subfolder or gitignored, commits made by a member, and files already modified before the task are all listed correctly; a model that rejects tools gets the request again without them; file contents attached for a reviewer are not kept in an API member's conversation memory; pressing Stop during a snapshot really stops.
+- `read_file` clamps a `limit` above 65536 instead of rejecting the call; `truncated` is set only when content is omitted. SHA checks, exact unique matching, create-only protection, and per-turn budgets remain in place.
+- Code tasks ending with a built-in syntax-check failure automatically roll back and reverify: only the repair round is undone when syntax passed after execution; otherwise the whole task is restored. Failed repair turns are also rechecked. Result cards show the restored files and verification result without treating withdrawn work as delivered. Missing baselines and incomplete restores are reported explicitly. A failing verify command alone does not trigger automatic rollback.
 
 ## [0.1.0] - 2026-09-17
 

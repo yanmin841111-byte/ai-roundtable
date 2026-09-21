@@ -85,6 +85,14 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
   status.className = 'ts-state';
   status.textContent = state.label;
   titleRow.append(icon, title, status);
+  if (s.rollback) {
+    const rollback = document.createElement('span');
+    rollback.className = 'ts-verify tests ts-rollback';
+    rollback.textContent = t(s.rollback.status === 'complete'
+      ? s.rollback.scope === 'repair' ? 'task.rollbackRepair' : 'task.rollbackTask'
+      : s.rollback.status === 'partial' ? 'task.rollbackPartial' : 'task.rollbackUnavailable');
+    titleRow.appendChild(rollback);
+  }
   // app 自己跑的驗證:沒有驗證就直說「只有人工智慧讀過」,不讓「審查通過」看起來像跑過了
   if (s.verify) {
     const v = document.createElement('span');
@@ -164,7 +172,7 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
     actions.className = 'ts-file-actions';
     // 修復回合把事情弄糟時,不能只印一行紅字:app 知道「執行後是過的、修復後不過了」,
     // 就該把「只收回修復」放在使用者眼前。執行階段做對的部分留著,不用整個重來。
-    if (s.repairBroke) {
+    if (s.repairBroke && s.rollback?.status !== 'complete') {
       const undoFix = document.createElement('button');
       undoFix.type = 'button';
       undoFix.className = 'ts-revert warn';

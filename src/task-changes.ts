@@ -30,6 +30,7 @@ const COMPARE_BUDGET_MS = 1500;
 
 export interface TaskBaseline {
   cwd: string;
+  root: { path: string; dev: number; ino: number } | null;
   at: number;                    // 任務開始的時間
   snapshot: Snapshot;            // 任務開始前的快照
   contents: Map<string, Buffer>; // 任務開始前的檔案內容(只有在上限內的)
@@ -37,9 +38,19 @@ export interface TaskBaseline {
 
 const sizeOf = (fingerprint: string) => Number(fingerprint.split(':')[0]) || 0;
 
+async function directoryIdentity(cwd: string): Promise<TaskBaseline['root']> {
+  try {
+    const real = await fs.promises.realpath(cwd);
+    const stat = await fs.promises.lstat(real);
+    return stat.isDirectory() ? { path: real, dev: stat.dev, ino: stat.ino } : null;
+  } catch { return null; }
+}
+
 // 任務開始前:記下快照裡夠小的檔案內容。非同步分批讀,不卡主程序。
 export async function captureBaseline(cwd: string, snapshot: Snapshot, { fileMax = BASELINE_FILE_MAX, totalMax = BASELINE_TOTAL_MAX } = {}): Promise<TaskBaseline> {
+  const root = await directoryIdentity(cwd);
   const contents = new Map<string, Buffer>();
+  if (!root) return { cwd, root, at: Date.now(), snapshot, contents };
   let total = 0;
   const wanted: string[] = [];
   for (const [rel, fp] of snapshot) {
@@ -50,10 +61,10 @@ export async function captureBaseline(cwd: string, snapshot: Snapshot, { fileMax
   }
   for (let i = 0; i < wanted.length; i += READ_BATCH) {
     const batch = wanted.slice(i, i + READ_BATCH);
-    const bufs = await Promise.all(batch.map((rel) => fs.promises.readFile(path.join(cwd, rel)).catch(() => null)));
+    const bufs = await Promise.all(batch.map((rel) => fs.promises.readFile(path.join(root.path, rel)).catch(() => null)));
     batch.forEach((rel, j) => { const b = bufs[j]; if (b) contents.set(rel, b); });
   }
-  return { cwd, at: Date.now(), snapshot, contents };
+  return { cwd, root, at: Date.now(), snapshot, contents };
 }
 
 // 「檔案改動」:是 git repo 就照舊用 git;不是 repo、或這台機器的 git 根本不能用時,
@@ -227,30 +238,50 @@ export interface RevertResult {
 
 export async function revertToBaseline(baseline: TaskBaseline): Promise<RevertResult> {
   const out: RevertResult = { restored: [], deleted: [], skipped: [], failed: [] };
-  const now = await snapshotDir(baseline.cwd);
-  const inside = (rel: string) => {
-    const full = path.resolve(baseline.cwd, rel);
-    return full === baseline.cwd || full.startsWith(baseline.cwd + path.sep) ? full : null;
+  const root = baseline.root;
+  if (!root) return { ...out, failed: [{ file: '.', error: 'Working directory identity unavailable' }] };
+  const assertRoot = async () => {
+    const current = await directoryIdentity(baseline.cwd);
+    if (!current || current.path !== root.path || current.dev !== root.dev || current.ino !== root.ino) {
+      throw new Error('Working directory identity changed');
+    }
+  };
+  try { await assertRoot(); }
+  catch (error) { return { ...out, failed: [{ file: '.', error: String((error as Error).message || error) }] }; }
+  const now = await snapshotDir(root.path);
+  if (!now) return { ...out, failed: [{ file: '.', error: 'snapshot unavailable' }] };
+  const inside = async (rel: string) => {
+    await assertRoot();
+    const full = path.resolve(root.path, rel);
+    const relative = path.relative(root.path, full);
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('Path outside working directory');
+    let current = root.path;
+    for (const part of relative.split(path.sep)) {
+      current = path.join(current, part);
+      const stat = await fs.promises.lstat(current).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (stat?.isSymbolicLink()) throw new Error('Cannot restore through a symbolic link');
+    }
+    return full;
   };
   // 任務開始後才出現的檔案:刪掉
   for (const rel of now ? now.keys() : []) {
     if (baseline.snapshot.has(rel)) continue;
-    const full = inside(rel);
-    if (!full) continue;
-    try { await fs.promises.rm(full, { force: true }); out.deleted.push(rel); }
+    try { await fs.promises.rm(await inside(rel), { force: true }); out.deleted.push(rel); }
     catch (e) { out.failed.push({ file: rel, error: String((e as Error).message || e) }); }
   }
   // 基準點裡的檔案:內容不一樣就寫回去
   for (const [rel, fingerprint] of baseline.snapshot) {
     const content = baseline.contents.get(rel);
     if (!content) { if (!now || now.get(rel) !== fingerprint) out.skipped.push(rel); continue; }
-    const full = inside(rel);
-    if (!full) continue;
     try {
+      const full = await inside(rel);
       const same = now && now.get(rel) === fingerprint && (await fs.promises.readFile(full)).equals(content);
       if (same) continue;
       await fs.promises.mkdir(path.dirname(full), { recursive: true });
-      await fs.promises.writeFile(full, content);
+      await fs.promises.writeFile(full, content, { flag: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW });
       out.restored.push(rel);
     } catch (e) { out.failed.push({ file: rel, error: String((e as Error).message || e) }); }
   }

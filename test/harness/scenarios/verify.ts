@@ -6,6 +6,8 @@
 // 而在 app 裡那是 Electron 不是 node,少了 ELECTRON_RUN_AS_NODE 就變成「執行那個檔案」——
 // 有語法錯誤的檔案被判通過,成員寫的測試檔反而被跑起來。單元測試在純 node 底下跑,永遠抓不到。
 
+import fs from 'fs';
+import path from 'path';
 import { runApp, report } from '../app';
 import { scriptedMember } from '../fixtures';
 
@@ -22,9 +24,7 @@ async function main() {
           // ESM 寫法的 .js:Electron 內建的 Node 比開發機舊,預設不會去猜這是 ES module,
           // 一路照 CommonJS 解析就會判成「Unexpected token 'export'」。這個檔沒有壞。
           'esm.js': 'import fs from "fs";\nexport const ok = !!fs;\n',
-          // 寫到自己旁邊,不是相對 cwd:檢查子行程的 cwd 是 app 的,真的被執行時
-          // 相對路徑會落在 repo 根目錄,這條檢查就永遠不會響(實測過)
-          'side-effect.js': "require('fs').writeFileSync(__dirname + '/ran.txt', 'executed');\n",
+          'side-effect.js': "require('fs').writeFileSync(__dirname + '/../ran.txt', 'executed');\n",
         },
         report: '已建立檔案',
       }),
@@ -45,8 +45,12 @@ async function main() {
       // 訊息會進對話紀錄與匯出,不留這台機器的路徑(macOS 的 /private 半截也不行)
       g.check(/`broken\.js`:broken\.js:\d/.test(text), `錯誤訊息裡的檔名是相對路徑(${text.slice(0, 160)})`);
       const card = msgs.find((m: any) => m.tag === 'task-summary');
-      g.check(!!card && card.taskSummary && card.taskSummary.verify === 'failed', `結果卡標出驗證沒過(${card && card.taskSummary && card.taskSummary.verify})`);
-      g.check(!/✓ 審查通過/.test(card.text), `驗證沒過就不能寫審查通過(${card.text.slice(0, 120)})`);
+      g.check(!!card && card.taskSummary && card.taskSummary.verify === 'none', `回退後沒有留下待驗檔案(${card?.taskSummary?.verify})`);
+      g.check(card.taskSummary.rollback?.scope === 'task' && card.taskSummary.rollback?.status === 'complete', '已自動回退整個任務');
+      g.check(card.taskSummary.members.every((member: any) => member.outcome === 'unresolved'), '回退不代表任務已完成');
+      g.check(card.taskSummary.files.length === 0 && card.taskSummary.moreFiles === 0, '結果卡不再把已撤回的檔案算成交付');
+      g.check(msgs.some((message: any) => message.tag === 'revert'), '回退結果保留在紀錄中');
+      g.check(!/✓ 審查通過/.test(card.text), `回退後仍不能寫審查通過(${card.text.slice(0, 120)})`);
       // 介面上選得到工作模式,而且切換會存起來
       const style = document.querySelector('#work-style') as HTMLSelectElement;
       g.check(!!style && style.value === 'code', `輸入框旁有工作模式選單(${style && style.value})`);
@@ -60,11 +64,12 @@ async function main() {
     },
   });
   report('自動驗證', r);
-  // 檢查語法不能真的執行檔案:side-effect.js 跑過的話會留下 ran.txt
-  const ran = r.read('ran.txt');
-  console.log(ran === null ? '  ok - 語法檢查沒有執行檔案(沒有留下 ran.txt)' : '  失敗:語法檢查把檔案執行了');
+  const ran = fs.existsSync(path.join(r.tmp, 'ran.txt'));
+  const reverted = ['broken.js', 'fine.js', 'esm.js', 'side-effect.js'].every((file) => r.read(file) === null);
+  console.log(!ran ? '  ok - 語法檢查沒有執行檔案(回退範圍外也沒有 ran.txt)' : '  失敗:語法檢查把檔案執行了');
+  console.log(reverted ? '  ok - 磁碟確認本次新增檔案已撤回' : '  失敗:磁碟仍留下本次新增檔案');
   r.cleanup();
-  if (!r.ok || ran !== null) process.exitCode = 1;
+  if (!r.ok || ran || !reverted) process.exitCode = 1;
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; });

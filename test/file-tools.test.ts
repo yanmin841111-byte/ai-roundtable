@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { FileToolSession, FILE_TOOL_MAX_CALLS, toTranscriptEntry } = require('../src/adapters/file-tools');
+const { FileToolSession, FILE_TOOL_MAX_CALLS, FILE_TOOL_MAX_READ_CHARS, fileToolDefinitions, toTranscriptEntry } = require('../src/adapters/file-tools');
 const { createOpenAIAdapter, validateOpenAISpec } = require('../src/adapters/openai-adapter');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
@@ -27,6 +27,35 @@ function ctx(root: string, extra: any = {}) {
     ...extra,
   };
 }
+
+test('read_file 的 limit 超過上限就夾到上限回傳,不整次拒絕', () => {
+  const f = fixture();
+  try {
+    const session = new FileToolSession(f.root);
+    const huge = session.execute('read_file', { path: 'sample.txt', limit: 1_048_576 });
+    assert.strictEqual(huge.ok, true, huge.error);
+    assert.strictEqual(huge.truncated, false, '檔案比上限小,夾過之後仍是完整內容');
+    assert.match(huge.content, /原始文字/);
+    const padded = '字'.repeat(FILE_TOOL_MAX_READ_CHARS + 100);
+    fs.writeFileSync(f.file, padded);
+    const clamped = session.execute('read_file', { path: 'sample.txt', limit: 100_000 });
+    assert.strictEqual(clamped.ok, true, clamped.error);
+    assert.strictEqual(clamped.content.length, FILE_TOOL_MAX_READ_CHARS);
+    assert.strictEqual(clamped.truncated, true);
+    assert.strictEqual(clamped.sha256, require('crypto').createHash('sha256').update(padded).digest('hex'));
+    const tail = session.execute('read_file', { path: 'sample.txt', offset: FILE_TOOL_MAX_READ_CHARS, limit: 1_048_576 });
+    assert.strictEqual(tail.content, padded.slice(FILE_TOOL_MAX_READ_CHARS));
+    assert.strictEqual(tail.sha256, clamped.sha256);
+    assert.strictEqual(tail.truncated, true);
+    for (const limit of [0, -1, 1.5, '100000', true, Infinity, NaN]) {
+      const bad = new FileToolSession(f.root).execute('read_file', { path: 'sample.txt', limit });
+      assert.strictEqual(bad.ok, false);
+      assert.match(bad.error, /至少 1/);
+    }
+    const definition = fileToolDefinitions().find((tool: any) => tool.function.name === 'read_file');
+    assert.strictEqual(definition.function.parameters.properties.limit.maximum, undefined);
+  } finally { f.cleanup(); }
+});
 
 test('read_file 阻擋 .. 路徑逃逸且回傳具體原因', () => {
   const f = fixture();

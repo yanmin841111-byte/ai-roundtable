@@ -13,6 +13,7 @@ import type { AbTask } from '../../../eval/ab-tasks';
 
 const original = 'module.exports = { value: 0 };\n';
 const correct = 'module.exports = { value: 1 };\n';
+const partial = 'module.exports = { value: 0, staged: true };\n';
 const broken = 'module.exports = { value: 1;\n';
 const longReport = 'Completed answer.js.\n' + 'Evidence retention fixture. '.repeat(100) + 'REPORT_END';
 const task: AbTask = {
@@ -71,11 +72,11 @@ async function main() {
           role: 'assistant', content: null,
           tool_calls: [{ id: `${name}-${writes}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
         } }] });
-        if (canWrite && last.role !== 'tool') return tool('read_file', { path: 'answer.js' });
+        if (canWrite && last.role !== 'tool') return tool('read_file', { path: 'answer.js', limit: 1_048_576 });
         if (canWrite && last.role === 'tool' && last.tool_call_id.startsWith('read_file-')) {
           writes++;
           return tool('write_file', {
-            path: 'answer.js', content: breakRepair && writes > 1 ? broken : correct,
+            path: 'answer.js', content: breakRepair ? writes > 1 ? broken : partial : correct,
             expectedSha256: JSON.parse(last.content).sha256, reason: 'Exercise evidence retention',
           });
         }
@@ -119,15 +120,20 @@ async function main() {
         assert.ok(report(`Report evidence ${condition}`, { ...app, value: { messages: app.value?.evidenceTranscript?.length } }), app.error);
         workDir = app.workDir;
         transcript = app.value.evidenceTranscript;
-        const expected = breakRepair ? broken : correct;
+        const expected = breakRepair ? partial : correct;
         assert.strictEqual(app.read('answer.js'), expected, 'Independent disk check');
         const audits = transcript.filter((message) => message.tag === 'tool-audit').flatMap((message) => message.toolAudit || []);
         const written = audits.filter((audit) => audit.tool === 'write_file' && audit.ok !== false && audit.path.endsWith('answer.js'));
         assert.strictEqual(written.length, breakRepair ? 2 : 1, 'Execute and repair audits reach the transcript');
-        assert.strictEqual(written.at(-1).shaAfter, createHash('sha256').update(expected).digest('hex'));
+        assert.strictEqual(written[0].shaAfter, createHash('sha256').update(expected).digest('hex'));
+        assert.ok(audits.every((audit) => audit.ok !== false), 'Oversized read limit does not fail a tool call');
+        if (breakRepair) {
+          assert.strictEqual(written.at(-1).shaAfter, createHash('sha256').update(broken).digest('hex'), 'Broken write remains in audit after rollback');
+          assert.ok(transcript.some((message) => message.tag === 'revert'), 'Rollback explains why disk differs from the repair audit');
+        }
         const [added, removed] = app.numstat().split('\t');
-        assert.strictEqual(Number(added), written.at(-1).added, 'Git additions match the audit');
-        assert.strictEqual(Number(removed), written.at(-1).removed, 'Git removals match the audit');
+        assert.strictEqual(Number(added), written[0].added, 'Git additions match the retained execute audit');
+        assert.strictEqual(Number(removed), written[0].removed, 'Git removals match the retained execute audit');
         return app;
       });
       assert.strictEqual(result.error, false);
@@ -142,16 +148,18 @@ async function main() {
       assert.deepStrictEqual(evidence.originalFiles, task.files);
       assert.strictEqual(evidence.model.cli, 'reportfixture');
       assert.strictEqual(evidence.run.score.pass, result.pass);
-      assert.strictEqual(fs.readFileSync(path.join(savedDir, 'final', 'answer.js'), 'utf8'), breakRepair ? broken : correct);
+      assert.strictEqual(fs.readFileSync(path.join(savedDir, 'final', 'answer.js'), 'utf8'), breakRepair ? partial : correct);
       assert.ok(!fs.existsSync(path.join(savedDir, 'final', '.git')));
       const execution = transcript.find((message) => message.kind === 'agent' && message.phase?.code === 'execute');
       assert.strictEqual(execution.text, longReport, 'Report over 1500 characters is not truncated');
       assert.ok(transcript.some((message) => message.tag === 'verify'), 'Automatic verification is preserved');
       const summary = transcript.find((message) => message.tag === 'task-summary');
-      assert.strictEqual(summary.taskSummary.verify, breakRepair ? 'failed' : 'passed');
+      assert.strictEqual(summary.taskSummary.verify, 'passed');
       if (breakRepair) {
         assert.strictEqual(transcript.find((message) => message.kind === 'agent' && message.phase?.code === 'repair').text, longReport);
         assert.strictEqual(summary.taskSummary.repairBroke, true);
+        assert.deepStrictEqual(summary.taskSummary.rollback, { scope: 'repair', status: 'complete' });
+        assert.strictEqual(summary.taskSummary.members[0].outcome, 'unresolved');
       }
       appendJournal(journal, { task: task.id, condition, commit: 'fixture', run: { ...result } });
       console.log(`ok - ${condition}: disk, git, audits, full reports, verification, cleanup and evidence agree`);

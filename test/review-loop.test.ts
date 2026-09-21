@@ -16,7 +16,7 @@ const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => { if (process.env.ONLY && !name.includes(process.env.ONLY)) return; tests.push({ name, fn }); };
 
 // review:當審查者時依序的回覆(第一次審查、複查);api:用 OpenAI 相容型(看工具紀錄)
-type Member = { id: string; name: string; task?: string; writes?: Record<string, string>; fixWrites?: Record<string, string>; execError?: string; review?: string[]; api?: boolean; canEdit?: boolean; verifyCommand?: string; workStyle?: 'general' | 'code'; mode?: string;
+type Member = { id: string; name: string; task?: string; writes?: Record<string, string>; fixWrites?: Record<string, string>; execError?: string; fixError?: string; review?: string[]; api?: boolean; canEdit?: boolean; verifyCommand?: string; workStyle?: 'general' | 'code'; mode?: string;
   /** 寫測試回合要寫的檔案 */ testWrites?: Record<string, string>;
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string> };
@@ -66,7 +66,7 @@ async function run(team: Member[]) {
               toolEvents.push({ name: 'write_file', ok: r.ok, path: f, result: r });
             }
           }
-          return { text: '已修正', toolEvents };
+          return { text: m.fixError ? '' : '已修正', error: m.fixError, toolEvents };
         }
         if (/【總結】/.test(ctx.prompt)) return { text: '總結' };
         return { text: '[AGREED]' };
@@ -78,12 +78,23 @@ async function run(team: Member[]) {
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', team.find((m) => m.mode)?.mode || 'divide');
   await done;
+  // 先把工作目錄拍下來再清:停損有沒有真的回退,只能看磁碟,不能看訊息。
+  const files = new Map<string, string>();
+  const walk = (rel = '') => {
+    for (const name of fs.readdirSync(path.join(dir, rel))) {
+      const child = rel ? `${rel}/${name}` : name;
+      if (fs.statSync(path.join(dir, child)).isDirectory()) walk(child);
+      else files.set(child, fs.readFileSync(path.join(dir, child), 'utf8'));
+    }
+  };
+  walk();
   fs.rmSync(dir, { recursive: true, force: true });
+  const read = (file: string) => (files.has(file) ? files.get(file)! : null);
   const card = orc.messages.find((m: any) => m.tag === 'task-summary').taskSummary;
   const outcome = Object.fromEntries(card.members.map((m: any) => [m.name, m.outcome]));
   const reviews = orc.messages.filter((m: any) => m.review);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
-  return { outcome, card, reviews, prompts, summaryPrompt, turns, orc };
+  return { outcome, card, reviews, prompts, summaryPrompt, turns, orc, read };
 }
 
 test('修好之後複查通過:才算審查通過;複查看得到上一輪的意見', async () => {
@@ -185,10 +196,93 @@ test('修復之後還是壞的:結果卡說沒過,成員是「有未解決的問
     { id: 'lead', name: '主持人', canEdit: false },
     { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'function broken( {\n' } },
   ]);
+  // 過程中確實沒過(修復前的那則系統訊息),但載不起來的新檔已先回退。
+  // 結果卡描述的是回退之後的工作目錄:沒有留下的 .js,就沒有東西可驗。
+  assert.ok(r.orc.messages.some((m: any) => m.tag === 'verify' && /自動驗證沒過/.test(m.text)));
+  assert.strictEqual(r.card.verify, 'none');
+  assert.strictEqual(r.outcome.Alice, 'unresolved', '壞檔已收回,沒有交付就不能算審查通過');
+  const text = r.orc.messages.find((m: any) => m.tag === 'task-summary').text;
+  assert.match(text, /沒有自動驗證/, '純文字版要講回退後的狀態,不能再把已刪掉的壞檔說成沒過');
+  assert.strictEqual(r.read('a.js'), null, '載不起來的新檔不該留在工作目錄');
+  assert.ok(r.orc.messages.some((m: any) => m.tag === 'revert' && /已先把工作目錄還原/.test(m.text)));
+  const revertAt = r.orc.messages.findIndex((m: any) => m.tag === 'revert');
+  const cardAt = r.orc.messages.findIndex((m: any) => m.tag === 'task-summary');
+  assert.ok(revertAt >= 0 && revertAt < cardAt, '先回退,結果卡描述的才是回退後的工作目錄');
+});
+
+test('修復把通過的檔案改到載不起來:只收回修復,執行階段的成果留下', async () => {
+  // 補測 2 的 poker-fix 圓桌:自動驗證、複查、結果卡都指出多一個 } 的壞檔,最後仍留在工作目錄。
+  const r = await run([
+    { id: 'lead', name: '主持人', review: ['這裡還有一個邊界沒處理', '還是沒處理好'], canEdit: false },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = { ok: true };\n' }, fixWrites: { 'a.js': 'module.exports = { ok: true;\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = { ok: true };\n', '回到修復前,不是整個任務重來');
+  assert.strictEqual(r.card.repairBroke, true, '結果卡仍要說修復把事情弄糟,退路也還在');
+  assert.strictEqual(r.card.verify, 'passed', '收回修復後重驗,執行階段的檔案載得起來');
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
+  assert.strictEqual(r.outcome.Alice, 'unresolved');
+  assert.ok(r.orc.messages.some((m: any) => m.tag === 'revert' && /已先收回修復回合/.test(m.text)));
+});
+
+test('執行階段只有文字成果:修復新增壞 JS 時不撤回原成果', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', review: ['還需要補一份範例'], canEdit: false },
+    { id: 'alice', name: 'Alice', task: '寫文件', writes: { 'notes.txt': 'execute result\n' }, fixWrites: { 'example.js': 'module.exports = };\n' } },
+  ]);
+  assert.strictEqual(r.read('notes.txt'), 'execute result\n');
+  assert.strictEqual(r.read('example.js'), null);
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
+  assert.strictEqual(r.card.verify, 'none');
+  assert.strictEqual(r.outcome.Alice, 'unresolved');
+});
+
+test('修復報錯仍重驗並回退;即使審查放行也不能算交付', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', review: ['請修正邊界條件'], canEdit: false },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = };\n' }, fixError: '工具連續失敗' },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
+  assert.strictEqual(r.card.verify, 'passed');
+  assert.strictEqual(r.outcome.Alice, 'unresolved');
+  assert.match(r.summaryPrompt, /工具連續失敗/);
+});
+
+test('語法原本通過但測試未過:修復弄壞語法仍只收回修復', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, verifyCommand: 'exit 7' },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = };\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
   assert.strictEqual(r.card.verify, 'failed');
   assert.strictEqual(r.outcome.Alice, 'unresolved');
-  const text = r.orc.messages.find((m: any) => m.tag === 'task-summary').text;
-  assert.match(text, /自動驗證沒過/, '純文字版(匯出、歷史紀錄)也要說驗證沒過');
+});
+
+test('整個任務回退後重新檢查還原的檔案,所有被撤回的寫入者均未交付', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false },
+    { id: 'alice', name: 'Alice', api: true, task: '修正 a.js', before: { 'a.js': 'module.exports = 0;\n' }, writes: { 'a.js': 'module.exports = };\n' } },
+    { id: 'bob', name: 'Bob', api: true, task: '寫文件', writes: { 'b.txt': '完成\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 0;\n');
+  assert.strictEqual(r.read('b.txt'), null);
+  assert.strictEqual(r.card.verify, 'passed');
+  assert.deepStrictEqual(r.card.rollback, { scope: 'task', status: 'complete' });
+  assert.deepStrictEqual(r.outcome, { Alice: 'unresolved', Bob: 'unresolved' });
+  assert.deepStrictEqual(r.card.files, []);
+  assert.match(r.summaryPrompt, /成果仍未交付/);
+});
+
+test('驗證指令沒過不自動回退:那可能是沒做完,不是檔案壞了', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', review: ['測試沒過', '還是沒過'], canEdit: false, verifyCommand: 'exit 7' },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 2;\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 2;\n', '指令失敗不是零爭議的壞檔,不該擅自回退');
+  assert.strictEqual(r.orc.messages.some((m: any) => m.tag === 'revert'), false);
+  assert.notStrictEqual(r.card.repairBroke, true, '執行後指令就失敗,不是修復造成退步');
+  assert.strictEqual(r.card.verify, 'failed');
 });
 
 test('驗證指令失敗也要修;沒有東西可驗時照實說', async () => {

@@ -332,6 +332,7 @@ export interface TaskSummary {
   // 修復回合把事情弄糟了:驗證在執行後是通過的,修復之後變成不通過。
   // app 知道這件事,就不該只印一行紅字——結果卡要說出來,並且把「只收回修復」放在旁邊。
   repairBroke?: boolean;
+  rollback?: { scope: 'task' | 'repair'; status: 'complete' | 'partial' | 'unavailable' };
   // 這次動到了任務開始前就存在的測試檔:「測試通過」要打折扣看
   testsTouched?: boolean;
 }

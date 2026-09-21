@@ -1,7 +1,7 @@
 {
   "name": "ai-roundtable",
   "productName": "AI Roundtable",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "讓多個 AI CLI(Claude Code、Codex 等)互相討論、分工、交叉審查的桌面應用",
   "author": "yanmin841111-byte",
   "license": "PolyForm-Noncommercial-1.0.0",

@@ -72,7 +72,7 @@ export function fileToolDefinitions(locale: TextLocale = 'zh-Hant') {
         properties: {
           path: { type: 'string', description: d('ft.def.path') },
           offset: { type: 'integer', minimum: 0, description: d('ft.def.offset') },
-          limit: { type: 'integer', minimum: 1, maximum: FILE_TOOL_MAX_READ_CHARS, description: d('ft.def.limit') },
+          limit: { type: 'integer', minimum: 1, description: d('ft.def.limit') },
         },
       },
     },
@@ -424,10 +424,10 @@ export class FileToolSession {
     const target = this.existingPath(args.path);
     const { buffer, text } = readSmallUtf8(target);
     const offset = args.offset == null ? 0 : args.offset;
-    const limit = args.limit == null ? FILE_TOOL_MAX_READ_CHARS : args.limit;
     if (!Number.isInteger(offset) || offset < 0) throw fail('ft.offset');
-    if (!Number.isInteger(limit) || limit < 1 || limit > FILE_TOOL_MAX_READ_CHARS) throw fail('ft.limit', { max: FILE_TOOL_MAX_READ_CHARS });
-    const end = Math.min(text.length, offset + limit);
+    const limit = args.limit == null ? FILE_TOOL_MAX_READ_CHARS : args.limit;
+    if (!Number.isInteger(limit) || limit < 1) throw fail('ft.limit', { max: FILE_TOOL_MAX_READ_CHARS });
+    const end = Math.min(text.length, offset + Math.min(limit, FILE_TOOL_MAX_READ_CHARS));
     const currentSha = sha256(buffer);
     return {
       ok: true,

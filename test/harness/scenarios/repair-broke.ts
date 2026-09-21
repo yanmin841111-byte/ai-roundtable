@@ -1,11 +1,6 @@
 'use strict';
 
-// 情境:修復回合反而把東西改壞時,介面說得出來,而且給得出下一步。
-//
-// 這個情境來自實驗 7 的實測:32 次裡有好幾次是修復回合把檔案改到載不起來,
-// 而執行階段其實已經做對了一部分。app 那時只印一行「自動驗證沒過」——它明明知道
-// 「執行後是通過的、修復後變成不通過」,卻沒有把這件事說成人話,也沒有給退路。
-// 整個任務還原會把執行階段做對的東西一起丟掉,所以要能「只收回修復回合」。
+// 修復弄壞語法時自動收回修復,不需要使用者按還原。
 
 import assert from 'assert';
 import { runApp, report } from '../app';
@@ -13,6 +8,11 @@ import { scriptedMember } from '../fixtures';
 
 async function main() {
   const r = await runApp({
+    git: true,
+    files: { 'a.js': 'module.exports = { ok: false };\n', 'mine.txt': 'committed\n' },
+    beforeLaunch: ({ workDir }) => {
+      require('fs').writeFileSync(require('path').join(workDir, 'mine.txt'), 'user edit\n');
+    },
     members: [
       scriptedMember({ id: 'lead', name: '主持人', plan: { summary: '修好 a.js', assignments: [{ agent: '執行者', task: '修好 a.js' }] },
         // 審查說有問題,才會進修復回合
@@ -36,19 +36,14 @@ async function main() {
       g.check(!!card && card.taskSummary, '有結果卡');
       g.check(card.taskSummary.repairBroke === true, `結果卡知道是修復把事情弄糟的(${JSON.stringify(card.taskSummary.verify)})`);
       g.check(/修復回合反而把東西改壞/.test(card.text), `說成人話,不是只說「驗證沒過」(${card.text.slice(0, 160)})`);
-
-      const undo = await g.waitFor(() => document.querySelector('.ts-revert.warn'), 8000, '結果卡上的「只收回修復回合」按鈕');
-      g.check(/只收回修復/.test(undo.textContent || ''), `按鈕說得清楚要做什麼(${undo.textContent})`);
+      g.check(card.taskSummary.rollback?.scope === 'repair' && card.taskSummary.rollback?.status === 'complete', '已自動收回修復回合');
+      g.check(card.taskSummary.verify === 'passed', '回退後重新驗證通過');
+      g.check(card.taskSummary.members[0].outcome === 'unresolved', '回退不是完成任務');
+      g.check(msgs.some((m: any) => m.tag === 'revert'), '自動回退寫入紀錄');
+      const notice = await g.waitFor(() => document.querySelector('.ts-rollback'), 8000, '結果卡的自動回退狀態');
+      g.check(/已自動收回修復/.test(notice.textContent || ''), '介面顯示已完成自動回退');
+      g.check(!document.querySelector('.ts-revert.warn'), '不再要求使用者重做修復回退');
       await g.shot('01-repair-broke');
-
-      // 按下去(confirm 要先擋掉),然後從 app 外面獨立確認檔案內容
-      (window as any).confirm = () => true;
-      (window as any).alert = () => {};
-      undo.click();
-      await g.waitFor(async () => {
-        const snap = await (window as any).api.snapshot();
-        return snap.messages.some((m: any) => m.tag === 'revert');
-      }, 15000, '還原完成的系統訊息');
       return { text: card.text.slice(0, 200) };
     },
   });
@@ -59,10 +54,11 @@ async function main() {
   const b = r.read('b.js');
   const kept = a === 'module.exports = { ok: true };\n';
   const keptNew = b === '// 執行階段新增的\n';
+  const keptUser = r.read('mine.txt') === 'user edit\n';
   console.log(kept ? '  ok - a.js 回到修復前的樣子' : `  失敗:a.js 是 ${JSON.stringify(a)}`);
   console.log(keptNew ? '  ok - 執行階段新增的 b.js 留著' : `  失敗:b.js 是 ${JSON.stringify(b)}`);
   r.cleanup();
-  assert.ok(ok && kept && keptNew, r.error || '情境失敗');
+  assert.ok(ok && kept && keptNew && keptUser, r.error || '情境失敗');
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; });
