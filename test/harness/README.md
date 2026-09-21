@@ -73,7 +73,7 @@ console.log(r.numstat()); // git 的說法
 ## 現成情境
 
 ```bash
-npm run harness:ui      # 全假成員,約 1 分鐘,結果固定,可進 CI。包含十三個情境:
+npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑。包含以下 16 個情境:
                         #   ui-states          設定壞掉時燈號與徽章有沒有說實話
                         #   i18n-en            英文介面下,主程序產生的錯誤是不是英文
                         #   waiting            長回合時有沒有顯示階段、經過時間與停滯警示
@@ -84,14 +84,18 @@ npm run harness:ui      # 全假成員,約 1 分鐘,結果固定,可進 CI。包
                         #   diff-without-git   工作目錄不是 git repo 時,檔案改動照樣列出紅綠對照(中英各一次)
                         #   task-summary       分工任務結束時的結果卡:每位成員的結論、改動的檔案、點檔名跳到檔案改動(中英各一次)
                         #   lineups            側欄的陣容:存下目前的組合、改過標出已修改、一鍵換回來、刪除(中英各一次)
-                        #   verify             自動驗證在真的 app 裡真的在檢查語法,而不是把檔案執行起來
                         #   terminal           內建終端面板:分頁是真的 pty,輸出與尺寸都對得上
                         #   env-fix            環境問題(CLI 沒裝、沒登入、本機模型沒跑)呈現成同一套可照做的下一步
+                        #   verify             語法檢查不執行檔案;壞成果自動回退,結果卡不誤報完成
+                        #   settings-save      設定寫入成功與失敗,介面都照實回報
+                        #   repair-broke       壞修復自動撤回,保留執行階段成果與使用者原有改動
+                        #   report-integrity   回報、稽核、磁碟與評測證據一致,回退不掩蓋失敗過程
+npm run harness:reports # 單獨跑證據保存回歸,不使用真實模型
 npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正在跑
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過
 ```
 
-### 評測(不是回歸測試)
+### 證據保存回歸
 
 `npm run harness:reports` 單獨驗證 A/B 評測的證據保存(也包含在 `harness:ui` /
 CI): 使用真正 Electron 與隔離目錄,但模型由本機固定回應端點代替,不花模型額度。
@@ -105,6 +109,8 @@ MB 的 UTF-8 劇本結果在 app 退出前完整傳回,以及劇本真正失敗�
 `npm run build && node --import tsx test/harness/scenarios/report-integrity.ts --transport-only`。
 這是保存流程的回歸測試,固定樣本的分數不是模型品質或產品成效的實驗結果。
 
+### 真實模型評測
+
 審查品質的評測在
 [`eval/`](../../eval/README.md):真的模型當審查者,跑一組固定題目,輸出分數。
 它用的就是這個
@@ -117,6 +123,7 @@ Ollama,**不要同時跑**,否則會互相拖慢、影響比較。
 
 ## 踩過的坑
 
+- **驗證不能因為回退而失真**。確認語法檢查沒有執行檔案時,把執行痕跡放在 harness 的隔離 `tmp` 裡、`workDir` 外;否則回退會把痕跡刪掉,造成假通過。
 - **劇本函式會被 esbuild 加上 `__name(...)`**。harness 的 prelude 補了一個等價的
   no-op,不必自己處理。
 - **大型結果不能 `console.log` 後立刻退出**。stdout 是非同步管線;真機重現過 1.6

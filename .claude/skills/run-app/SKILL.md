@@ -10,7 +10,8 @@ description: 啟動並驅動 AI Roundtable 這個 Electron app —— 要看某�
 ## 快速開始
 
 ```bash
-npm run harness:ui      # 燈號誠實度、英文介面、等待狀態(全假成員,約 30 秒)
+npm run harness:ui      # 完整介面與流程回歸(全假成員,通常數分鐘)
+npm run harness:reports # 回報與證據保存回歸(固定端點,不呼叫真模型)
 npm run harness:live    # 真的本機模型改檔案(需要 ollama serve,約 1~7 分鐘)
 npm run harness:login   # CLI 沒登入時的提示(需要裝有 claude 與 codex)
 ```
@@ -19,7 +20,7 @@ npm run harness:login   # CLI 沒登入時的提示(需要裝有 claude 與 code
 
 ## 關鍵事實
 
-- **必須先 `npm run build`**。harness 跑的是 `dist/`,不是原始碼。兩個 npm script 都已經包含 build。
+- **必須先 `npm run build`**。harness 跑的是 `dist/`,不是原始碼。上述 `harness:*` npm scripts 都已經包含 build;直接執行情境檔案時要自行先建置。
 - **一定要用隔離環境**。harness 已經處理:`userData` 與 `workDir` 都是拋棄式暫存目錄。
   絕對不要拿使用者真正的設定(`~/Library/Application Support/AI Roundtable/`)去跑測試。
 - **要用真實模型**就 `adapters: ['installed:ollama-api']`,只複製 adapter 設定,不複製 config。

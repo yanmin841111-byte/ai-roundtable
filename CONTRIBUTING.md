@@ -32,8 +32,10 @@ npm test
 | `npm test` | 用 `tsx` 直接跑 `test/*.test.ts`,不需要先建置 |
 | `npm run build` | `tsc` 編譯主程序、esbuild 打包介面、複製靜態檔到 `dist/` |
 | `npm run smoke:dist` | 確認 `dist/` 的 CommonJS 輸出可以正常載入 |
+| `npm run clean` | 只刪除可重建的 `dist/`,不動到設定、測試或評測證據 |
 | `npm run e2e` | 建置後啟動真正的 Electron app,用假成員跑完整圓桌、附件、@ 指定與歷史紀錄(`test/e2e/`),不需要安裝任何 CLI |
 | `npm run harness:ui` | 建置後逐一跑介面情境(`test/harness/scenarios/`),檢查燈號、徽章、審查結論、模型能力等畫面有沒有說實話,並留下截圖;全假成員,約 5~6 分鐘(情境愈加愈多),CI 也會跑 |
+| `npm run harness:reports` | 單獨驗證回報、工具稽核、回退後磁碟與保存證據的一致性;使用固定回應端點,不呼叫真實模型 |
 | `npm run eval` | 審查品質評測:真的模型當審查者跑一組固定題目,輸出分數(見 [eval/README.md](eval/README.md));要跑真的模型,不進 CI |
 
 開發時好用的環境變數與參數:
@@ -45,6 +47,14 @@ npm test
 | `AI_ROUNDTABLE_DEBUG=1` | 把介面的 console 訊息印到終端機 |
 | `AI_ROUNDTABLE_SHOT=<png>` | 啟動後截圖到指定檔案;搭配 `AI_ROUNDTABLE_SHOT_JS` 可先在介面執行一段 JS(例如塞入示範訊息) |
 | `AI_ROUNDTABLE_SHOTS_DIR` | `harness:ui` 的截圖存放位置(預設在系統暫存目錄的 `ai-roundtable-shots/`) |
+
+## 工作區整理
+
+- `dist/` 是建置產物,可用 `npm run clean` 清除;`npm start` 或 `npm run build` 會重建。
+- `release/` 是本機安裝檔輸出,不進版控。確認不再需要舊安裝檔後可刪除;`npm run dist` 會重新打包目前版本。
+- `node_modules/` 是開發所需相依套件,平常保留;需要重裝時使用 `npm ci`。
+- `.eval-local/`、`eval/results/` 與 `eval/EXPERIMENTS.md` 是證據、流水帳與實驗結論,不是可重建快取,不要當暫存清掉。
+- `.vscode/`、`.claude/settings.local.json` 是本機設定,清理前先確認用途。新的真機驗證情境放進 [test/harness/](test/harness/README.md),不要留一次性的根目錄或 `test/_live-*.ts` 腳本。
 
 ## 送 pull request
 

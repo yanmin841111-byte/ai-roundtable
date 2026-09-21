@@ -32,8 +32,10 @@ The code is TypeScript. `npm start` builds into `dist/` and then launches Electr
 | `npm test` | Run `test/*.test.ts` directly through `tsx`, no build needed |
 | `npm run build` | Compile the main process with `tsc`, bundle the interface with esbuild, copy static files to `dist/` |
 | `npm run smoke:dist` | Confirm the CommonJS output in `dist/` loads |
+| `npm run clean` | Remove only the rebuildable `dist/` output, leaving settings, tests and evaluation evidence intact |
 | `npm run e2e` | Build, then launch the real Electron app and run a full roundtable, attachments, @-mentions and history with fake members (`test/e2e/`); no CLI needs to be installed |
 | `npm run harness:ui` | Build, then run the interface scenarios (`test/harness/scenarios/`) to check that status lights, badges, review verdicts, model abilities and the like tell the truth, keeping screenshots; fake members only, about 5–6 minutes as scenarios accumulate, also run in CI |
+| `npm run harness:reports` | Check full reports, tool audits, post-rollback files and retained evidence with a deterministic endpoint, without real models |
 | `npm run eval` | Review-quality evaluation: a real model reviews a fixed set of tasks and gets a score (see [eval/README.en.md](eval/README.en.md)); needs a real model, not run in CI |
 
 Handy environment variables and flags during development:
@@ -45,6 +47,14 @@ Handy environment variables and flags during development:
 | `AI_ROUNDTABLE_DEBUG=1` | Print the interface's console messages to the terminal |
 | `AI_ROUNDTABLE_SHOT=<png>` | Take a screenshot after launch; with `AI_ROUNDTABLE_SHOT_JS` you can run a snippet of JS in the interface first (for example to insert demo messages) |
 | `AI_ROUNDTABLE_SHOTS_DIR` | Where `harness:ui` stores its screenshots (default: `ai-roundtable-shots/` in the system temp folder) |
+
+## Workspace housekeeping
+
+- `dist/` is generated output. Remove it with `npm run clean`; `npm start` or `npm run build` recreates it.
+- `release/` contains local installers and is not committed. Delete old installers once they are no longer needed; `npm run dist` packages the current version again.
+- `node_modules/` contains development dependencies and normally stays in place. Use `npm ci` when a reinstall is needed.
+- `.eval-local/`, `eval/results/` and `eval/EXPERIMENTS.md` hold evidence, journals and experimental conclusions, not rebuildable caches. Do not delete them as temporary files.
+- `.vscode/` and `.claude/settings.local.json` are local settings; check their purpose before cleanup. Add real-app verification scenarios to [test/harness/](test/harness/README.md) instead of leaving one-off scripts in the root or under `test/_live-*.ts`.
 
 ## Sending a pull request
 

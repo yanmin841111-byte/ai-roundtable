@@ -90,5 +90,6 @@
 - `secrets.json` 損壞時先備份原檔,不會被新的 key 覆寫。
 - 附件、歷史紀錄、擴充檔的路徑一律在主程序驗證。
 
-[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...HEAD
+[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...HEAD
+[0.2.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...481bb88
 [0.1.0]: https://github.com/yanmin841111-byte/ai-roundtable/releases/tag/v0.1.0

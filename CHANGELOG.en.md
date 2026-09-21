@@ -90,5 +90,6 @@ First release.
 - A corrupt `secrets.json` is backed up first instead of being overwritten by the next key.
 - Paths for attachments, history and extension files are always validated in the main process.
 
-[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...HEAD
+[0.2.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...481bb88
 [0.1.0]: https://github.com/yanmin841111-byte/ai-roundtable/releases/tag/v0.1.0

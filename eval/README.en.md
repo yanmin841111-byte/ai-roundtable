@@ -227,7 +227,10 @@ Run `npm run harness:reports` for real-app regression coverage: actual Electron
 with isolated settings and working directories, using a deterministic local
 endpoint for a perfect run and a repair that introduces a syntax error. It
 checks full reports, tool audits, verification results, evidence after cleanup,
-and linkage to offline scoring. Included in `harness:ui` / CI; no real models
+and linkage to offline scoring. The broken repair is rolled back to a syntax-valid
+but incomplete execute result: disk hashes match the retained execute audit,
+while the failed repair's audit and report remain. Rollback is not completion.
+Included in `harness:ui` / CI; no real models
 are called. It also checks intact delivery of a 1.6 MB UTF-8 result and a
 genuinely failing scenario, preventing truncated stdout from being mistaken for
 an incomplete app run.

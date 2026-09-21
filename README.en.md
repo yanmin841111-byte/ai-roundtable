@@ -33,7 +33,7 @@ A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI, 
 ## Requirements
 
 - macOS (other platforms are untested)
-- Node.js 20 or newer
+- Node.js 20.6.0 or newer (development and CI use Node.js 22)
 - At least one AI source:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex) or [Cursor CLI](https://cursor.com/cli) (`cursor-agent`), installed and logged in
   - or any other CLI / API through an extension
@@ -71,6 +71,8 @@ After you send a task, depending on the mode:
   6. A member flagged by the review, or by a failed verification, repairs the work once; the app verifies again and the original reviewer re-checks it. Anything still wrong goes into the summary.
   7. The lead summarizes.
 - **Discuss only, no execution**: after agreement or the round limit, the lead summarizes.
+
+In "Writing code" mode, divide and test-first runs attempt automatic rollback before the summary if built-in syntax checks still fail: only the repair round is undone when execution had no syntax errors; otherwise the task is restored to its starting point. A failed verify command alone does not trigger rollback. The result card shows post-rollback verification, and withdrawn work remains incomplete. Rollback uses bounded in-memory snapshots (256 KB per file, 20 MB total), not a complete backup. Missing baselines, incomplete restores, and a changed working-directory identity are reported; post-rollback verification is skipped when the directory cannot be trusted.
 
 When a message contains `@Name`, only the mentioned members reply (in parallel if there are several). If you mention someone while a task is running, they see the message on their next turn; if they do not get a turn before the task ends, they reply once at the end.
 
@@ -183,6 +185,7 @@ Everything is under `~/Library/Application Support/AI Roundtable/`; `sessions/` 
 | `adapters/templates/` | Extension templates shown under "+ Add" |
 | `docs/` | Extension guide and interface copy spec |
 | `test/` | Tests run by `npm test`; `test/e2e/` is the end-to-end run |
+| `test/harness/` | Isolated real-Electron checks and screenshots; see the [harness guide](test/harness/README.md) for scenarios and usage |
 | `eval/` | Review-quality evaluation and the solo-vs-roundtable experiment: real models on a fixed set of tasks; long runs resume from a journal |
 | `dist/` | Output of `npm run build`, which is what the app loads (not committed) |
 
