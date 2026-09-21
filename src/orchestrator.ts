@@ -1040,7 +1040,12 @@ class Orchestrator extends EventEmitter {
         '',
         this.text('prompt.fixNotes', { notes: it.notes.join('\n\n') }),
       ].filter((line): line is string => line !== null).join('\n');
-      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group, lockedPaths: this.lockedForFix })
+      // 修復回合一樣要給檔案工具,閘門與執行回合相同(能改檔 + 有人能審查)。
+      // 少了這一行的後果實測過:API 成員在修復回合只能「說」怎麼修——模型正確診斷出
+      // 註解裡的 */ 提前關閉了註解,把修好的整份程式貼在回覆裡,檔案卻一個字都沒變,
+      // 複查當然照樣不過。對 API 成員來說,修復回合等於從來沒有修過任何東西。
+      const fixTools = effectiveCanEdit(it.agent) && hasQualifiedReviewer(this.agents, it.agent.id);
+      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group, fileToolsEnabled: fixTools, lockedPaths: this.lockedForFix })
         .then(({ error, text, toolEvents }) => ({ item: it, error, text, toolEvents })));
     }
 

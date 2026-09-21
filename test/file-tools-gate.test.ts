@@ -101,9 +101,36 @@ test('成員不允許改檔時,即使有 reviewer 也不給工具', async () => 
   h.cleanup();
 });
 
+test('修復回合也要給寫入工具:少了它,API 成員只能「說」怎麼修', async () => {
+  // 實測過的失敗:模型在修復回合正確診斷出問題,把修好的整份程式貼在回覆裡,
+  // 檔案卻一個字都沒變,複查當然照樣不過。對 API 成員來說那等於從來沒有修過。
+  const h = fakeOrc(['甲', '乙'], {
+    scripts: { 甲: ['[AGREED]', plan(['A1']), '我改好了', '這次真的改了檔案'], 乙: ['[AGREED]', '第 5 行有語法錯誤,載不起來'] },
+  });
+  const done = h.idle();
+  await h.orc.userMessage('請改一下 src/a.ts', 'divide');
+  await done;
+  // 拿到工具的應該剛好兩次:執行回合與修復回合,而且都是被審查的那一位
+  const withTools = h.calls.filter((c) => c.fileToolsEnabled);
+  assert.strictEqual(withTools.length, 2, `執行與修復各一次才對(實際 ${withTools.length} 次:${withTools.map((c) => c.name).join('、')})`);
+  assert.deepStrictEqual(withTools.map((c) => c.name), ['甲', '甲']);
+  assert.ok(/【修復】/.test(withTools[1].prompt), '第二次拿到工具的應該是修復回合');
+  h.cleanup();
+});
+
+test('修復回合的閘門和執行回合一樣:沒有人能審查就不給工具', async () => {
+  // 只有一位成員時,審查由誰做都沒有,寫檔工具也不該在修復回合突然出現
+  const h = fakeOrc(['甲'], { scripts: { 甲: ['[AGREED]', plan(['A1']), '我改好了', '修好了'] } });
+  const done = h.idle();
+  await h.orc.userMessage('請改一下 src/a.ts', 'divide');
+  await done;
+  assert.strictEqual(h.calls.every((c) => !c.fileToolsEnabled), true, '沒有 reviewer 時任何回合都不給工具');
+  h.cleanup();
+});
+
 test('工具紀錄會寫成 tool-audit 訊息並讓審查者讀到', async () => {
   const h = fakeOrc(['甲', '乙'], {
-    scripts: { 甲: ['[AGREED]', plan(['A1']), '我改好了'], 乙: ['[AGREED]', '看過了,沒問題'] },
+    scripts: { 甲: ['[AGREED]', plan(['A1']), '我改好了'], 乙: ['[AGREED]', '看過了,沒問題\n[NO_ISSUES]'] },
     toolEvents: { 甲: [auditEvent()] },
   });
   const done = h.idle();
