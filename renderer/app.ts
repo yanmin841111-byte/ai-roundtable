@@ -1102,7 +1102,7 @@ function renderSidebar() {
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
         <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${healthBadge}${editBadge}${capabilityBadges(a)}</div>
-        <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort || t('agent.defaultEffort'))}</div>
+        <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort ? effortLabel(a.effort) : t('agent.defaultEffort'))}</div>
         ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
       </div>`;
     el.onclick = () => openModal(a.id);
@@ -1356,6 +1356,13 @@ async function testCapability(): Promise<void> {
   }
 }
 
+// 思考強度的選項在介面上要是人話:範本寫的是 none/low/high 這種值,
+// 不寫程式的人看不出 none 就是「不要思考」。沒有對應翻譯的自訂值就照原字顯示。
+function effortLabel(effort: string): string {
+  const text = t(`effort.${effort}`);
+  return text === `effort.${effort}` ? effort : text;
+}
+
 // 依目前選的模型更新說明文字與強度選單。effort 未給時沿用畫面上的選擇。
 function refreshModelDependents(effort?: string): void {
   const cli = $<HTMLSelectElement>('#f-cli').value;
@@ -1389,7 +1396,7 @@ function fillEfforts(cli: string, info: Model | null, wanted: string): void {
     ? `<option value="">${escapeHtml(t('agent.effortUnsupported'))}</option>`
     : efforts.length === 0
       ? `<option value="">${escapeHtml(t('agent.effortNone'))}</option>`
-      : `<option value="">${escapeHtml(info && info.defaultEffort ? t('agent.effortDefaultOf', { effort: info.defaultEffort }) : t('agent.effortDefault'))}</option>` + efforts.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
+      : `<option value="">${escapeHtml(info && info.defaultEffort ? t('agent.effortDefaultOf', { effort: effortLabel(info.defaultEffort) }) : t('agent.effortDefault'))}</option>` + efforts.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(effortLabel(e))}</option>`).join('');
   // 換模型時保留原本的強度;新模型不支援就降到最接近的等級,跟實際執行時的規則一致。
   const resolved = restricted ? ModelRules.resolveEffort([info!], info!.id, wanted).effort : wanted;
   eff.value = resolved && efforts.includes(resolved) ? resolved : '';

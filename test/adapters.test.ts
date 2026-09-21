@@ -214,6 +214,25 @@ function startMockApi(): Promise<any> {
   return new Promise((resolve: any) => server.listen(0, '127.0.0.1', () => resolve({ server, requests, base: `http://127.0.0.1:${server.address().port}/v1` })));
 }
 
+t('API:思考強度——沒選時走範本預設,選了就照選的送(Ollama 範本靠這個開關思考)', async () => {
+  const { server, requests, base } = await startMockApi();
+  try {
+    const spec = {
+      id: 'ollama', type: 'openai', baseUrl: base, models: ['qwen3.8:27b-mlx'],
+      efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'medium',
+      body: { reasoning_effort: 'medium' }, effortBody: { reasoning_effort: '{effort}' },
+    };
+    const adapter = createOpenAIAdapter(spec as any);
+    const run = (effort: string) => adapter.run({ name: 'Q', model: 'qwen3.8:27b-mlx', effort, canEdit: false }, makeCtx().ctx);
+    await run('');
+    assert.strictEqual(requests.at(-1).body.reasoning_effort, 'medium', '沒選的話用範本預設(思考開著)');
+    await run('none');
+    assert.strictEqual(requests.at(-1).body.reasoning_effort, 'none', '選「不思考」要真的送 none,否則介面上的選擇是假的');
+    await run('high');
+    assert.strictEqual(requests.at(-1).body.reasoning_effort, 'high');
+  } finally { server.close(); }
+});
+
 t('API:串流文字與思考、usage、金鑰、額外 header 與 body、強度參數、續接歷史', async () => {
   const { server, requests, base } = await startMockApi();
   try {

@@ -351,6 +351,8 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .model-desc { font-size: 12px; color: var(--muted); margin: -4px 0 12px; line-height: 1.5; }
 .model-desc:empty { display: none; }
 .field-note { font-size: 11.5px; color: var(--muted); margin-left: 22px; }
+/* 欄位底下的一句說明(例如思考強度在換什麼) */
+.field-hint { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 
 /* ---------- 設定 ---------- */
 .settings-card { width: 900px; height: min(640px, 88vh); display: grid; grid-template-columns: 196px 1fr; }

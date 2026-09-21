@@ -2,19 +2,26 @@
   "id": "ollama",
   "label": "Ollama(本機模型)",
   "type": "openai",
-  "description": "本機 Ollama 的 OpenAI 相容端點,不需要 API key。先執行 ollama pull qwen3.8:27b-mlx 與 ollama serve;模型清單會自動列出已下載模型。Qwen3.8 27B MLX 約 18GB,建議至少 32GB 記憶體。範本預設關閉思考模式;受限檔案工具只會在有另一位 reviewer 的分工流程中啟用。",
+  "description": "本機 Ollama 的 OpenAI 相容端點,不需要 API key。先執行 ollama pull qwen3.8:27b-mlx 與 ollama serve;模型清單會自動列出已下載模型。Qwen3.8 27B MLX 約 18GB,建議至少 32GB 記憶體。預設開啟思考模式(品質較好、速度較慢);機器吃力時把成員的思考強度改成「none」即可關閉。受限檔案工具只會在有另一位 reviewer 的分工流程中啟用。",
   "baseUrl": "http://localhost:11434/v1",
   "models": "auto",
   "defaultModel": "qwen3.8:27b-mlx",
-  "efforts": [],
+  "efforts": [
+    "none",
+    "low",
+    "medium",
+    "high"
+  ],
   "timeoutMs": 1200000,
   "maxHistoryMessages": 16,
   "unreachableHint": "請先執行 ollama serve",
   "fixCommand": "ollama serve",
   "body": {
-    "reasoning_effort": "none"
+    "reasoning_effort": "medium"
   },
-  "effortBody": {},
+  "effortBody": {
+    "reasoning_effort": "{effort}"
+  },
   "streamUsage": false,
   "supportsEdit": true,
   "fileTools": {
@@ -26,5 +33,6 @@
       "imageInline"
     ],
     "attachmentsNeedCwd": false
-  }
+  },
+  "defaultEffort": "medium"
 }

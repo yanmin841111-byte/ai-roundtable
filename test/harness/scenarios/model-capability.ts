@@ -44,6 +44,9 @@ async function once(locale: 'zh-Hant' | 'en') {
   fs.writeFileSync(file, JSON.stringify({
     id: 'fakelocal', type: 'openai', label: zh ? '測試端點' : 'Test endpoint', baseUrl: `http://127.0.0.1:${ep.port}/v1`,
     models: 'auto', stream: false, supportsEdit: true, fileTools: { enabled: true },
+    // 思考強度:範本宣告選項,介面就要把它變成看得懂的選單(不寫程式的人也調得動)
+    efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'medium',
+    body: { reasoning_effort: 'medium' }, effortBody: { reasoning_effort: '{effort}' },
     capabilities: { attachments: ['textInline', 'imageInline'] },
   }));
   const r = await runApp({
@@ -75,6 +78,21 @@ async function once(locale: 'zh-Hant' | 'en') {
       g.check(wrap.offsetHeight > 0, '編輯視窗顯示模型能力列');
       g.check(new RegExp(H.zh ? '不能呼叫工具 · 可以看圖 \\| 來源:Ollama 回報 \\| 這位成員不能改檔' : 'cannot call tools · can see images \\| Source: reported by Ollama \\| This member cannot edit files').test(capText()), `能力列寫出能力、來源與影響(${capText()})`);
       g.check((document.querySelector('#f-cap-effect') as HTMLElement).offsetHeight > 0, '不能呼叫工具的影響要看得到');
+
+      // 思考強度:選單看得懂,而且改了會存進設定(以前是寫死在範本裡,只有會改 JSON 的人調得動)
+      const effortSel = document.querySelector('#f-effort') as HTMLSelectElement;
+      g.check(!effortSel.disabled, '思考強度選得動');
+      const labels = Array.from(effortSel.options).map((o) => o.textContent || '');
+      g.check(labels.some((l) => new RegExp(H.zh ? '不思考' : 'No thinking').test(l)), `選單裡的 none 講的是人話(${labels.join(' / ')})`);
+      g.check(!labels.some((l) => /^(none|low|medium|high)$/.test(l.trim())), `沒有原始值直接露出來(${labels.join(' / ')})`);
+      effortSel.value = 'none';
+      effortSel.dispatchEvent(new Event('change'));
+      (document.querySelector('#modal-save') as HTMLButtonElement).click();
+      await g.w(400);
+      const savedCfg = await (window as any).api.getConfig();
+      g.check(savedCfg.agents.find((a: any) => a.id === 'g').effort === 'none', `改完存進設定(${savedCfg.agents.find((a: any) => a.id === 'g').effort})`);
+      card('g').click();
+      await g.waitFor(() => /Ollama|reported/.test(capText()), 10000);
       await g.shot(`editor-${H.zh ? 'zh' : 'en'}`);
 
       // 按「測試」:實際送請求
