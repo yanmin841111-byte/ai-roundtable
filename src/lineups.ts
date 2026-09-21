@@ -6,7 +6,7 @@ import type { AppConfig, Lineup } from './ipc-types';
 
 export const LINEUPS_MAX = 30;
 export const LINEUP_NAME_MAX = 40;
-const MODES = new Set(['divide', 'discuss']);
+const MODES = new Set(['divide', 'tdd', 'discuss']);
 const ROUNDS_MIN = 1;
 const ROUNDS_MAX = 10; // 與設定視窗「最大討論回合」的上限一致
 
@@ -27,6 +27,7 @@ export function lineupFromConfig(config: AppConfig, name: string, id: string): L
     leadAgentId: effectiveLead(config),
     mode: MODES.has(config.settings.mode) ? config.settings.mode : 'divide',
     maxRounds: clampRounds(config.settings.maxRounds),
+    workStyle: config.settings.workStyle === 'general' ? 'general' : 'code',
   };
 }
 
@@ -51,7 +52,7 @@ export function applyLineup(config: AppConfig, lineup: Lineup): LineupApplied | 
     config: {
       ...config,
       agents,
-      settings: { ...config.settings, leadAgentId: lead, mode: lineup.mode, maxRounds: lineup.maxRounds, activeLineupId: lineup.id },
+      settings: { ...config.settings, leadAgentId: lead, mode: lineup.mode, maxRounds: lineup.maxRounds, workStyle: lineup.workStyle === 'general' ? 'general' : 'code', activeLineupId: lineup.id },
     },
     missing: lineup.members.length - present.length,
   };
@@ -68,8 +69,10 @@ export function lineupMatches(config: AppConfig, lineup: Lineup): boolean {
     if (a.enabled === false || (a.persona || '') !== m.persona) return false;
   }
   const lead = existing.some((m) => m.id === lineup.leadAgentId) ? lineup.leadAgentId : existing[0].id;
+  const style = (v: unknown) => (v === 'general' ? 'general' : 'code');
   return effectiveLead(config) === lead
     && config.settings.mode === lineup.mode
+    && style(config.settings.workStyle) === style(lineup.workStyle)
     && clampRounds(config.settings.maxRounds) === lineup.maxRounds;
 }
 
@@ -95,6 +98,7 @@ export function sanitizeLineups(raw: unknown): Lineup[] {
       leadAgentId: typeof l.leadAgentId === 'string' && members.some((m: { id: string }) => m.id === l.leadAgentId) ? l.leadAgentId : null,
       mode: MODES.has(l.mode) ? l.mode : 'divide',
       maxRounds: clampRounds(l.maxRounds),
+      workStyle: l.workStyle === 'general' ? 'general' : 'code',
     });
     if (out.length >= LINEUPS_MAX) break;
   }

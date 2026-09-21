@@ -51,6 +51,18 @@ test('陣容裡有成員已刪除:略過並回報;全被刪掉時不套用;主�
   assert.strictEqual(L.applyLineup(c, { id: 'L', name: 'x', members: [{ id: 'gone', persona: '' }], leadAgentId: null, mode: 'divide', maxRounds: 3 }), null);
 });
 
+test('工作模式也是陣容的一部分:存下來、套用時換過去、改了就不相符', () => {
+  const c = config([agent('a')], { workStyle: 'general' });
+  const l = L.lineupFromConfig(c, '文件組', 'L');
+  assert.strictEqual(l.workStyle, 'general');
+  const applied = L.applyLineup(config([agent('a')], { workStyle: 'code' }), l);
+  assert.strictEqual(applied.config.settings.workStyle, 'general');
+  assert.ok(L.lineupMatches(c, l));
+  assert.strictEqual(L.lineupMatches(config([agent('a')], { workStyle: 'code' }), l), false);
+  // 舊的陣容沒有這個欄位:視為寫程式(改這個功能之前的預設行為)
+  assert.ok(L.lineupMatches(config([agent('a')]), { ...l, workStyle: undefined }));
+});
+
 test('套用後又改了誰上場、角色、主持人、流程或回合數:不再相符', () => {
   const base = config([agent('a'), agent('b'), agent('c', { enabled: false })], { leadAgentId: 'a' });
   const lineup = L.lineupFromConfig(base, 'x', 'L');
@@ -78,7 +90,7 @@ test('設定檔裡的陣容:形狀不對整筆丟掉,欄位不對補預設值,�
     { id: 'nomembers', name: 'n', members: [] },
     null, 'x', { name: 'no id', members: [{ id: 'a' }] },
   ]);
-  assert.deepStrictEqual(out, [{ id: 'ok', name: '好的', members: [{ id: 'a', persona: 'p' }, { id: 'b', persona: '' }], leadAgentId: null, mode: 'divide', maxRounds: 10 }]);
+  assert.deepStrictEqual(out, [{ id: 'ok', name: '好的', members: [{ id: 'a', persona: 'p' }, { id: 'b', persona: '' }], leadAgentId: null, mode: 'divide', maxRounds: 10, workStyle: 'code' }]);
   assert.deepStrictEqual(L.sanitizeLineups('nope'), []);
   assert.strictEqual(L.sanitizeLineups(Array.from({ length: 50 }, (_, i) => ({ id: `l${i}`, name: `n${i}`, members: [{ id: 'a' }] }))).length, L.LINEUPS_MAX);
 });

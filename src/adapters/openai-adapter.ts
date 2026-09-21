@@ -333,7 +333,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     const toolsEnabled = writeTools || readTools;
     let fileTools: FileToolSession | null = null;
     if (toolsEnabled) {
-      try { fileTools = new FileToolSession(ctx.cwd, { readOnly: !writeTools, locale: ctx.locale || locale() }); }
+      try { fileTools = new FileToolSession(ctx.cwd, { readOnly: !writeTools, locale: ctx.locale || locale(), locked: ctx.lockedPaths || [] }); }
       catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: tx(ctx.locale || locale(), 'api.fileToolsFailed', { error: e.message }), toolEvents: [] }; }
     }
     const deadline = Date.now() + timeoutMs;

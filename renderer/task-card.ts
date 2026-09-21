@@ -2,6 +2,7 @@
 import { t, joinNames } from './i18n';
 import { fmt, initials } from './util';
 import { openDiff } from './diff-view';
+import { revertTask } from './revert';
 import type { TaskSummary } from './api';
 
 // 誰做完了、審查結論、改了哪些檔案、花了多少時間與 token:原本散在整條對話裡,任務結束時整理成一張卡。
@@ -92,6 +93,13 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
     v.title = t(`task.verifyTitle.${s.verify}`);
     titleRow.appendChild(v);
   }
+  if (s.testsTouched) {
+    const w = document.createElement('span');
+    w.className = 'ts-verify tests';
+    w.textContent = t('task.testsTouched');
+    w.title = t('task.testsTouchedTitle');
+    titleRow.appendChild(w);
+  }
   const metrics = document.createElement('div');
   metrics.className = 'ts-metrics';
   metrics.appendChild(metric(t('task.metric.duration'), durationText(s.endedAt - s.startedAt), t('task.durationTitle')));
@@ -152,12 +160,22 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
   filesHead.className = 'ts-files-head';
   filesHead.appendChild(sectionLabel(total ? t('task.files', { n: total }) : t('task.noFiles')));
   if (total) {
+    const actions = document.createElement('div');
+    actions.className = 'ts-file-actions';
+    // 停損:成員卡住或改壞時的退路。破壞性操作,按下去會先問一次
+    const revert = document.createElement('button');
+    revert.type = 'button';
+    revert.className = 'ts-revert';
+    revert.textContent = t('task.revert');
+    revert.title = t('task.revertTitle');
+    revert.onclick = () => { void revertTask(revert); };
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'ts-open';
     open.textContent = t('diff.open');
     open.onclick = () => { void openDiff(); };
-    filesHead.appendChild(open);
+    actions.append(revert, open);
+    filesHead.appendChild(actions);
   }
   body.appendChild(filesHead);
   if (total) {

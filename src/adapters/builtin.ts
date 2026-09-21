@@ -54,16 +54,27 @@ function reportRunNote(ctx: RunContext, run: { note?: string | null }) {
 }
 
 // ---------- Claude Code ----------
-async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
+// claude 的參數。抽出來是為了能對照「真的 CLI 支不支援」:曾經有一個不存在的 --restricted
+// 混進唯讀那條路,假 CLI 什麼都收,所以測試全綠,實際上每個唯讀的 Claude 成員都失敗。
+// 見 test/cli-flags.test.ts。
+export function claudeArgs(agent: Pick<AgentConfig, 'canEdit' | 'model' | 'effort'>, ctx: { sessionId?: string | null; systemPrompt?: string }, run: { model?: string | null; effort?: string | null } = {}): string[] {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
-  const run = resolveRunOptions('claude', agent.model, agent.effort);
   if (run.model) args.push('--model', run.model);
   if (run.effort) args.push('--effort', run.effort);
-  reportRunNote(ctx, run);
   if (ctx.sessionId) args.push('--resume', ctx.sessionId);
   if (ctx.systemPrompt) args.push('--append-system-prompt', ctx.systemPrompt);
   if (agent.canEdit) args.push('--dangerously-skip-permissions');
-  else args.push('--permission-mode', 'dontAsk', '--restricted');
+  // 唯讀成員只給 --permission-mode dontAsk。實測(claude 2.1.220):這個模式被要求建立或
+  // 修改檔案時會拒絕並要求明確授權,已經夠了。以前還多傳一個 --restricted,但那個參數在
+  // 現行版本根本不存在,CLI 直接以「unknown option」結束——唯讀的 Claude 成員因此每次都失敗。
+  else args.push('--permission-mode', 'dontAsk');
+  return args;
+}
+
+async function runClaude(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
+  const run = resolveRunOptions('claude', agent.model, agent.effort);
+  reportRunNote(ctx, run);
+  const args = claudeArgs(agent, ctx, run);
 
   let text = '';
   let thinking = '';

@@ -17,6 +17,11 @@ export interface TurnOptions {
   // instruction 裡只有這一回合需要的一段(審查時附上的檔案內容)。會照常送出,
   // 但 API 成員存對話記憶時換成一行說明,否則之後每回合都會重送這幾萬字。
   ephemeral?: string;
+  // 這一回合不可以寫入的檔案(相對工作目錄):修復回合的既有測試檔
+  lockedPaths?: string[];
+  // 乾淨 context:不送對話紀錄,也不續接這位成員自己的 session。
+  // 審查回合用它,讓審查者只看需求與實際改動,不被執行者的說法帶著走。
+  freshContext?: boolean;
   // 交叉審查回合:寫進訊息,回合結束時補上結論
   review?: ReviewInfo;
 }
@@ -79,6 +84,8 @@ export interface Issue {
 export interface FixFailure {
   item: Issue;
   error: string | null;
+  // 修復回合的檔案操作(寫進稽核用)
+  toolEvents?: ToolAuditEntry[];
 }
 
 export interface FixOutcome {
@@ -89,8 +96,11 @@ export interface FixOutcome {
   repaired?: Array<{ item: Issue; report: string }>;
   // 修復後的複查
   rereviews?: Review[];
-  // 修復後重跑的自動驗證(形狀見 src/verify.ts 的 VerifyResult)
-  verify?: { syntax: Array<{ file: string; error: string }>; command?: { ok: boolean; code: number | null; output: string; timedOut: boolean }; checked: number; ran: boolean; ok: boolean };
+  // 修復回合之後(含修復本身)動到的既有測試檔
+  testsTouched?: string[];
+  // 修復後重跑的自動驗證(形狀見 src/verify.ts 的 VerifyResult)。
+  // 這裡用 unknown:types.ts 不 import verify(會變成循環相依),實際型別由 orchestrator 處理
+  verify?: unknown;
 }
 
 export interface SummaryInput extends Partial<FixOutcome> {

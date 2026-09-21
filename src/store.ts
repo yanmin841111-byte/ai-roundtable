@@ -43,6 +43,8 @@ function defaultConfig(): AppConfig {
       maxTranscriptChars: 60000,
       // 自動驗證指令:預設空的(只做內建語法檢查)。設了就在執行與修復後跑,結果交給審查與修復
       verifyCommand: '',
+      // 工作模式:預設寫程式(這是目前最常見的用法);一般任務不做語法檢查與測試鎖
+      workStyle: 'code',
     },
   };
 }

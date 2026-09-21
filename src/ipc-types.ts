@@ -22,6 +22,7 @@ export const IPC_CHANNELS = {
   chatAnswer: 'chat:answer',
   chatRetry: 'chat:retry',
   diffChanges: 'diff:changes',
+  taskRevert: 'task:revert',
   ollamaQuickSetup: 'ollama:quickSetup',
   chatMessage: 'chat:message',
   chatState: 'chat:state',
@@ -94,6 +95,8 @@ export type PhaseCode =
   | 'discuss'
   | 'divide'
   | 'execute'
+  // 測試先行流程:先把驗收條件寫成測試
+  | 'tests'
   | 'review'
   | 'repair'
   | 'summary'
@@ -143,6 +146,8 @@ export interface AppSettings {
   activeLineupId?: string | null;
   // 自動驗證指令(在工作目錄執行,例如 npm test)。空字串代表只做內建的語法檢查
   verifyCommand?: string;
+  // 工作模式:'code' 是寫程式(自動驗證、測試鎖都生效),'general' 是一般任務(文件、分析、腦力激盪)
+  workStyle?: 'general' | 'code';
   // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度
   terminalWidth?: number;
 }
@@ -155,6 +160,8 @@ export interface Lineup {
   leadAgentId: string | null;
   mode: string;
   maxRounds: number;
+  // 工作模式(寫程式 / 一般任務):和流程一樣屬於「這桌怎麼開」
+  workStyle?: 'general' | 'code';
 }
 
 export interface AppConfig {
@@ -376,6 +383,20 @@ export interface TaskSummary {
   usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
   // app 自己跑的自動驗證(語法檢查與驗證指令):passed 通過、failed 沒過、none 沒有東西可驗
   verify?: 'passed' | 'failed' | 'none';
+  // 這次動到了任務開始前就存在的測試檔:「測試通過」要打折扣看
+  testsTouched?: boolean;
+}
+
+// 還原這次任務的改動之後:做了什麼、哪些還原不了
+export interface RevertOutcome {
+  ok: boolean;
+  // 沒有基準點(還沒跑過任務、或工作目錄太大沒記下內容)、或任務進行中
+  reason?: 'no-baseline' | 'running' | 'failed';
+  restored: number;
+  deleted: number;
+  // 基準點當時太大沒留內容,還原不了的檔案
+  skipped: string[];
+  failed: Array<{ file: string; error: string }>;
 }
 
 // 審查者怎麼看到改動
@@ -650,6 +671,7 @@ export interface IpcContract {
   'chat:answer': { args: [answer: QuestionAnswer]; result: void };
   'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
   'diff:changes': { args: []; result: DiffResult };
+  'task:revert': { args: []; result: RevertOutcome };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
   'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
@@ -720,6 +742,7 @@ export interface RendererApi {
   retry(messageId: string): Promise<{ ok: boolean; error?: string }>;
   // 工作目錄目前的檔案改動;唯讀,不提供套用或還原
   getDiff(): Promise<DiffResult>;
+  revertTask(): Promise<RevertOutcome>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
   quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
   modelCapability(payload: { adapterId: string; model: string; live?: boolean }): Promise<ModelCapability | null>;

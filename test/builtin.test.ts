@@ -120,11 +120,11 @@ t('Claude:可改檔案時的參數、模型別名解析、系統提示、stdin',
   assert.strictEqual(log.activities.some((a: any) => a.id === 'run-options'), false, '模型與強度都合法時不該有調整註記');
 });
 
-t('Claude:唯讀成員用 dontAsk + restricted;續接時帶 --resume', async () => {
+t('Claude:唯讀成員用 dontAsk;續接時帶 --resume', async () => {
   const { ctx } = makeCtx({ sessionId: 'prev-1', systemPrompt: '' });
   await withEnv({ FAKE_LOG: logFile }, () => claude.run({ model: '', effort: '', canEdit: false }, ctx));
   const { args } = readLog();
-  assert.deepStrictEqual(args.slice(-3), ['--permission-mode', 'dontAsk', '--restricted']);
+  assert.deepStrictEqual(args.slice(-2), ['--permission-mode', 'dontAsk']);
   assert.strictEqual(args[args.indexOf('--resume') + 1], 'prev-1');
   assert.ok(!args.includes('--model') && !args.includes('--effort') && !args.includes('--append-system-prompt'));
 });

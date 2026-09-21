@@ -340,6 +340,9 @@ app.whenReady().then(async () => {
   // 工作目錄目前的檔案改動。唯讀:不碰使用者的版本控制狀態,全程非同步(同步跑會凍結整個視窗)。
   // 是 git repo 就相對上一次 commit;不是的話,相對最近一次任務開始前記下的內容
   handle('diff:changes', () => workdirChanges(store.get().settings.workDir, orchestrator.taskBaseline));
+  // 還原這次任務的改動:回到任務開始前的樣子。破壞性操作,介面一定要先問過使用者。
+  // 任務進行中不給還原——成員還在寫檔,還原只會做出一個誰都沒看過的中間狀態。
+  handle('task:revert', () => orchestrator.revertTask());
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
   handle('ollama:quickSetup', async (payload) => {

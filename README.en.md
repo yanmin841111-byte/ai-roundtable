@@ -13,7 +13,11 @@ A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI, 
 - **Several AIs at one table**: Claude Code, Codex CLI and Cursor CLI are built in; Grok, Kimi, DeepSeek, Gemini, OpenRouter, Ollama and more can be added from templates in one click.
 - **Extensible**: describe any CLI or OpenAI-compatible API in JSON, or write a JS plugin; edit and reload extensions inside the app.
 - **Per-member settings**: role and personality, model, reasoning effort, and whether the member may edit files.
-- **Lineups**: save who takes part, their roles, the lead and the flow, and switch back with one click.
+- **Lineups**: save who takes part, their roles, the lead, the flow and the work mode, and switch back with one click.
+- **Work mode**: "Writing code" verifies the changes automatically and locks existing tests; "General task" (documents, analysis, brainstorming) skips both.
+- **Test-first flow**: turn the acceptance criteria into tests, lock them, then implement until they pass.
+- **Project conventions**: `CLAUDE.md` or `AGENTS.md` in the working directory goes into every member's system prompt.
+- **A way out**: when a member gets stuck or breaks things, revert the working directory to how it was before the task, in one click.
 - **Discuss → divide → execute in parallel → cross-review → summarize**, streamed live, including tool calls and thinking.
 - **Interject any time**: messages sent while a task runs are shown to the next member to speak.
 - **@-mention a member**: type `@Name` so only that member replies or acts, skipping the discussion flow; several members at once run in parallel.
@@ -57,12 +61,13 @@ The output is `release/AI Roundtable-<version>-arm64.dmg` (Apple Silicon) and `-
 
 After you send a task, depending on the mode:
 
+- **Discuss → Write tests → Implement → Cross-review**: the same as the flow below with one step added after the division of work: each member first turns its own acceptance criteria into tests. Those tests are locked during implementation, so the only way to make them pass is to change the implementation.
 - **Discuss → Divide & execute → Cross-review**
   1. Members speak in turn, each seeing everything said before. A member who thinks there is agreement ends its reply with `[AGREED]`; when everyone agrees in the same round the work is divided, otherwise division is forced once "Max discussion rounds" is reached.
   2. The lead outputs a JSON work plan, keeping each member on different files where possible.
   3. All members execute their part **in parallel** in the working directory.
-  4. **The app verifies the work itself**: changed `.js` and `.json` files are syntax-checked so they can be loaded, and if a "verify command" is set (for example `npm test`) it runs in the working directory. No model is involved in this step.
-  5. Each member reviews the next member's work (it actually opens the files and checks each requirement of the task) and sees the verification result from the previous step. A member whose execution stopped partway but already changed files is reviewed too.
+  4. **The app verifies the work itself** (only in "Writing code" mode): changed `.js` and `.json` files are syntax-checked so they can be loaded, and if a "verify command" is set (for example `npm test`) it runs in the working directory. No model is involved in this step. Test files that existed before the task are locked during the repair round, so tests pass by changing the implementation, not the tests.
+  5. Each member reviews the next member's work. Reviews run with a **clean context**: only the requirements, the other member's report, the actual changes and the verification result — not the discussion or the execution, so the reviewer is not led by what the other member said. A member whose execution stopped partway but already changed files is reviewed too.
   6. A member flagged by the review, or by a failed verification, repairs the work once; the app verifies again and the original reviewer re-checks it. Anything still wrong goes into the summary.
   7. The lead summarizes.
 - **Discuss only, no execution**: after agreement or the round limit, the lead summarizes.
@@ -85,6 +90,8 @@ Click a member card in the sidebar to edit it:
 | Custom command | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -` |
 
 The lead is chosen in Settings and is responsible for dividing the work and summarizing.
+
+**Project conventions**: `CLAUDE.md` or `AGENTS.md` in the working directory (the first one found) is added to every member's system prompt, so you do not have to restate the project's conventions every time. Long files are truncated, and the conversation says so.
 
 **Lineups**: the "Lineups" button next to Members saves the current setup: which members take part, their roles and personalities, the lead, the flow and the number of discussion rounds. One click switches back: the lineup's members are enabled with the roles saved in it, and the others are paused. A lineup only remembers which members it includes; it never changes their CLI, model or keys. When the setup changes after a lineup is applied, the button marks it "modified" so you can update the lineup or save a new one.
 

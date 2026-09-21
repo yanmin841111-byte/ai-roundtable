@@ -86,6 +86,7 @@ async function init() {
       config.settings = next.settings;
       config.lineups = next.lineups;
       $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
+      $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
       window.api.saveConfig(config);
       renderSidebar();
     },
@@ -219,7 +220,13 @@ async function init() {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveExtension(); }
   });
   $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
+  $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
   $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; window.api.saveConfig(config); renderLineupButton(); };
+  $<HTMLSelectElement>('#work-style').onchange = () => {
+    config.settings.workStyle = $<HTMLSelectElement>('#work-style').value === 'general' ? 'general' : 'code';
+    window.api.saveConfig(config);
+    updateComposerHint();
+  };
 }
 
 // ---------- 設定視窗 ----------
@@ -1064,7 +1071,7 @@ function renderSidebar() {
   $<HTMLInputElement>('#language').value = config.settings.language || '繁體中文';
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
-  $<HTMLInputElement>('#verify-command').value = config.settings.verifyCommand || '';
+  $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
   const workDir = config.settings.workDir || '';
   $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
   $<HTMLButtonElement>('#workdir-chip').title = t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
@@ -1080,7 +1087,7 @@ function saveSettings() {
   config.settings.language = $<HTMLInputElement>('#language').value.trim() || '繁體中文';
   config.settings.leadAgentId = $<HTMLSelectElement>('#lead-agent').value || null;
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
-  config.settings.verifyCommand = $<HTMLInputElement>('#verify-command').value.trim();
+  config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   $<HTMLSelectElement>('#mode').value = config.settings.mode;
@@ -1731,12 +1738,12 @@ function placeMessage(el: HTMLElement, m: ChatMessage): { node: HTMLElement; isN
 // PhaseCode -> 時間軸分組。divide/execute 併成「分工執行」,review/repair/summary 併成「交叉審查」。
 const STAGE_OF_CODE: Record<string, string> = {
   direct: 'direct', discuss: 'discuss',
-  divide: 'execute', execute: 'execute',
+  divide: 'execute', tests: 'execute', execute: 'execute',
   review: 'review', repair: 'review', summary: 'review',
 };
 
 // 顯示文字一律在 renderer 這側依介面語言組出。
-const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'ask', 'divide', 'execute', 'review', 'repair', 'summary']);
+const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'ask', 'divide', 'tests', 'execute', 'review', 'repair', 'summary']);
 
 function phaseText(phase: PhaseValue | undefined | null): string {
   if (!phase) return '';

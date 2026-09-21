@@ -25,6 +25,7 @@ const api: RendererApi = {
   answerQuestion: (answer) => invoke('chat:answer', answer),
   retry: (messageId) => invoke('chat:retry', messageId),
   getDiff: () => invoke('diff:changes'),
+  revertTask: () => invoke('task:revert'),
   quickSetupOllama: (model) => invoke('ollama:quickSetup', model ? { model } : {}),
   modelCapability: (payload) => invoke('model:capability', payload),
   reset: () => invoke('chat:reset'),

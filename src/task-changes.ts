@@ -206,3 +206,53 @@ export function unifiedLines(a: string[], b: string[]): { added: number; removed
   }
   return { added, removed, lines, ...(truncated ? { truncated } : {}) };
 }
+
+// 還原這次任務的改動:把工作目錄回到任務開始前的樣子。
+//
+// 為什麼需要:評測裡一再出現「成員卡住、留下改壞的檔案,流程照樣收尾」,爛攤子留在使用者的
+// 工作目錄裡。與其讓人一個一個檔案復原,不如給一條乾淨的退路——這也是 harness 常見的停損:
+// 修不好就回到基準點重來,通常比繼續補快,而且乾淨。
+//
+// 只碰得到基準點認得的檔案:
+//   - 基準點有內容的檔案:寫回原本的內容
+//   - 任務開始後才出現的檔案:刪掉
+//   - 基準點當時就太大而沒有留內容的檔案:不動,並在結果裡列出來(不能假裝還原了)
+export interface RevertResult {
+  restored: string[];
+  deleted: string[];
+  // 沒有留下內容、無法還原的檔案(基準點超過大小上限時)
+  skipped: string[];
+  failed: Array<{ file: string; error: string }>;
+}
+
+export async function revertToBaseline(baseline: TaskBaseline): Promise<RevertResult> {
+  const out: RevertResult = { restored: [], deleted: [], skipped: [], failed: [] };
+  const now = await snapshotDir(baseline.cwd);
+  const inside = (rel: string) => {
+    const full = path.resolve(baseline.cwd, rel);
+    return full === baseline.cwd || full.startsWith(baseline.cwd + path.sep) ? full : null;
+  };
+  // 任務開始後才出現的檔案:刪掉
+  for (const rel of now ? now.keys() : []) {
+    if (baseline.snapshot.has(rel)) continue;
+    const full = inside(rel);
+    if (!full) continue;
+    try { await fs.promises.rm(full, { force: true }); out.deleted.push(rel); }
+    catch (e) { out.failed.push({ file: rel, error: String((e as Error).message || e) }); }
+  }
+  // 基準點裡的檔案:內容不一樣就寫回去
+  for (const [rel, fingerprint] of baseline.snapshot) {
+    const content = baseline.contents.get(rel);
+    if (!content) { if (!now || now.get(rel) !== fingerprint) out.skipped.push(rel); continue; }
+    const full = inside(rel);
+    if (!full) continue;
+    try {
+      const same = now && now.get(rel) === fingerprint && (await fs.promises.readFile(full)).equals(content);
+      if (same) continue;
+      await fs.promises.mkdir(path.dirname(full), { recursive: true });
+      await fs.promises.writeFile(full, content);
+      out.restored.push(rel);
+    } catch (e) { out.failed.push({ file: rel, error: String((e as Error).message || e) }); }
+  }
+  return out;
+}

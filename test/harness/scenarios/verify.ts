@@ -26,6 +26,7 @@ async function main() {
         report: '已建立檔案',
       }),
     ],
+    settings: { workStyle: 'code' },
     timeoutMs: 3 * 60 * 1000,
     scenario: async () => {
       const g: any = globalThis;
@@ -40,6 +41,15 @@ async function main() {
       const card = msgs.find((m: any) => m.tag === 'task-summary');
       g.check(!!card && card.taskSummary && card.taskSummary.verify === 'failed', `結果卡標出驗證沒過(${card && card.taskSummary && card.taskSummary.verify})`);
       g.check(!/✓ 審查通過/.test(card.text), `驗證沒過就不能寫審查通過(${card.text.slice(0, 120)})`);
+      // 介面上選得到工作模式,而且切換會存起來
+      const style = document.querySelector('#work-style') as HTMLSelectElement;
+      g.check(!!style && style.value === 'code', `輸入框旁有工作模式選單(${style && style.value})`);
+      g.check(Array.from(style.options).map((o) => o.value).join(',') === 'code,general', '兩種工作模式都在選單裡');
+      style.value = 'general';
+      style.dispatchEvent(new Event('change'));
+      await g.w(300);
+      const saved = await (window as any).api.getConfig();
+      g.check(saved.settings.workStyle === 'general', `切換後存進設定(${saved.settings.workStyle})`);
       return { text: text.slice(0, 400) };
     },
   });

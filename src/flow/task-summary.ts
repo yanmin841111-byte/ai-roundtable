@@ -18,7 +18,7 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
   const usage = u.turnsWithUsage
     ? tx(locale, 'sys.taskSummary.usage', { input: u.inputTokens.toLocaleString('en-US'), output: u.outputTokens.toLocaleString('en-US') }) + (u.costUsd != null ? ` · $${u.costUsd.toFixed(3)}` : '')
     : '';
-  const verify = summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '';
+  const verify = [summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '', summary.testsTouched ? tx(locale, 'sys.taskSummary.testsTouched') : ''].filter(Boolean).join(' · ');
   return [
     tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
     members.join('\n'),
@@ -47,6 +47,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     files,
     moreFiles: num(raw.moreFiles),
     ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
+    ...(raw.testsTouched === true ? { testsTouched: true } : {}),
     usage: {
       inputTokens: num(raw.usage.inputTokens),
       outputTokens: num(raw.usage.outputTokens),

@@ -318,17 +318,20 @@ export class FileToolSession {
   // 審查者只需要「看」,不該能改。工具定義只給 read_file 還不夠——模型仍可能照記憶
   // 呼叫 write_file,所以在這裡再擋一次,不靠模型守規矩。
   readonly readOnly: boolean;
+  readonly locked: Set<string>;
   // 錯誤訊息的語言
   readonly locale: TextLocale;
   private calls = 0;
   private outputChars = 0;
 
-  constructor(workDir: string, { readOnly = false, locale = 'zh-Hant' }: { readOnly?: boolean; locale?: TextLocale } = {}) {
+  constructor(workDir: string, { readOnly = false, locale = 'zh-Hant', locked = [] }: { readOnly?: boolean; locale?: TextLocale; locked?: string[] } = {}) {
     if (!workDir || !fs.existsSync(workDir)) throw new Error(tx(locale, 'ft.noWorkdir'));
     const root = fs.realpathSync.native(workDir);
     if (!fs.statSync(root).isDirectory()) throw new Error(tx(locale, 'ft.workdirNotDir'));
     this.root = root;
     this.readOnly = readOnly;
+    // 鎖住的檔案(修復回合的既有測試檔):讀得到,寫不了
+    this.locked = new Set(locked.map((p) => p.replace(/^\.\//, '')));
     this.locale = locale;
   }
 
@@ -402,6 +405,11 @@ export class FileToolSession {
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw fail('ft.argsObject');
       if (name === 'read_file') return this.finish(this.readFile(args));
       if (this.readOnly && (name === 'write_file' || name === 'replace_text')) throw fail('ft.readOnly');
+      // 測試鎖:讓測試通過要改實作,不是改測試(見 src/test-lock.ts)
+      if (this.locked.size && (name === 'write_file' || name === 'replace_text')) {
+        const target = String((args as any).path || '').replace(/^\.\//, '');
+        if (this.locked.has(target)) throw fail('ft.lockedTest', { path: target });
+      }
       // 這兩個工具回傳時檔案已經寫入,結果必須標成 committed。
       if (name === 'write_file') return this.finish(this.writeFile(args), true);
       if (name === 'replace_text') return this.finish(this.replaceText(args), true);

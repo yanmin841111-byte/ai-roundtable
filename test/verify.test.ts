@@ -56,7 +56,8 @@ test('驗證指令:成功、失敗、指令不存在都照實回報', async () =
   const dir = dirWith({ 'a.js': 'module.exports = 1;\n' });
   const ok = await verifyChanges(dir, ['a.js'], 'exit 0');
   assert.strictEqual(ok.ok, true);
-  assert.strictEqual(ok.command.ok, true);
+  assert.deepStrictEqual(ok.gates.map((g: any) => [g.command, g.ok]), [['exit 0', true]]);
+  assert.strictEqual(ok.command, undefined, '全過時沒有「失敗的那道」');
   const bad = await verifyChanges(dir, ['a.js'], 'echo 壞了 >&2; exit 3');
   assert.strictEqual(bad.ok, false);
   assert.strictEqual(bad.command.code, 3);
@@ -89,6 +90,22 @@ test('檔案很多時只檢查前面幾十個,不會把整個工作目錄跑一�
   const dir = dirWith(files);
   const r = await verifyChanges(dir, Object.keys(files), '');
   assert.strictEqual(r.checked, SYNTAX_MAX_FILES);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('多道門檻:依序跑,一道沒過就停,並說出是哪一道、前面哪幾道過了', async () => {
+  const dir = dirWith({ 'a.js': 'module.exports = 1;\n' });
+  const r = await verifyChanges(dir, [], "echo lint-ok\necho 型別錯了 >&2; exit 2\necho 不該跑到 > ran.txt");
+  assert.deepStrictEqual(r.gates.map((g: any) => [g.command, g.ok]), [['echo lint-ok', true], ['echo 型別錯了 >&2; exit 2', false]]);
+  assert.strictEqual(r.command.command, 'echo 型別錯了 >&2; exit 2', '失敗的那道要指名');
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(fs.existsSync(path.join(dir, 'ran.txt')), false, '沒過就停,後面的不跑');
+  const notes = verifyNotes(r, 'zh-Hant');
+  assert.match(notes, /型別錯了/);
+  assert.match(notes, /在它之前這幾道都通過了.*echo lint-ok/s);
+  // 空行與前後空白不算一道
+  const spaced = await verifyChanges(dir, [], '\n  exit 0  \n\n');
+  assert.deepStrictEqual(spaced.gates.map((g: any) => g.command), ['exit 0']);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

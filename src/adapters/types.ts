@@ -49,6 +49,8 @@ export interface RunContext extends TurnCallbacks {
   fileToolsEnabled?: boolean;
   // 只給 read_file(審查回合用)。與 fileToolsEnabled 分開:讀取不需要改檔權限,也不需要 reviewer 閘門。
   readOnlyFileTools?: boolean;
+  // 這一回合不可以寫入的檔案(相對工作目錄):修復回合的既有測試檔。讀得到,寫不了。
+  lockedPaths?: string[];
   // prompt 裡只有這一回合需要的一段(原封不動包含在 prompt 裡)。照常送出;
   // 自己保存對話記憶的 adapter 存檔時要換成一行說明,不然之後每回合都會重送。
   ephemeral?: string;
