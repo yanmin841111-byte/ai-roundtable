@@ -14,12 +14,14 @@ import path from 'path';
 import type { AddressInfo } from 'net';
 import { runApp, report } from '../app';
 
-function fakeEndpoint(): Promise<{ server: http.Server; port: number; chats: () => number }> {
+function fakeEndpoint(): Promise<{ server: http.Server; port: number; chats: () => number; agents: () => string[] }> {
   let chats = 0;
+  const agents: string[] = [];
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (d) => (raw += d));
     req.on('end', () => {
+      agents.push(String(req.headers['user-agent'] || ''));
       const body = raw ? JSON.parse(raw) : null;
       const send = (status: number, json: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); };
       if (req.url === '/v1/models') return send(200, { data: [{ id: 'gemma3:latest' }, { id: 'qwen3:8b' }] });
@@ -34,7 +36,7 @@ function fakeEndpoint(): Promise<{ server: http.Server; port: number; chats: () 
       send(404, {});
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as AddressInfo).port, chats: () => chats })));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as AddressInfo).port, chats: () => chats, agents: () => agents })));
 }
 
 async function once(locale: 'zh-Hant' | 'en') {
@@ -129,6 +131,14 @@ async function once(locale: 'zh-Hant' | 'en') {
   report(`模型能力 · ${locale}`, r);
   // 沒按「測試」之前一個對話請求都不能送;按了之後是三個(基準、工具、圖片)
   if (r.ok && ep.chats() !== 3) { console.log(`  失敗:對話請求應該剛好 3 個(按了一次測試),實際 ${ep.chats()} 個`); r.ok = false; }
+  // app 的 API 請求要走 Electron 自己的網路層(User-Agent 帶 Electron/),不是 Node 內建的 fetch。
+  // Node 的 fetch 有一道寫死的 300 秒「等回應標頭」上限:本機大模型排隊時會超過,
+  // 使用者設定的逾時等於失效,而且錯誤訊息是看不懂的 Headers Timeout Error。
+  const viaElectron = ep.agents().every((ua) => /Electron\//.test(ua));
+  console.log(viaElectron
+    ? '  ok - API 請求走 Electron 的網路層(沒有 Node fetch 的 300 秒標頭上限)'
+    : `  失敗:API 請求沒有走 Electron 的網路層(User-Agent:${ep.agents().join(' | ') || '(沒有請求)'})`);
+  if (!viaElectron) r.ok = false;
   r.cleanup();
   return r;
 }

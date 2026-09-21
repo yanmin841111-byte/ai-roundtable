@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, net } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -155,6 +155,13 @@ app.whenReady().then(async () => {
   setCapabilityStore(new CapabilityStore(path.join(app.getPath('userData'), 'model-capabilities.json')));
   // 擴充資料夾可用 AI_ROUNDTABLE_ADAPTERS_DIR 覆寫(方便開發外掛)
   registry = new Registry({
+    // 網路一律走 Electron 自己的 net.fetch,不用 Node 內建的 fetch:
+    // Node 的 fetch(undici)有一道寫死的 300 秒「等回應標頭」上限,而且改不了(那個設定要另外裝套件,
+    // 這個 app 刻意不帶任何執行期相依)。本機大模型很容易超過:實測 27B + 思考、一萬五千字的提示,
+    // 光是等第一個位元組就要 82 秒,前面再排一個請求就爆掉——然後使用者看到的是
+    // 「Headers Timeout Error」,而不是自己設定的 20 分鐘逾時。net.fetch 沒有這道上限,
+    // 逾時完全由 spec.timeoutMs 與 AbortController 決定,也就是使用者設定的那個值。
+    fetchImpl: (input: any, init: any) => net.fetch(input, init),
     userDir: process.env.AI_ROUNDTABLE_ADAPTERS_DIR || path.join(app.getPath('userData'), 'adapters'),
     templatesDir: path.join(__dirname, 'adapters', 'templates'),
     getSecret: (ref: any) => secrets.get(ref),

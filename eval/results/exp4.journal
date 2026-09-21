@@ -1,4 +1,2 @@
-{"task":"cron","condition":"solo","commit":"68172a0","run":{"pass":20,"total":23,"seconds":327,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":true,"error":false}}
-{"task":"cron","condition":"roundtable","commit":"68172a0","run":{"pass":23,"total":23,"seconds":943,"inputTokens":269183,"outputTokens":11378,"repaired":true,"execFailed":true,"error":false}}
-{"task":"cron","condition":"solo","commit":"68172a0","run":{"pass":22,"total":23,"seconds":359,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
-{"task":"cron","condition":"roundtable","commit":"68172a0","run":{"pass":23,"total":23,"seconds":883,"inputTokens":351827,"outputTokens":14626,"repaired":true,"execFailed":true,"error":false}}
+{"task":"cron","condition":"solo","commit":"6df31f1","run":{"pass":5,"total":23,"seconds":432,"inputTokens":0,"outputTokens":0,"repaired":true,"execFailed":false,"error":false}}
+{"task":"cron","condition":"roundtable","commit":"6df31f1","run":{"pass":23,"total":23,"seconds":658,"inputTokens":256436,"outputTokens":14109,"repaired":true,"execFailed":false,"error":false}}
