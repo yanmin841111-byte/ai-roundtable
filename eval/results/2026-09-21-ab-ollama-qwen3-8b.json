@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "kind": "ab",
+  "set": "hard",
+  "primary": {
+    "metric": "passRate",
+    "diff": -0.067,
+    "p": 0.631
+  },
+  "secondary": {
+    "metric": "allPass",
+    "p": 1
+  },
+  "date": "2026-09-21",
+  "app": {
+    "version": "0.1.0",
+    "commit": "ac17a7a"
+  },
+  "model": {
+    "cli": "ollama",
+    "model": "qwen3:8b",
+    "effort": "medium"
+  },
+  "reviewer": {
+    "cli": "claude",
+    "model": ""
+  },
+  "runsPerCondition": 8,
+  "tasks": {
+    "forth-fix": {
+      "solo": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 0,
+        "gained": -14,
+        "worse": 7,
+        "execFailed": 1,
+        "passRate": 0.556,
+        "avgSeconds": 168,
+        "avgTokens": 0
+      },
+      "roundtable": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 0,
+        "gained": -10,
+        "worse": 3,
+        "execFailed": 4,
+        "passRate": 0.627,
+        "avgSeconds": 380,
+        "avgTokens": 285718
+      }
+    },
+    "poker-fix": {
+      "solo": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 0,
+        "gained": -8,
+        "worse": 2,
+        "execFailed": 2,
+        "passRate": 0.683,
+        "avgSeconds": 114,
+        "avgTokens": 0
+      },
+      "roundtable": {
+        "runs": 8,
+        "errors": 0,
+        "allPass": 0,
+        "gained": -16,
+        "worse": 4,
+        "execFailed": 2,
+        "passRate": 0.478,
+        "avgSeconds": 344,
+        "avgTokens": 280540
+      }
+    }
+  }
+}
