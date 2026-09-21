@@ -31,6 +31,8 @@ type Condition = 'solo' | 'roundtable';
 const CLI = process.env.EVAL_CLI || 'ollama';
 const MODEL = process.env.EVAL_MODEL ?? 'qwen3.8:27b-mlx';
 const ADAPTER = process.env.EVAL_ADAPTER ?? 'ollama-api';
+// 思考強度:本機模型關掉思考會明顯變笨,所以這是實驗條件的一部分,要記進結果檔
+const EFFORT = process.env.EVAL_EFFORT ?? '';
 // 圓桌裡的審查者可以換成另一個模型(沒給就跟執行者一樣):同一個模型的盲點會重疊,
 // 換一個模型審,才量得到「不同的眼睛」有沒有用
 const REVIEWER_CLI = process.env.EVAL_REVIEWER_CLI || CLI;
@@ -65,7 +67,7 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
     // 單人條件下它就是審查者:一律放行,等於沒有審查
     review: '看過了,沒有問題。\n[NO_ISSUES]',
   });
-  const executor = { id: 'exec', name: EXECUTOR, cli: CLI, model: MODEL, persona: '務實的工程師。先讀懂需求與既有程式,再動手。', canEdit: true };
+  const executor = { id: 'exec', name: EXECUTOR, cli: CLI, model: MODEL, effort: EFFORT, persona: '務實的工程師。先讀懂需求與既有程式,再動手。', canEdit: true };
   const reviewer = { id: 'rev', name: '審查者', cli: REVIEWER_CLI, model: REVIEWER_MODEL, persona: '仔細的審查者。逐條對照需求,實際讀檔確認。', canEdit: false };
   // 審查者由流程挑選:候選人依成員順序,真的審查者要排在主持人前面才會被選到
   const members = cond === 'solo' ? [lead, executor] : [reviewer, lead, executor];
@@ -164,7 +166,7 @@ async function main() {
   // --conditions solo:只跑單人,用來校準題目難度(正式實驗前先確認單人大約一半做得對)
   const conditions = (arg('conditions') || 'solo,roundtable').split(',').map((s) => s.trim()).filter((c): c is Condition => c === 'solo' || c === 'roundtable');
   const reviewerLabel = `${REVIEWER_CLI}${REVIEWER_MODEL ? ` / ${REVIEWER_MODEL}` : ''}`;
-  console.log(`執行者:${CLI}${MODEL ? ` / ${MODEL}` : ''} · 圓桌的審查者:${reviewerLabel} · ${tasks.length} 題 × ${conditions.length} 種 × ${runs} 次`);
+  console.log(`執行者:${CLI}${MODEL ? ` / ${MODEL}` : ''}${EFFORT ? ` · 思考強度 ${EFFORT}` : ''} · 圓桌的審查者:${reviewerLabel} · ${tasks.length} 題 × ${conditions.length} 種 × ${runs} 次`);
 
   // 流水帳:中斷後用同一個 --journal 接著跑(見 journal.ts)
   const journalFile = arg('journal') || '';
@@ -228,7 +230,7 @@ async function main() {
 
   if (arg('save') !== null) {
     const file = path.join(__dirname, 'results', `${localDate()}-ab-${`${CLI}-${MODEL || 'default'}`.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')}.json`);
-    const out = { schema: 1, kind: 'ab', set, primary: { metric: 'passRate', diff: Math.round(perm.diff * 1000) / 1000, p: Math.round(perm.p * 1000) / 1000 }, secondary: { metric: 'allPass', p: Math.round(p * 1000) / 1000 }, date: localDate(), app: { version: JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version, commit }, model: { cli: CLI, model: MODEL }, reviewer: { cli: REVIEWER_CLI, model: REVIEWER_MODEL }, runsPerCondition: runs, tasks: results };
+    const out = { schema: 1, kind: 'ab', set, primary: { metric: 'passRate', diff: Math.round(perm.diff * 1000) / 1000, p: Math.round(perm.p * 1000) / 1000 }, secondary: { metric: 'allPass', p: Math.round(p * 1000) / 1000 }, date: localDate(), app: { version: JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version, commit }, model: { cli: CLI, model: MODEL, effort: EFFORT || '(範本預設)' }, reviewer: { cli: REVIEWER_CLI, model: REVIEWER_MODEL }, runsPerCondition: runs, tasks: results };
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(out, null, 2) + '\n');
     console.log(`\n結果已存到 ${path.relative(REPO_ROOT, file)}`);
