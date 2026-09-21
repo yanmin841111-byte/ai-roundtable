@@ -108,8 +108,10 @@ const waitFor = async (fn, ms = 15000, what = '條件') => {
   while (Date.now() < until) { const v = await fn(); if (v) return v; await w(200); }
   throw new Error('等不到:' + what);
 };
-// 等 app 閒置(一場會議跑完)。本機模型一回合可能一兩分鐘,所以預設等很久。
-const waitIdle = async (limitMs = 20 * 60 * 1000) => {
+// 等 app 閒置(一場會議跑完)。上限跟著這次 runApp 的 timeoutMs 走,不另外寫死:
+// 寫死過 20 分鐘,結果本機模型開了思考之後一場會議要更久,劇本先放棄、整次跑被記成失敗,
+// 而失敗的跑不計分——等於「跑得慢的那些」會被系統性地丟掉,剩下的樣本偏向簡單的情況。
+const waitIdle = async (limitMs = __WAIT_IDLE_MS__) => {
   const until = Date.now() + limitMs;
   while (Date.now() < until) {
     const s = await snapshot();
@@ -149,7 +151,12 @@ function buildScenarioSource(opts: HarnessOptions): string {
   const body = typeof opts.scenario === 'string'
     ? opts.scenario
     : `return await (${opts.scenario.toString()})(H);`;
-  const prelude = PRELUDE.replace('__H_CONSTANTS__', JSON.stringify(opts.constants || {}));
+  // 劇本的等待上限比外層的逾時早一分鐘:這樣先喊停的是劇本(訊息看得懂),
+  // 而不是外層直接 SIGKILL 掉整個 app(現場什麼都不剩)
+  const waitIdleMs = Math.max(60_000, (opts.timeoutMs || DEFAULT_TIMEOUT_MS) - 60_000);
+  const prelude = PRELUDE
+    .replace('__H_CONSTANTS__', JSON.stringify(opts.constants || {}))
+    .replace('__WAIT_IDLE_MS__', String(waitIdleMs));
   // executeJavaScript 取「最後一個運算式」的值,所以整段包成會 resolve 的 async IIFE。
   return `(async () => {\n${prelude}\ntry {\n${body}\n} catch (error) {\n  return { __harness: true, ok: false, error: String((error && error.stack) || error), steps };\n}\n})().then((value) => (value && value.__harness) ? value : { __harness: true, ok: true, value, steps });`;
 }

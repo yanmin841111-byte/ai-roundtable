@@ -1,0 +1,12 @@
+{"task":"cron","condition":"solo","commit":"4c7d12d","run":{"pass":23,"total":23,"seconds":509,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"cron","condition":"solo","commit":"4c7d12d","run":{"pass":21,"total":23,"seconds":884,"inputTokens":0,"outputTokens":0,"repaired":true,"execFailed":false,"error":false}}
+{"task":"cron","condition":"solo","commit":"4c7d12d","run":{"pass":18,"total":23,"seconds":464,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"lru-ttl","condition":"solo","commit":"4c7d12d","run":{"pass":11,"total":11,"seconds":142,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"lru-ttl","condition":"solo","commit":"4c7d12d","run":{"pass":11,"total":11,"seconds":302,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"lru-ttl","condition":"solo","commit":"4c7d12d","run":{"pass":11,"total":11,"seconds":180,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"book-store","condition":"solo","commit":"4c7d12d","run":{"pass":3,"total":18,"seconds":1203,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":true}}
+{"task":"book-store","condition":"solo","commit":"4c7d12d","run":{"pass":18,"total":18,"seconds":1203,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":true}}
+{"task":"book-store","condition":"solo","commit":"4c7d12d","run":{"pass":18,"total":18,"seconds":1163,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":true,"error":false}}
+{"task":"dominoes","condition":"solo","commit":"4c7d12d","run":{"pass":13,"total":13,"seconds":433,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"dominoes","condition":"solo","commit":"4c7d12d","run":{"pass":13,"total":13,"seconds":324,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"dominoes","condition":"solo","commit":"4c7d12d","run":{"pass":13,"total":13,"seconds":207,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
