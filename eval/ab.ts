@@ -23,7 +23,7 @@ import { runApp, REPO_ROOT } from '../test/harness/app';
 import { scriptedMember } from '../test/harness/fixtures';
 import { AB_TASKS } from './ab-tasks';
 import type { AbTask } from './ab-tasks';
-import { runHiddenTests } from './hidden-tests';
+import { runHiddenTests, materialize } from './hidden-tests';
 import { wilson, fisherExact, stratifiedPermutation } from './stats';
 import { readJournal, appendJournal, remaining, staleCount } from './journal';
 
@@ -43,6 +43,9 @@ const EXECUTOR = '執行者';
 interface AbRun {
   pass: number;
   total: number;
+  // 改錯題的起點分數:任務開始前那份程式本來就過了幾項。
+  // 沒有它就看不出「修好了」還是「本來就是對的」,也看不出「改壞了」。
+  base?: number;
   seconds: number;
   inputTokens: number;
   outputTokens: number;
@@ -97,6 +100,8 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
   });
   const v = r.value || {};
   const score = runHiddenTests(r.workDir, task);
+  // 起點分數(固定值,和模型無關)
+  const base = task.files ? runHiddenTests(materialize(task.files), task).pass : 0;
   // EVAL_KEEP_DIR:沒有全對的那幾次,把工作目錄留一份下來看(不含 .git)
   if (process.env.EVAL_KEEP_DIR && score.pass < score.total) {
     const keep = path.join(process.env.EVAL_KEEP_DIR, `${task.id}-${cond}-${n}-${Date.now()}`);
@@ -106,16 +111,21 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
   r.cleanup();
   const error = !r.ok;
   const run: AbRun = {
-    pass: score.pass, total: score.total, seconds: Math.round(r.elapsedMs / 1000),
+    pass: score.pass, total: score.total, ...(task.files ? { base } : {}), seconds: Math.round(r.elapsedMs / 1000),
     inputTokens: v.inputTokens || 0, outputTokens: v.outputTokens || 0, repaired: !!v.repaired, execFailed: !!v.execError, error,
   };
   const tokens = run.inputTokens + run.outputTokens ? ` · token ${run.inputTokens}/${run.outputTokens}` : '';
-  console.log(`  ${task.id} ${cond === 'solo' ? '單人' : '圓桌'} #${n}:${error ? `沒跑完(${r.error})` : `${run.pass}/${run.total}`}`
+  // 改錯題只看分數看不出是修好還是弄壞,所以把起點與變化量一起印出來
+  const delta = run.base !== undefined && !error ? `(起點 ${run.base},${run.pass - run.base >= 0 ? '+' : ''}${run.pass - run.base})` : '';
+  console.log(`  ${task.id} ${cond === 'solo' ? '單人' : '圓桌'} #${n}:${error ? `沒跑完(${r.error})` : `${run.pass}/${run.total}${delta}`}`
     + `${run.execFailed ? ' · 執行回合失敗' : ''}${cond === 'roundtable' ? ` · 修復:${run.repaired ? '是' : '否'}` : ''} · ${run.seconds}s${tokens}${score.error ? ` · 測試:${score.error}` : ''}${score.missing ? ` · 檔案不存在:${task.entry}` : ''}${score.loadError ? ` · 載入失敗:${score.loadError}` : ''}`);
   return run;
 }
 
 export interface AbSummary {
+  // 改錯題:相對起點的平均變化(可為負)與「改得更糟」的次數
+  gained?: number;
+  worse?: number;
   runs: number;
   errors: number;
   // 以下只算沒有失敗的回合
@@ -134,6 +144,11 @@ export function summarize(runs: AbRun[]): AbSummary {
     runs: runs.length,
     errors: runs.length - ok.length,
     allPass: ok.filter((r) => r.total > 0 && r.pass === r.total).length,
+    // 改錯題才有:平均進步幾項、有幾次把本來會過的弄壞了
+    ...(ok.some((r) => r.base !== undefined) ? {
+      gained: avg((r) => r.pass - (r.base || 0)),
+      worse: ok.filter((r) => r.base !== undefined && r.pass < r.base).length,
+    } : {}),
     execFailed: ok.filter((r) => r.execFailed).length,
     passRate: items ? Math.round((ok.reduce((s, r) => s + r.pass, 0) / items) * 1000) / 1000 : 0,
     avgSeconds: avg((r) => r.seconds),

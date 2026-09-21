@@ -1,0 +1,6 @@
+{"task":"forth-fix","condition":"solo","commit":"cc61745","run":{"pass":44,"total":54,"seconds":73,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"forth-fix","condition":"solo","commit":"cc61745","run":{"pass":44,"total":54,"seconds":134,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"forth-fix","condition":"solo","commit":"cc61745","run":{"pass":39,"total":54,"seconds":180,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"poker-fix","condition":"solo","commit":"cc61745","run":{"pass":13,"total":39,"seconds":63,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"poker-fix","condition":"solo","commit":"cc61745","run":{"pass":36,"total":39,"seconds":122,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"poker-fix","condition":"solo","commit":"cc61745","run":{"pass":0,"total":39,"seconds":112,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
