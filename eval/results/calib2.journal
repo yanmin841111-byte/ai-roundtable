@@ -1,1 +1,9 @@
 {"task":"book-store","condition":"solo","commit":"d86272b","run":{"pass":13,"total":18,"seconds":817,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"book-store","condition":"solo","commit":"d86272b","run":{"pass":18,"total":18,"seconds":1685,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"book-store","condition":"solo","commit":"d86272b","run":{"pass":18,"total":18,"seconds":521,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"forth","condition":"solo","commit":"d86272b","run":{"pass":54,"total":54,"seconds":544,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":true,"error":false}}
+{"task":"forth","condition":"solo","commit":"d86272b","run":{"pass":53,"total":54,"seconds":768,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
+{"task":"forth","condition":"solo","commit":"d86272b","run":{"pass":54,"total":54,"seconds":1285,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":true,"error":false}}
+{"task":"poker","condition":"solo","commit":"d86272b","run":{"pass":39,"total":39,"seconds":719,"inputTokens":0,"outputTokens":0,"repaired":true,"execFailed":true,"error":false}}
+{"task":"poker","condition":"solo","commit":"d86272b","run":{"pass":37,"total":39,"seconds":441,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":true,"error":false}}
+{"task":"poker","condition":"solo","commit":"d86272b","run":{"pass":39,"total":39,"seconds":600,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
