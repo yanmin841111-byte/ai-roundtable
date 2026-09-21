@@ -27,7 +27,11 @@ export function runHiddenTests(workDir: string, task: AbTask, timeoutMs = 15000)
     'let pass = 0, total = 0, loadError = null;',
     'try { M(); } catch (e) { loadError = String((e && e.message) || e).split("\\n")[0].slice(0, 200); }',
     'const t = (name, fn) => { total++; try { fn(); pass++; } catch {} };',
+    // 載不起來就一分都不給。以前是照樣把題目跑完,而「格式錯誤要丟 Error」那幾題會白送分:
+    // 模組本身載入就爆掉,assert.throws 一樣算過。實測過一次 5/23,其實那個檔案一行都跑不動。
+    'if (!loadError) {',
     task.tests,
+    '}',
     'process.stdout.write(JSON.stringify({ pass, total, loadError }));',
   ].join('\n');
   if (!fs.existsSync(entry)) return { pass: 0, total: (task.tests.match(/^t\(/gm) || []).length, missing: true };

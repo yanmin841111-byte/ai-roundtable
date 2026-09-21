@@ -81,6 +81,12 @@ test('隱藏測試:模組載不起來或檔案不存在時每一項各自失敗�
   assert.strictEqual(broken.pass, 0);
   assert.strictEqual(broken.total, 2);
   assert.ok(broken.loadError, '載不起來要說出原因,才分得出「邏輯錯」和「檔案壞了」');
+  // 「應該丟出 Error」的題目最容易白送分:模組載入就爆,assert.throws 照樣算過。
+  // 載不起來的檔案一行都跑不動,分數必須是 0,否則壞掉的產出看起來像做對了四分之一。
+  const throwy = { id: 'y', entry: 'm.js', tests: "t('丟錯', () => assert.throws(() => M().matches('壞')));\nt('可用', () => assert.ok(M().ok));" };
+  const cheated = runHiddenTests(materialize({ 'm.js': 'syntax error (' }), throwy);
+  assert.strictEqual(cheated.pass, 0, `載不起來卻拿到 ${cheated.pass} 分`);
+  assert.strictEqual(cheated.total, 2);
   assert.deepStrictEqual(runHiddenTests(materialize({ 'other.js': '' }), task), { pass: 0, total: 2, missing: true });
   assert.deepStrictEqual(runHiddenTests(materialize({ 'm.js': 'module.exports = { ok: true };' }), task), { pass: 2, total: 2 });
   const hang = runHiddenTests(materialize({ 'm.js': 'while (true) {}' }), task, 1500);
