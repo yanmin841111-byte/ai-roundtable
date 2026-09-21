@@ -333,3 +333,228 @@ module.exports = { bestHands };
     },
   },
 );
+
+// ---------- 改既有程式碼的題型 ----------
+// 前面那些題都是「從零寫一個單檔函式」,而 27B 級的模型在那個區間已經接近滿分,
+// 審查者沒有加值空間。真實用這個產品的場景是另一種:已經有一份程式,要在不弄壞其他地方
+// 的前提下改它。這裡的起點是一份「大致能用、藏著幾個錯」的實作,任務只點名其中一個症狀,
+// 但隱藏測試是完整的標準測資——只修被點名的那個就不算完成。
+// 尺(測資)仍然是第三方的,只有「起點那份壞程式」是我們放的。
+EXERCISM_TASKS.push(
+  {
+    id: 'forth-fix',
+    set: 'hard',
+    asks: '只回報了一個症狀,檔案裡其實有四個錯:晚綁定、大小寫沒有忽略、兩種堆疊錯誤分不清楚、除法沒有往零捨去',
+    task: 'forth.js 已經可以跑,但使用者回報:「先用 `: foo dup ;` 定義 foo,之後再用 `: foo foo foo ;` 重新定義,結果舊的定義也跟著變了——重新定義應該只影響之後的用法。」請依檔案開頭註解寫的規則修正 forth.js。注意這個檔案可能不只這一個問題。',
+    entry: 'forth.js',
+    tests: testsFrom('forth', 'evaluate', ['instructions']),
+    files: {
+      'forth.js': `'use strict';
+// Forth 直譯器。evaluate(instructions) 依序執行每一行,回傳結束時的堆疊(底部在前)。
+// 規則:
+//   整數(可為負);+ - * /,除法只取整數部分、往零捨去;
+//   DUP 複製最上面一個、DROP 丟掉最上面一個、SWAP 交換最上面兩個、OVER 把第二個複製到最上面;
+//   \`: 名稱 內容 ;\` 定義自訂詞,名稱與內建詞都不分大小寫;
+//   重新定義只影響之後的用法,已經定義好的詞不受影響;
+//   錯誤:empty stack、only one value on the stack、divide by zero、
+//        undefined operation、illegal operation(把數字當成詞來定義)。
+const NUM = /^-?\\d+$/;
+
+function evaluate(instructions) {
+  const stack = [];
+  const words = new Map();
+  const need = (n) => {
+    if (stack.length < n) throw new Error('empty stack');
+  };
+  const run = (token) => {
+    const word = token;
+    if (words.has(word)) { for (const inner of words.get(word)) run(inner); return; }
+    if (NUM.test(token)) { stack.push(Number(token)); return; }
+    switch (word) {
+      case '+': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a + b); return; }
+      case '-': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a - b); return; }
+      case '*': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a * b); return; }
+      case '/': {
+        need(2);
+        const b = stack.pop(), a = stack.pop();
+        if (b === 0) throw new Error('divide by zero');
+        stack.push(Math.floor(a / b));
+        return;
+      }
+      case 'dup': { need(1); stack.push(stack[stack.length - 1]); return; }
+      case 'drop': { need(1); stack.pop(); return; }
+      case 'swap': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(b, a); return; }
+      case 'over': { need(2); stack.push(stack[stack.length - 1]); return; }
+      default: throw new Error('undefined operation');
+    }
+  };
+  for (const line of instructions) {
+    const tokens = String(line).split(/\\s+/).filter(Boolean);
+    if (tokens[0] === ':') {
+      if (tokens[tokens.length - 1] !== ';') throw new Error('illegal operation');
+      const name = tokens[1];
+      if (name === undefined || NUM.test(name)) throw new Error('illegal operation');
+      words.set(name, tokens.slice(2, -1));
+    } else {
+      for (const token of tokens) run(token);
+    }
+  }
+  return stack;
+}
+module.exports = { evaluate };
+`,
+    },
+    reference: {
+      'forth.js': EXERCISM_TASKS.find((t) => t.id === 'forth')!.reference['forth.js'],
+    },
+    // 只修被點名的那個症狀(晚綁定),除法與 OVER 的錯留著
+    naive: {
+      'forth.js': `'use strict';
+const NUM = /^-?\\d+$/;
+function evaluate(instructions) {
+  const stack = [];
+  const words = new Map();
+  const need = (n) => {
+    if (stack.length < n) throw new Error('empty stack');
+  };
+  const run = (token) => {
+    const word = token;
+    if (words.has(word)) { for (const inner of words.get(word)) run(inner); return; }
+    if (NUM.test(token)) { stack.push(Number(token)); return; }
+    switch (word) {
+      case '+': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a + b); return; }
+      case '-': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a - b); return; }
+      case '*': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(a * b); return; }
+      case '/': {
+        need(2);
+        const b = stack.pop(), a = stack.pop();
+        if (b === 0) throw new Error('divide by zero');
+        stack.push(Math.floor(a / b));
+        return;
+      }
+      case 'dup': { need(1); stack.push(stack[stack.length - 1]); return; }
+      case 'drop': { need(1); stack.pop(); return; }
+      case 'swap': { need(2); const b = stack.pop(), a = stack.pop(); stack.push(b, a); return; }
+      case 'over': { need(2); stack.push(stack[stack.length - 1]); return; }
+      default: throw new Error('undefined operation');
+    }
+  };
+  for (const line of instructions) {
+    const tokens = String(line).split(/\\s+/).filter(Boolean);
+    if (tokens[0] === ':') {
+      if (tokens[tokens.length - 1] !== ';') throw new Error('illegal operation');
+      const name = tokens[1];
+      if (name === undefined || NUM.test(name)) throw new Error('illegal operation');
+      const body = [];
+      for (const token of tokens.slice(2, -1)) {
+        const word = token;
+        if (words.has(word)) body.push(...words.get(word));
+        else body.push(token);
+      }
+      words.set(name, body);
+    } else {
+      for (const token of tokens) run(token);
+    }
+  }
+  return stack;
+}
+module.exports = { evaluate };
+`,
+    },
+  },
+);
+
+EXERCISM_TASKS.push(
+  {
+    id: 'poker-fix',
+    set: 'hard',
+    asks: '只回報了平手的症狀,檔案裡還有兩個錯:A2345 沒當成順子、同花與順子的大小顛倒',
+    task: 'poker.js 已經可以跑,但使用者回報:「兩手一樣大的時候只回傳其中一手,應該要把並列最強的都回傳。」請依檔案開頭註解寫的規則修正 poker.js。注意這個檔案可能不只這一個問題。',
+    entry: 'poker.js',
+    tests: testsFrom('poker', 'bestHands', ['hands']),
+    files: {
+      'poker.js': `'use strict';
+// bestHands(hands):hands 是一手五張牌的字串陣列,例如 "4S 5S 7H 8D JC"。
+// 回傳最強的那一手(放在陣列裡);並列最強時「全部」回傳,順序照輸入。
+// 牌型由強到弱:同花順、四條、葫蘆、同花、順子、三條、兩對、一對、高牌。
+// 同牌型時先比構成牌型的點數,再比剩下的散牌(由大到小)。
+// A 可以當最大,也可以在 A 2 3 4 5 裡當最小——那是最小的順子,比 2 3 4 5 6 還小。
+const RANKS = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13, A: 14 };
+
+function score(hand) {
+  const cards = hand.split(/\\s+/).filter(Boolean).map((card) => ({
+    rank: RANKS[card.slice(0, -1).toUpperCase()],
+    suit: card.slice(-1).toUpperCase(),
+  }));
+  const counts = new Map();
+  for (const c of cards) counts.set(c.rank, (counts.get(c.rank) || 0) + 1);
+  const groups = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+  const shape = groups.map(([, n]) => n).join('');
+  const ordered = groups.map(([rank]) => rank);
+  const flush = new Set(cards.map((c) => c.suit)).size === 1;
+  const sorted = [...counts.keys()].sort((a, b) => a - b);
+  const straight = counts.size === 5 && sorted[4] - sorted[0] === 4;
+
+  if (straight && flush) return [8, sorted[4]];
+  if (shape === '41') return [7, ...ordered];
+  if (shape === '32') return [6, ...ordered];
+  if (straight) return [5, sorted[4]];
+  if (flush) return [4, ...ordered];
+  if (shape === '311') return [3, ...ordered];
+  if (shape === '221') return [2, ...ordered];
+  if (shape === '2111') return [1, ...ordered];
+  return [0, ...ordered];
+}
+
+function compare(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function bestHands(hands) {
+  let best = hands[0];
+  for (const hand of hands) if (compare(score(hand), score(best)) > 0) best = hand;
+  return [best];
+}
+module.exports = { bestHands };
+`,
+    },
+    reference: { 'poker.js': EXERCISM_TASKS.find((t) => t.id === 'poker')!.reference['poker.js'] },
+    // 只修被點名的症狀(平手全回傳),A2345 與同花/順子顛倒留著
+    naive: {
+      'poker.js': `'use strict';
+const RANKS = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, J: 11, Q: 12, K: 13, A: 14 };
+function score(hand) {
+  const cards = hand.split(/\\s+/).filter(Boolean).map((card) => ({ rank: RANKS[card.slice(0, -1).toUpperCase()], suit: card.slice(-1).toUpperCase() }));
+  const counts = new Map();
+  for (const c of cards) counts.set(c.rank, (counts.get(c.rank) || 0) + 1);
+  const groups = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+  const shape = groups.map(([, n]) => n).join('');
+  const ordered = groups.map(([rank]) => rank);
+  const flush = new Set(cards.map((c) => c.suit)).size === 1;
+  const sorted = [...counts.keys()].sort((a, b) => a - b);
+  const straight = counts.size === 5 && sorted[4] - sorted[0] === 4;
+  if (straight && flush) return [8, sorted[4]];
+  if (shape === '41') return [7, ...ordered];
+  if (shape === '32') return [6, ...ordered];
+  if (straight) return [5, sorted[4]];
+  if (flush) return [4, ...ordered];
+  if (shape === '311') return [3, ...ordered];
+  if (shape === '221') return [2, ...ordered];
+  if (shape === '2111') return [1, ...ordered];
+  return [0, ...ordered];
+}
+const cmp = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d; } return 0; };
+function bestHands(hands) {
+  let best = null;
+  for (const h of hands) { const s = score(h); if (!best || cmp(s, best) > 0) best = s; }
+  return hands.filter((h) => cmp(score(h), best) === 0);
+}
+module.exports = { bestHands };
+`,
+    },
+  },
+);
