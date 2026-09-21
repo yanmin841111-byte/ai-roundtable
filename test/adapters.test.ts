@@ -214,18 +214,37 @@ function startMockApi(): Promise<any> {
   return new Promise((resolve: any) => server.listen(0, '127.0.0.1', () => resolve({ server, requests, base: `http://127.0.0.1:${server.address().port}/v1` })));
 }
 
-t('API:思考強度——沒選時走範本預設,選了就照選的送(Ollama 範本靠這個開關思考)', async () => {
+t('出廠範本不替使用者的模型決定思考:宣告選項可以,body 不寫死 reasoning_effort', () => {
+  // 會思考的模型預設就會思考;不會思考的小模型連這個參數都不見得認得。
+  // 範本硬塞的話,別人下載回去換一顆模型就可能整個壞掉,而且看不出為什麼。
+  const dir = path.join(__dirname, '..', 'adapters', 'templates');
+  for (const file of fs.readdirSync(dir).filter((f: string) => f.endsWith('.json'))) {
+    const spec = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    const body = spec.body || {};
+    assert.strictEqual('reasoning_effort' in body, false, `${file} 的 body 不該寫死 reasoning_effort`);
+    // CLI 型的強度是走命令列參數({effort} 樣板),不是 body
+    if (spec.type === 'openai' && spec.efforts && spec.efforts.length) {
+      assert.ok(spec.effortBody && Object.keys(spec.effortBody).length, `${file} 有 efforts 就要有 effortBody,否則選了也送不出去`);
+    }
+    if (spec.type === 'cli' && spec.efforts && spec.efforts.length) {
+      assert.ok(JSON.stringify(spec.args || []).includes('{effort}'), `${file} 有 efforts 就要在參數裡用到 {effort}`);
+    }
+  }
+});
+
+t('API:思考強度——沒選就不塞參數,選了才送(Ollama 範本靠這個開關思考)', async () => {
   const { server, requests, base } = await startMockApi();
   try {
+    // 出廠範本的寫法:只宣告選項,body 不塞 reasoning_effort。
+    // 不是每個本機模型都認得這個參數,硬塞等於替別人的機器決定一件沒驗證過的事。
     const spec = {
       id: 'ollama', type: 'openai', baseUrl: base, models: ['qwen3.8:27b-mlx'],
-      efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'medium',
-      body: { reasoning_effort: 'medium' }, effortBody: { reasoning_effort: '{effort}' },
+      efforts: ['none', 'low', 'medium', 'high'], effortBody: { reasoning_effort: '{effort}' },
     };
     const adapter = createOpenAIAdapter(spec as any);
     const run = (effort: string) => adapter.run({ name: 'Q', model: 'qwen3.8:27b-mlx', effort, canEdit: false }, makeCtx().ctx);
     await run('');
-    assert.strictEqual(requests.at(-1).body.reasoning_effort, 'medium', '沒選的話用範本預設(思考開著)');
+    assert.strictEqual('reasoning_effort' in requests.at(-1).body, false, '沒選就不要替使用者的模型決定;送出去的請求裡不該有這個參數');
     await run('none');
     assert.strictEqual(requests.at(-1).body.reasoning_effort, 'none', '選「不思考」要真的送 none,否則介面上的選擇是假的');
     await run('high');

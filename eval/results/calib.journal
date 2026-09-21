@@ -1,2 +1,0 @@
-{"task":"cron","condition":"solo","commit":"2a92fd0","run":{"pass":23,"total":23,"seconds":383,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false}}
-{"task":"cron","condition":"solo","commit":"2a92fd0","run":{"pass":0,"total":23,"seconds":690,"inputTokens":0,"outputTokens":0,"repaired":true,"execFailed":true,"error":false}}
