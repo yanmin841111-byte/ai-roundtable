@@ -349,7 +349,7 @@ app.whenReady().then(async () => {
   handle('diff:changes', () => workdirChanges(store.get().settings.workDir, orchestrator.taskBaseline));
   // 還原這次任務的改動:回到任務開始前的樣子。破壞性操作,介面一定要先問過使用者。
   // 任務進行中不給還原——成員還在寫檔,還原只會做出一個誰都沒看過的中間狀態。
-  handle('task:revert', () => orchestrator.revertTask());
+  handle('task:revert', (scope) => orchestrator.revertTask(scope));
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
   handle('ollama:quickSetup', async (payload) => {

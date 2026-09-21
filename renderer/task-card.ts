@@ -162,6 +162,17 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary): void {
   if (total) {
     const actions = document.createElement('div');
     actions.className = 'ts-file-actions';
+    // 修復回合把事情弄糟時,不能只印一行紅字:app 知道「執行後是過的、修復後不過了」,
+    // 就該把「只收回修復」放在使用者眼前。執行階段做對的部分留著,不用整個重來。
+    if (s.repairBroke) {
+      const undoFix = document.createElement('button');
+      undoFix.type = 'button';
+      undoFix.className = 'ts-revert warn';
+      undoFix.textContent = t('task.revertFix');
+      undoFix.title = t('task.revertFixTitle');
+      undoFix.onclick = () => { void revertTask(undoFix, 'repair'); };
+      actions.appendChild(undoFix);
+    }
     // 停損:成員卡住或改壞時的退路。破壞性操作,按下去會先問一次
     const revert = document.createElement('button');
     revert.type = 'button';

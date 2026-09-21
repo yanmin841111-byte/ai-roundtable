@@ -28,6 +28,10 @@ export function scriptedMember(opts: {
   writes?: Record<string, string>;
   /** 執行階段的回報文字 */
   report?: string;
+  /** 修復階段寫進工作目錄的檔案:用來重現「修復反而改壞了」 */
+  fixWrites?: Record<string, string>;
+  /** 修復階段的回報文字 */
+  fixReport?: string;
 }): HarnessMember {
   const payload = Buffer.from(JSON.stringify({
     plan: opts.plan || null,
@@ -36,6 +40,8 @@ export function scriptedMember(opts: {
     recheck: opts.recheck || null,
     writes: opts.writes || null,
     report: opts.report || null,
+    fixWrites: opts.fixWrites || null,
+    fixReport: opts.fixReport || null,
   }), 'utf8').toString('base64');
   return {
     id: opts.id || 'scripted',

@@ -21,9 +21,11 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
   const verify = [summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '', summary.testsTouched ? tx(locale, 'sys.taskSummary.testsTouched') : ''].filter(Boolean).join(' · ');
   return [
     tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
+    // 修復把事情弄糟時要講成一句人話:「驗證沒過」看不出是誰在哪一步弄壞的
+    summary.repairBroke ? tx(locale, 'sys.taskSummary.repairBroke') : '',
     members.join('\n'),
     files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 
@@ -48,6 +50,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     moreFiles: num(raw.moreFiles),
     ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
     ...(raw.testsTouched === true ? { testsTouched: true } : {}),
+    ...(raw.repairBroke === true ? { repairBroke: true } : {}),
     usage: {
       inputTokens: num(raw.usage.inputTokens),
       outputTokens: num(raw.usage.outputTokens),

@@ -329,6 +329,9 @@ export interface TaskSummary {
   usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
   // app 自己跑的自動驗證(語法檢查與驗證指令):passed 通過、failed 沒過、none 沒有東西可驗
   verify?: 'passed' | 'failed' | 'none';
+  // 修復回合把事情弄糟了:驗證在執行後是通過的,修復之後變成不通過。
+  // app 知道這件事,就不該只印一行紅字——結果卡要說出來,並且把「只收回修復」放在旁邊。
+  repairBroke?: boolean;
   // 這次動到了任務開始前就存在的測試檔:「測試通過」要打折扣看
   testsTouched?: boolean;
 }
@@ -617,7 +620,7 @@ export interface IpcContract {
   'chat:answer': { args: [answer: QuestionAnswer]; result: void };
   'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
   'diff:changes': { args: []; result: DiffResult };
-  'task:revert': { args: []; result: RevertOutcome };
+  'task:revert': { args: [scope?: 'task' | 'repair']; result: RevertOutcome };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
   'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
@@ -688,7 +691,7 @@ export interface RendererApi {
   retry(messageId: string): Promise<{ ok: boolean; error?: string }>;
   // 工作目錄目前的檔案改動;唯讀,不提供套用或還原
   getDiff(): Promise<DiffResult>;
-  revertTask(): Promise<RevertOutcome>;
+  revertTask(scope?: 'task' | 'repair'): Promise<RevertOutcome>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
   quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
   modelCapability(payload: { adapterId: string; model: string; live?: boolean }): Promise<ModelCapability | null>;

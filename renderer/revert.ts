@@ -3,16 +3,17 @@ import { t } from './i18n';
 import { cleanIpcError } from './util';
 import { loadDiff } from './diff-view';
 
-export async function revertTask(button: HTMLButtonElement): Promise<void> {
-  if (!confirm(t('task.revertConfirm'))) return;
+// scope:'task' 還原整個任務;'repair' 只收回修復回合(執行階段的成果留著)
+export async function revertTask(button: HTMLButtonElement, scope: 'task' | 'repair' = 'task'): Promise<void> {
+  if (!confirm(t(scope === 'repair' ? 'task.revertFixConfirm' : 'task.revertConfirm'))) return;
   const label = button.textContent;
   button.disabled = true;
   button.textContent = t('task.reverting');
   try {
-    const r = await window.api.revertTask();
+    const r = await window.api.revertTask(scope);
     // 還原不了的檔案要說出來,不能讓人以為工作目錄已經乾淨了
     const message = r.ok && !r.skipped.length
-      ? t('task.revertDone', { restored: r.restored, deleted: r.deleted })
+      ? t(scope === 'repair' ? 'task.revertFixDone' : 'task.revertDone', { restored: r.restored, deleted: r.deleted })
       : r.reason === 'running' ? t('task.revertRunning')
         : r.reason === 'no-baseline' ? t('task.revertNoBaseline')
           : t('task.revertPartly', { restored: r.restored, deleted: r.deleted, list: [...r.skipped, ...r.failed.map((f) => f.file)].join('、') });

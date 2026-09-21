@@ -29,10 +29,12 @@ process.stdin.on('end', () => {
   const tags = [...input.matchAll(/【([^】]+)】|^\[([A-Za-z -]+)\]/gm)].map((m) => m[1] || m[2]).filter((t) => PHASES[t]);
   const key = PHASES[tags[tags.length - 1]] || 'discuss';
 
-  if (key === 'execute' && config.writes) {
+  // 執行回合寫 writes,修復回合寫 fixWrites:要驗「修復反而把東西改壞」就靠後者
+  const toWrite = key === 'execute' ? config.writes : key === 'fix' ? config.fixWrites : null;
+  if (toWrite) {
     const fs = require('fs');
     const path = require('path');
-    for (const [rel, content] of Object.entries(config.writes)) {
+    for (const [rel, content] of Object.entries(toWrite)) {
       const full = path.join(process.cwd(), rel);
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.writeFileSync(full, content);
@@ -42,7 +44,7 @@ process.stdin.on('end', () => {
     divide: config.plan ? JSON.stringify(config.plan) : '{"summary":"沒有指定分工","assignments":[]}',
     execute: config.report || '這回合沒有被指派工作',
     review: config.recheck && /這是修復後的複查|This is the re-check after repair/.test(input) ? config.recheck : config.review,
-    fix: '沒有需要修復的項目',
+    fix: config.fixReport || '沒有需要修復的項目',
     summary: '總結:流程已跑完',
     discuss: config.discuss,
   }[key];

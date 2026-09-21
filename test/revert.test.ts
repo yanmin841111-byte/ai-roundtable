@@ -52,6 +52,35 @@ test('沒留下內容的檔案還原不了:要照實列出,不能靜靜跳過', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('只收回修復回合:執行階段做對的部分留著,修復弄壞的收回來', async () => {
+  // 實驗 7 裡有好幾次是修復回合把檔案改到載不起來,而執行階段其實已經做對了一部分。
+  // 整個任務還原會把那部分一起丟掉,所以要能只收回修復那一段。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-revert-fix-'));
+  fs.writeFileSync(path.join(dir, 'a.js'), '原本\n');
+  const taskBase = await captureBaseline(dir, await snapshotDir(dir));
+
+  // 執行階段:做對了,而且新增一個檔案
+  fs.writeFileSync(path.join(dir, 'a.js'), '執行階段修好的樣子\n');
+  fs.writeFileSync(path.join(dir, 'b.js'), '執行階段新增的\n');
+  const fixBase = await captureBaseline(dir, await snapshotDir(dir));
+
+  // 修復階段:把 a.js 改壞,又多加一個檔案
+  fs.writeFileSync(path.join(dir, 'a.js'), '修復改壞的(\n');
+  fs.writeFileSync(path.join(dir, 'c.js'), '修復新增的\n');
+
+  const r = await revertToBaseline(fixBase);
+  assert.deepStrictEqual(r.restored, ['a.js']);
+  assert.deepStrictEqual(r.deleted, ['c.js']);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'a.js'), 'utf8'), '執行階段修好的樣子\n', '回到修復前,不是回到任務開始前');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'b.js'), 'utf8'), '執行階段新增的\n', '執行階段新增的檔案要留著');
+  assert.strictEqual(fs.existsSync(path.join(dir, 'c.js')), false);
+  // 任務基準點還在:使用者想整個還原仍然可以
+  await revertToBaseline(taskBase);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'a.js'), 'utf8'), '原本\n');
+  assert.strictEqual(fs.existsSync(path.join(dir, 'b.js')), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('任務進行中或沒有基準點:不還原,並說明原因', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-revert-orc-'));
   adapters.setRegistry({ get: () => ({ id: 'x', supportsEdit: true, run: async () => ({ text: '[AGREED]' }) }) });

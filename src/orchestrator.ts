@@ -40,6 +40,8 @@ const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/; // 與 attachments 
 class Orchestrator extends EventEmitter {
   // 修復回合鎖住的既有測試檔(見 src/test-lock.ts)
   lockedForFix: string[] = [];
+  // 修復回合開始前的快照:修復把事情弄糟時,可以只收回修復那一段
+  fixBaseline: TaskBaseline | null = null;
   store: Store;
   conversationId: string;
   attachments: AttachmentMeta[];
@@ -301,12 +303,14 @@ class Orchestrator extends EventEmitter {
 
   // 還原這次任務的改動:把工作目錄回到任務開始前的樣子(見 src/task-changes.ts)。
   // 停損用的:成員卡住、改壞了,與其一個一個檔案復原,不如乾淨地退回去重來。
-  async revertTask(): Promise<RevertOutcome> {
+  // scope:'task' 還原到任務開始前;'repair' 只收回修復回合(保留執行階段做對的部分)
+  async revertTask(scope: 'task' | 'repair' = 'task'): Promise<RevertOutcome> {
     if (this.running) return { ok: false, reason: 'running', restored: 0, deleted: 0, skipped: [], failed: [] };
-    if (!this.taskBaseline) return { ok: false, reason: 'no-baseline', restored: 0, deleted: 0, skipped: [], failed: [] };
-    const r = await revertToBaseline(this.taskBaseline);
+    const baseline = scope === 'repair' ? this.fixBaseline : this.taskBaseline;
+    if (!baseline) return { ok: false, reason: 'no-baseline', restored: 0, deleted: 0, skipped: [], failed: [] };
+    const r = await revertToBaseline(baseline);
     const ok = r.failed.length === 0;
-    this.system(this.text(ok ? 'sys.reverted' : 'sys.revertPartly', {
+    this.system(this.text(ok ? (scope === 'repair' ? 'sys.revertedFix' : 'sys.reverted') : 'sys.revertPartly', {
       restored: r.restored.length,
       deleted: r.deleted.length,
       list: [...r.skipped, ...r.failed.map((f) => f.file)].map((f) => `- \`${f}\``).join('\n'),
@@ -316,8 +320,8 @@ class Orchestrator extends EventEmitter {
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
   // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
-  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, testsTouched }: {
-    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; testsTouched?: boolean;
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, testsTouched, repairBroke }: {
+    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; testsTouched?: boolean; repairBroke?: boolean;
   }) {
     const unresolved = new Set([...fix.unresolved.map((u) => u.agent.id), ...fix.fixFailed.map((f) => f.item.agent.id)]);
     const rescued = new Set(salvaged.map((s) => s.agent.id));
@@ -364,6 +368,7 @@ class Orchestrator extends EventEmitter {
       usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
       ...(verify ? { verify: !verify.ran ? 'none' as const : verify.ok ? 'passed' as const : 'failed' as const } : {}),
       ...(testsTouched ? { testsTouched: true } : {}),
+      ...(repairBroke ? { repairBroke: true } : {}),
     };
     this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
   }
@@ -496,13 +501,17 @@ class Orchestrator extends EventEmitter {
         const reviews = await this.reviewPhase(agents, reviewed, changed, failed, undefined, verify, touchedTests, conflicts);
         if (this.stopped) return;
         this.markUnreviewed(reviewed, reviews);
-        const fix = await this.fixPhase(reviews, reviewed, verify, touchedTests);
+        const fix = await this.fixPhase(reviews, reviewed, verify, touchedTests, cwd);
         if (this.stopped) return;
         await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding);
         if (this.stopped) return;
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
         if (this.stopped) return;
-        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: (fix.verify as VerifyResult | undefined) || verify, testsTouched: (fix.testsTouched || touchedTests).length > 0 });
+        // 修復把事情弄糟了嗎:執行後驗證是通過的,修復之後變成不通過。
+        // app 知道這件事,就該說出來並給下一步,而不是只留一行紅字(實驗 7 有好幾次是這樣收場的)
+        const afterFix = fix.verify as VerifyResult | undefined;
+        const repairBroke = !!(verify && verify.ran && verify.ok && afterFix && afterFix.ran && !afterFix.ok);
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: afterFix || verify, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
         await this.summaryPhase(task, 'discuss', {});
@@ -988,7 +997,7 @@ class Orchestrator extends EventEmitter {
 
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
-  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = []): Promise<FixOutcome> {
+  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string): Promise<FixOutcome> {
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
     const reviewFailed = reviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'failed');
     if (reviewFailed.length) {
@@ -1023,6 +1032,12 @@ class Orchestrator extends EventEmitter {
     }
 
     const unresolved: Issue[] = [];
+    // 修復前先留一份快照。實測(實驗 7)修復回合會把執行階段做對的東西改壞:32 次裡有好幾次
+    // 是修復把檔案弄到完全載不起來。有了這一份,使用者可以只收回修復、保留執行階段的成果。
+    if (cwd) {
+      const snap = await snapshotDir(cwd);
+      this.fixBaseline = snap ? await captureBaseline(cwd, snap) : null;
+    }
     // 修復回合鎖住的檔案:這次動到的既有測試檔,加上工作目錄裡本來就有的測試檔
     this.lockedForFix = touchedTests;
     const jobs: Array<Promise<FixFailure & { text: string }>> = [];
