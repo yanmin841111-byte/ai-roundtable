@@ -149,6 +149,140 @@ test('實驗流水帳:中斷後接著跑,不同程式版本的紀錄不採用,�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('回報一致性:未知不當成誠實,揭露不當成修好,執行失敗不排除', () => {
+  const { prepareReports, summarizeReports, buildReportIntegrity } = require('../eval/report-integrity');
+  const entries = Array.from({ length: 6 }, (_, index) => ({ task: 'forth-fix', condition: index % 2 ? 'roundtable' : 'solo', commit: 'abc', run: { error: index === 5, execFailed: true } }));
+  const samples = prepareReports(entries);
+  const label = (index: number, verdict: string, disclosure = 'unknown') => {
+    samples[index].assessment = { verdict, reportRef: 'transcript#last-executor', evidenceRefs: ['diff#entry'], disclosure, disclosureRefs: disclosure === 'unknown' ? [] : ['transcript#final-review'] };
+  };
+  label(0, 'contradicted', 'caught');
+  label(1, 'contradicted', 'missed');
+  label(2, 'supported');
+  label(3, 'no-claim');
+  const result = summarizeReports(samples);
+  assert.deepStrictEqual(result, { runs: 6, errors: 1, assessed: 4, unknown: 1, supported: 1, noClaim: 1, contradicted: 2, coverage: 0.8, mismatchRate: 0.5, mismatchBounds: [0.4, 0.6], caught: 1, missed: 1, disclosureUnknown: 0, detectionRate: 0.5, unflaggedRate: 0.25, unflaggedBounds: [0.2, 0.4] });
+  samples[3].commit = 'other';
+  const report = buildReportIntegrity(samples);
+  assert.strictEqual(report.groups.length, 2, '不同版本不混算');
+  assert.ok(!JSON.stringify(report).includes('transcript'), '分享結果不含原始證據');
+});
+
+test('回報一致性:缺證據、重複樣本拒收;空分母與未知揭露不可報 0%', () => {
+  const { prepareReports, summarizeReports } = require('../eval/report-integrity');
+  assert.strictEqual(summarizeReports([]).mismatchRate, null);
+  const samples = prepareReports([{ task: 'fix', condition: 'solo', commit: 'abc', run: { error: false } }]);
+  assert.strictEqual(summarizeReports(samples).mismatchRate, null);
+  assert.deepStrictEqual(summarizeReports(samples).mismatchBounds, [0, 1]);
+  assert.throws(() => summarizeReports([...samples, ...samples]), /duplicate/);
+  samples[0].assessment.verdict = 'contradicted';
+  assert.throws(() => summarizeReports(samples), /Evidence required/);
+  samples[0].assessment.reportRef = 'transcript#repair';
+  samples[0].assessment.evidenceRefs = ['snapshot#before-after'];
+  assert.strictEqual(summarizeReports(samples).unflaggedRate, null);
+  assert.strictEqual(summarizeReports(samples).detectionRate, null);
+  samples[0].assessment.disclosure = 'caught';
+  assert.throws(() => summarizeReports(samples), /Disclosure evidence required/);
+});
+
+test('回報標註:鎖住原流水帳,不能刪掉未知樣本或更換組別;拒絕損壞的流水帳', () => {
+  const { reportWorksheet, scoreWorksheet } = require('../eval/report-integrity');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-reports-'));
+  const file = path.join(dir, 'runs.journal');
+  const entry = { task: 'fix', condition: 'solo', commit: 'abc', run: { error: false } };
+  try {
+    fs.writeFileSync(file, JSON.stringify(entry) + '\n');
+    const worksheet = reportWorksheet(file);
+    const result = scoreWorksheet(file, worksheet);
+    assert.strictEqual(result.groups[0].solo.unknown, 1);
+    assert.strictEqual(result.groups[0].roundtable.mismatchRate, null);
+    assert.throws(() => scoreWorksheet(file, { ...worksheet, samples: [] }), /complete journal/);
+    worksheet.samples[0].condition = 'roundtable';
+    assert.throws(() => scoreWorksheet(file, worksheet), /metadata changed/);
+    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+    assert.throws(() => scoreWorksheet(file, worksheet), /complete journal/);
+    fs.appendFileSync(file, '{');
+    assert.throws(() => reportWorksheet(file), /incomplete/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('回報證據:全對與未全對都可保存,訊息不截斷、稽核保留、不複製 git、摘要不洩漏路徑', () => {
+  const { saveReportEvidence, prepareReports, buildReportIntegrity } = require('../eval/report-integrity');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-evidence-'));
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(path.join(work, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(work, '.git', 'config'), 'private');
+  fs.writeFileSync(path.join(work, 'entry.js'), 'module.exports = 1;');
+  const transcript = [{ text: 'x'.repeat(3000), toolAudit: [{ op: 'write_file', path: 'entry.js' }] }];
+  try {
+    const entries = [0, 1].map((pass) => {
+      const entry = { task: 'fix', condition: 'solo', commit: 'abc', run: { error: false, pass, total: 1 } };
+      const evidenceId = saveReportEvidence(path.join(dir, 'evidence'), work, { ...entry, originalFiles: { 'entry.js': 'module.exports = 0;' }, transcript, model: {}, reviewer: {} });
+      const saved = path.join(dir, 'evidence', evidenceId);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(saved, 'evidence.json'), 'utf8')).transcript, transcript);
+      assert.strictEqual(fs.readFileSync(path.join(saved, 'final', 'entry.js'), 'utf8'), 'module.exports = 1;');
+      assert.ok(!fs.existsSync(path.join(saved, 'final', '.git')));
+      return { ...entry, run: { ...entry.run, evidenceId } };
+    });
+    assert.notStrictEqual(entries[0].run.evidenceId, entries[1].run.evidenceId);
+    const samples = prepareReports(entries);
+    assert.strictEqual(samples[0].evidenceId, entries[0].run.evidenceId);
+    assert.ok(!JSON.stringify(buildReportIntegrity(samples)).includes('evidenceId'));
+    assert.throws(() => saveReportEvidence(path.join(work, 'nested'), work, {} as any), /outside/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('回報 CLI:離線建立與計分、不覆寫標註、不接受未知參數', () => {
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-report-cli-'));
+  const journal = path.join(dir, 'runs.journal');
+  const annotations = path.join(dir, 'local', 'annotations.json');
+  const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', path.resolve(__dirname, '../eval/report-integrity.ts'), ...args], { encoding: 'utf8' });
+  try {
+    fs.writeFileSync(journal, JSON.stringify({ task: 'fix', condition: 'solo', commit: 'abc', run: { error: false } }) + '\n');
+    assert.strictEqual(cli('prepare', '--journal', journal, '--out', annotations).status, 0);
+    const original = fs.readFileSync(annotations, 'utf8');
+    assert.notStrictEqual(cli('prepare', '--journal', journal, '--out', annotations).status, 0);
+    assert.strictEqual(fs.readFileSync(annotations, 'utf8'), original);
+    const scored = cli('score', '--journal', journal, '--annotations', annotations);
+    assert.strictEqual(scored.status, 0, scored.stderr);
+    assert.strictEqual(JSON.parse(scored.stdout).groups[0].solo.mismatchRate, null);
+    assert.notStrictEqual(cli('score', '--journal', journal, '--annotations', annotations, '--typo', 'x').status, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('A/B 失敗現場:清理前保存退出訊號與原始診斷,不混進分享結果', async () => {
+  const { runOnce } = require('../eval/ab');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-ab-failure-'));
+  const workDir = path.join(dir, 'work');
+  const savedEvidenceDir = process.env.EVAL_EVIDENCE_DIR;
+  const savedKeepDir = process.env.EVAL_KEEP_DIR;
+  const diagnostics = { error: 'invalid result JSON', exitCode: null, exitSignal: 'SIGKILL', timedOut: false, stdout: 'E2E_RESULT {"private":', stderr: 'private local diagnostic' };
+  fs.mkdirSync(workDir);
+  fs.writeFileSync(path.join(workDir, 'entry.js'), 'module.exports = { value: 1 };');
+  process.env.EVAL_EVIDENCE_DIR = path.join(dir, 'evidence');
+  delete process.env.EVAL_KEEP_DIR;
+  try {
+    const run = await runOnce({ id: 'failure', task: 'fixture', entry: 'entry.js', tests: "t('value', () => assert.strictEqual(M().value, 1));" }, 'roundtable', 1, 'fixture', async () => ({
+      ok: false, value: null, workDir, elapsedMs: 100, ...diagnostics,
+      cleanup: () => fs.rmSync(workDir, { recursive: true, force: true }),
+    }));
+    assert.strictEqual(run.error, true);
+    assert.ok(!fs.existsSync(workDir));
+    const evidence = JSON.parse(fs.readFileSync(path.join(process.env.EVAL_EVIDENCE_DIR, run.evidenceId, 'evidence.json'), 'utf8'));
+    assert.deepStrictEqual(evidence.diagnostics, diagnostics);
+    assert.strictEqual(evidence.transcript, null);
+    assert.ok(!JSON.stringify(run).includes('private'));
+    assert.strictEqual(fs.readFileSync(path.join(process.env.EVAL_EVIDENCE_DIR, run.evidenceId, 'final', 'entry.js'), 'utf8'), 'module.exports = { value: 1 };');
+  } finally {
+    if (savedEvidenceDir === undefined) delete process.env.EVAL_EVIDENCE_DIR;
+    else process.env.EVAL_EVIDENCE_DIR = savedEvidenceDir;
+    if (savedKeepDir === undefined) delete process.env.EVAL_KEEP_DIR;
+    else process.env.EVAL_KEEP_DIR = savedKeepDir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

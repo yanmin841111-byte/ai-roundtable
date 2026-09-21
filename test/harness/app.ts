@@ -66,6 +66,7 @@ export interface HarnessResult {
   workDir: string;
   elapsedMs: number;
   exitCode: number | null;
+  exitSignal?: NodeJS.Signals | null;
   timedOut: boolean;
   stdout: string;
   stderr: string;
@@ -211,7 +212,7 @@ export async function runApp(opts: HarnessOptions): Promise<HarnessResult> {
 
   const started = Date.now();
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
-  const run = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+  const run = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...(opts.env || {}),
@@ -224,15 +225,22 @@ export async function runApp(opts: HarnessOptions): Promise<HarnessResult> {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr, timedOut }); });
+    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout, stderr, timedOut }); });
   });
 
   const line = run.stdout.split('\n').find((l) => l.startsWith('E2E_RESULT '));
   let parsed: any = null;
   try { parsed = line ? JSON.parse(line.slice('E2E_RESULT '.length)) : null; } catch {}
+  const exitDetail = `exit=${run.code}, signal=${run.signal || 'none'}, stdout=${Buffer.byteLength(run.stdout)} bytes`;
+  const error = run.timedOut ? `harness 逾時(${Math.round(timeoutMs / 1000)} 秒)`
+    : !parsed ? `${line ? '劇本結果 JSON 不完整或無效' : '沒有收到劇本結果'} (${exitDetail})`
+    : !parsed.ok ? parsed.error || '劇本回報失敗'
+    : run.code !== 0 ? `Electron 異常退出 (${exitDetail})` : undefined;
 
   const shots: Record<string, string> = {};
   for (const f of fs.existsSync(shotDir) ? fs.readdirSync(shotDir) : []) {
@@ -240,14 +248,15 @@ export async function runApp(opts: HarnessOptions): Promise<HarnessResult> {
   }
 
   const result: HarnessResult = {
-    ok: !!(parsed && parsed.ok) && !run.timedOut,
+    ok: !!(parsed && parsed.ok) && !run.timedOut && run.code === 0,
     value: parsed ? parsed.value : null,
-    error: run.timedOut ? `harness 逾時(${Math.round(timeoutMs / 1000)} 秒)` : parsed ? parsed.error : '沒有收到劇本結果',
+    error,
     steps: (parsed && parsed.steps) || [],
     shots,
     tmp, userData, workDir,
     elapsedMs: Date.now() - started,
     exitCode: run.code,
+    exitSignal: run.signal,
     timedOut: run.timedOut,
     stdout: run.stdout,
     stderr: run.stderr,

@@ -1,0 +1,4 @@
+{"task":"forth-fix","condition":"solo","commit":"e0fece1-dirty","run":{"pass":44,"total":54,"base":44,"seconds":128,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false,"evidenceId":"run-AxMLfF"}}
+{"task":"forth-fix","condition":"roundtable","commit":"e0fece1-dirty","run":{"pass":54,"total":54,"base":44,"seconds":357,"inputTokens":126135,"outputTokens":7844,"repaired":true,"execFailed":false,"error":false,"evidenceId":"run-N1BL0x"}}
+{"task":"poker-fix","condition":"solo","commit":"e0fece1-dirty","run":{"pass":1,"total":39,"base":35,"seconds":66,"inputTokens":0,"outputTokens":0,"repaired":false,"execFailed":false,"error":false,"evidenceId":"run-V5Ke7q"}}
+{"task":"poker-fix","condition":"roundtable","commit":"e0fece1-dirty","run":{"pass":0,"total":39,"base":35,"seconds":399,"inputTokens":236138,"outputTokens":9802,"repaired":true,"execFailed":false,"error":false,"evidenceId":"run-uB03xy"}}

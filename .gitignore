@@ -2,6 +2,7 @@ node_modules/
 dist/
 .DS_Store
 release/
+.eval-local/
 
 # 本機的 Claude Code 權限設定,每台機器不同
 .claude/settings.local.json

@@ -106,7 +106,10 @@ function createWindow() {
   if (e2eScript) win.webContents.once('did-finish-load', async () => {
     let result: { ok?: boolean } | null = null;
     try { result = await win.webContents.executeJavaScript(fs.readFileSync(e2eScript, 'utf8')); } catch (e) { result = { ok: false, ...{ error: e instanceof Error ? e.message : String(e) } }; }
-    console.log(`E2E_RESULT ${JSON.stringify(result)}`);
+    // 等 stdout 真的寫出去再結束;寫不進去(EPIPE)也照樣收攤,不能讓 app 卡在這裡
+    await new Promise<void>((resolve) => {
+      process.stdout.write(`E2E_RESULT ${JSON.stringify(result)}\n`, () => resolve());
+    });
     stopOrchestrator();
     app.exit(result && result.ok ? 0 : 1);
   });

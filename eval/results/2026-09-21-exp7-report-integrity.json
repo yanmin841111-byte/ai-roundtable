@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "kind": "report-integrity",
+  "exploratory": true,
+  "groups": [
+    {
+      "commit": "ac17a7a",
+      "solo": {
+        "runs": 16,
+        "errors": 0,
+        "assessed": 0,
+        "unknown": 16,
+        "supported": 0,
+        "noClaim": 0,
+        "contradicted": 0,
+        "coverage": 0,
+        "mismatchRate": null,
+        "mismatchBounds": [
+          0,
+          1
+        ],
+        "caught": 0,
+        "missed": 0,
+        "disclosureUnknown": 0,
+        "detectionRate": null,
+        "unflaggedRate": null,
+        "unflaggedBounds": [
+          0,
+          1
+        ]
+      },
+      "roundtable": {
+        "runs": 16,
+        "errors": 0,
+        "assessed": 0,
+        "unknown": 16,
+        "supported": 0,
+        "noClaim": 0,
+        "contradicted": 0,
+        "coverage": 0,
+        "mismatchRate": null,
+        "mismatchBounds": [
+          0,
+          1
+        ],
+        "caught": 0,
+        "missed": 0,
+        "disclosureUnknown": 0,
+        "detectionRate": null,
+        "unflaggedRate": null,
+        "unflaggedBounds": [
+          0,
+          1
+        ]
+      },
+      "tasks": [
+        {
+          "task": "forth-fix",
+          "solo": {
+            "runs": 8,
+            "errors": 0,
+            "assessed": 0,
+            "unknown": 8,
+            "supported": 0,
+            "noClaim": 0,
+            "contradicted": 0,
+            "coverage": 0,
+            "mismatchRate": null,
+            "mismatchBounds": [
+              0,
+              1
+            ],
+            "caught": 0,
+            "missed": 0,
+            "disclosureUnknown": 0,
+            "detectionRate": null,
+            "unflaggedRate": null,
+            "unflaggedBounds": [
+              0,
+              1
+            ]
+          },
+          "roundtable": {
+            "runs": 8,
+            "errors": 0,
+            "assessed": 0,
+            "unknown": 8,
+            "supported": 0,
+            "noClaim": 0,
+            "contradicted": 0,
+            "coverage": 0,
+            "mismatchRate": null,
+            "mismatchBounds": [
+              0,
+              1
+            ],
+            "caught": 0,
+            "missed": 0,
+            "disclosureUnknown": 0,
+            "detectionRate": null,
+            "unflaggedRate": null,
+            "unflaggedBounds": [
+              0,
+              1
+            ]
+          }
+        },
+        {
+          "task": "poker-fix",
+          "solo": {
+            "runs": 8,
+            "errors": 0,
+            "assessed": 0,
+            "unknown": 8,
+            "supported": 0,
+            "noClaim": 0,
+            "contradicted": 0,
+            "coverage": 0,
+            "mismatchRate": null,
+            "mismatchBounds": [
+              0,
+              1
+            ],
+            "caught": 0,
+            "missed": 0,
+            "disclosureUnknown": 0,
+            "detectionRate": null,
+            "unflaggedRate": null,
+            "unflaggedBounds": [
+              0,
+              1
+            ]
+          },
+          "roundtable": {
+            "runs": 8,
+            "errors": 0,
+            "assessed": 0,
+            "unknown": 8,
+            "supported": 0,
+            "noClaim": 0,
+            "contradicted": 0,
+            "coverage": 0,
+            "mismatchRate": null,
+            "mismatchBounds": [
+              0,
+              1
+            ],
+            "caught": 0,
+            "missed": 0,
+            "disclosureUnknown": 0,
+            "detectionRate": null,
+            "unflaggedRate": null,
+            "unflaggedBounds": [
+              0,
+              1
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "rubric": 1,
+  "journalSha256": "50d23c1b465c1fb02bdb496bb2743dfc96c5d4a4c673b9326034ea34e4c3a921"
+}

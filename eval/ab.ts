@@ -26,6 +26,7 @@ import type { AbTask } from './ab-tasks';
 import { runHiddenTests, materialize } from './hidden-tests';
 import { wilson, fisherExact, stratifiedPermutation } from './stats';
 import { readJournal, appendJournal, remaining, staleCount } from './journal';
+import { saveReportEvidence } from './report-integrity';
 
 type Condition = 'solo' | 'roundtable';
 const CLI = process.env.EVAL_CLI || 'ollama';
@@ -41,6 +42,7 @@ const REVIEWER_ADAPTER = process.env.EVAL_REVIEWER_ADAPTER ?? (process.env.EVAL_
 const EXECUTOR = '執行者';
 
 interface AbRun {
+  evidenceId?: string;
   pass: number;
   total: number;
   // 改錯題的起點分數:任務開始前那份程式本來就過了幾項。
@@ -63,7 +65,7 @@ function arg(name: string): string | null {
   return i >= 0 ? process.argv[i + 1] ?? '' : null;
 }
 
-async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun> {
+export async function runOnce(task: AbTask, cond: Condition, n: number, commit: string, launch: typeof runApp = runApp): Promise<AbRun> {
   const lead = scriptedMember({
     id: 'lead', name: '主持人',
     plan: { summary: task.task, assignments: [{ agent: EXECUTOR, task: task.task }] },
@@ -74,13 +76,13 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
   const reviewer = { id: 'rev', name: '審查者', cli: REVIEWER_CLI, model: REVIEWER_MODEL, persona: '仔細的審查者。逐條對照需求,實際讀檔確認。', canEdit: false };
   // 審查者由流程挑選:候選人依成員順序,真的審查者要排在主持人前面才會被選到
   const members = cond === 'solo' ? [lead, executor] : [reviewer, lead, executor];
-  const r = await runApp({
+  const r = await launch({
     members,
     adapters: [...new Set([ADAPTER, cond === 'roundtable' ? REVIEWER_ADAPTER : ''].filter(Boolean))].map((a) => `installed:${a}`),
     files: task.files,
     git: true,
     settings: { leadAgentId: 'lead', maxRounds: 1 },
-    constants: { task: task.task, executor: EXECUTOR },
+    constants: { task: task.task, executor: EXECUTOR, keepEvidence: !!process.env.EVAL_EVIDENCE_DIR },
     timeoutMs: 40 * 60 * 1000,
     scenario: async (H: any) => {
       const g: any = globalThis;
@@ -90,6 +92,7 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
       const sum = (k: string) => turns.reduce((s: number, m: any) => s + (Number(m.usage[k]) || 0), 0);
       const exec = msgs.find((m: any) => m.kind === 'agent' && m.agentName === H.executor && m.phase && m.phase.code === 'execute');
       return {
+        evidenceTranscript: H.keepEvidence ? msgs : null,
         transcript: msgs.map((m: any) => ({ who: m.agentName || m.kind, phase: m.phase && m.phase.code, tag: m.tag, error: m.error || null, text: String(m.text || '').slice(0, 1500), activities: (m.activities || []).map((a: any) => a.title) })),
         execError: !exec || !!exec.error,
         repaired: msgs.some((m: any) => m.kind === 'agent' && m.phase && m.phase.code === 'repair'),
@@ -108,12 +111,28 @@ async function runOnce(task: AbTask, cond: Condition, n: number): Promise<AbRun>
     fs.cpSync(r.workDir, keep, { recursive: true, filter: (src) => !src.split(path.sep).includes('.git') });
     fs.writeFileSync(path.join(keep, '_transcript.json'), JSON.stringify(v.transcript || [], null, 2));
   }
-  r.cleanup();
   const error = !r.ok;
   const run: AbRun = {
     pass: score.pass, total: score.total, ...(task.files ? { base } : {}), seconds: Math.round(r.elapsedMs / 1000),
     inputTokens: v.inputTokens || 0, outputTokens: v.outputTokens || 0, repaired: !!v.repaired, execFailed: !!v.execError, error,
   };
+  // evidence 寫失敗也不能漏掉暫存目錄,否則整輪 sweep 會連工作目錄一起留下來
+  try {
+    if (process.env.EVAL_EVIDENCE_DIR) {
+      run.evidenceId = saveReportEvidence(process.env.EVAL_EVIDENCE_DIR, r.workDir, {
+        task: task.id, condition: cond, commit, originalFiles: task.files || {},
+        transcript: v.evidenceTranscript || null, run: { ...run, score },
+        model: { cli: CLI, model: MODEL, effort: EFFORT },
+        reviewer: { cli: REVIEWER_CLI, model: REVIEWER_MODEL },
+        ...(!r.ok ? { diagnostics: {
+          error: r.error || null, exitCode: r.exitCode, exitSignal: r.exitSignal || null,
+          timedOut: r.timedOut, stdout: r.stdout, stderr: r.stderr,
+        } } : {}),
+      });
+    }
+  } finally {
+    r.cleanup();
+  }
   const tokens = run.inputTokens + run.outputTokens ? ` · token ${run.inputTokens}/${run.outputTokens}` : '';
   // 改錯題只看分數看不出是修好還是弄壞,所以把起點與變化量一起印出來
   const delta = run.base !== undefined && !error ? `(起點 ${run.base},${run.pass - run.base >= 0 ? '+' : ''}${run.pass - run.base})` : '';
@@ -208,7 +227,7 @@ async function main() {
     for (let i = 1; i <= runs; i++) {
       for (const cond of conditions) {
         if (by[cond].length >= runs) continue;
-        const run = await runOnce(task, cond, i);
+        const run = await runOnce(task, cond, i, commit);
         by[cond].push(run);
         appendJournal(journalFile, { task: task.id, condition: cond, commit, run: run as unknown as Record<string, unknown> });
       }
