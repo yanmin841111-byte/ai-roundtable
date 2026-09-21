@@ -614,5 +614,1254 @@
         "expected": false
       }
     ]
+  },
+  "forth": {
+    "source": "https://raw.githubusercontent.com/exercism/problem-specifications/main/exercises/forth/canonical-data.json",
+    "version": null,
+    "cases": [
+      {
+        "description": "numbers just get pushed onto the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 4 5"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      {
+        "description": "pushes negative numbers onto the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "-1 -2 -3 -4 -5"
+          ]
+        },
+        "expected": [
+          -1,
+          -2,
+          -3,
+          -4,
+          -5
+        ]
+      },
+      {
+        "description": "can add two numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 +"
+          ]
+        },
+        "expected": [
+          3
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "+"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 +"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "more than two values on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 +"
+          ]
+        },
+        "expected": [
+          1,
+          5
+        ]
+      },
+      {
+        "description": "can subtract two numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "3 4 -"
+          ]
+        },
+        "expected": [
+          -1
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "-"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 -"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "more than two values on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 12 3 -"
+          ]
+        },
+        "expected": [
+          1,
+          9
+        ]
+      },
+      {
+        "description": "can multiply two numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "2 4 *"
+          ]
+        },
+        "expected": [
+          8
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "*"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 *"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "more than two values on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 *"
+          ]
+        },
+        "expected": [
+          1,
+          6
+        ]
+      },
+      {
+        "description": "can divide two numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "12 3 /"
+          ]
+        },
+        "expected": [
+          4
+        ]
+      },
+      {
+        "description": "performs integer division",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "8 3 /"
+          ]
+        },
+        "expected": [
+          2
+        ]
+      },
+      {
+        "description": "errors if dividing by zero",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "4 0 /"
+          ]
+        },
+        "expected": {
+          "error": "divide by zero"
+        }
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "/"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 /"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "more than two values on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 12 3 /"
+          ]
+        },
+        "expected": [
+          1,
+          4
+        ]
+      },
+      {
+        "description": "addition and subtraction",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 + 4 -"
+          ]
+        },
+        "expected": [
+          -1
+        ]
+      },
+      {
+        "description": "multiplication and division",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "2 4 * 3 /"
+          ]
+        },
+        "expected": [
+          2
+        ]
+      },
+      {
+        "description": "multiplication and addition",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 3 4 * +"
+          ]
+        },
+        "expected": [
+          13
+        ]
+      },
+      {
+        "description": "addition and multiplication",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 3 4 + *"
+          ]
+        },
+        "expected": [
+          7
+        ]
+      },
+      {
+        "description": "copies a value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 dup"
+          ]
+        },
+        "expected": [
+          1,
+          1
+        ]
+      },
+      {
+        "description": "copies the top value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 dup"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          2
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "dup"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "removes the top value on the stack if it is the only one",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 drop"
+          ]
+        },
+        "expected": []
+      },
+      {
+        "description": "removes the top value on the stack if it is not the only one",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 drop"
+          ]
+        },
+        "expected": [
+          1
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "drop"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "swaps the top two values on the stack if they are the only ones",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 swap"
+          ]
+        },
+        "expected": [
+          2,
+          1
+        ]
+      },
+      {
+        "description": "swaps the top two values on the stack if they are not the only ones",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 swap"
+          ]
+        },
+        "expected": [
+          1,
+          3,
+          2
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "swap"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 swap"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "copies the second element if there are only two",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 over"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          1
+        ]
+      },
+      {
+        "description": "copies the second element if there are more than two",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 over"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          3,
+          2
+        ]
+      },
+      {
+        "description": "errors if there is nothing on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "over"
+          ]
+        },
+        "expected": {
+          "error": "empty stack"
+        }
+      },
+      {
+        "description": "errors if there is only one value on the stack",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 over"
+          ]
+        },
+        "expected": {
+          "error": "only one value on the stack"
+        }
+      },
+      {
+        "description": "can consist of built-in words",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": dup-twice dup dup ;",
+            "1 dup-twice"
+          ]
+        },
+        "expected": [
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "description": "execute in the right order",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": countup 1 2 3 ;",
+            "countup"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          3
+        ]
+      },
+      {
+        "description": "can override other user-defined words",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": foo dup ;",
+            ": foo dup dup ;",
+            "1 foo"
+          ]
+        },
+        "expected": [
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "description": "can override built-in words",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": swap dup ;",
+            "1 swap"
+          ]
+        },
+        "expected": [
+          1,
+          1
+        ]
+      },
+      {
+        "description": "can override built-in operators",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": + * ;",
+            "3 4 +"
+          ]
+        },
+        "expected": [
+          12
+        ]
+      },
+      {
+        "description": "can use different words with the same name",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": foo 5 ;",
+            ": bar foo ;",
+            ": foo 6 ;",
+            "bar foo"
+          ]
+        },
+        "expected": [
+          5,
+          6
+        ]
+      },
+      {
+        "description": "can define word that uses word with the same name",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": foo 10 ;",
+            ": foo foo 1 + ;",
+            "foo"
+          ]
+        },
+        "expected": [
+          11
+        ]
+      },
+      {
+        "description": "cannot redefine non-negative numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": 1 2 ;"
+          ]
+        },
+        "expected": {
+          "error": "illegal operation"
+        }
+      },
+      {
+        "description": "cannot redefine negative numbers",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": -1 2 ;"
+          ]
+        },
+        "expected": {
+          "error": "illegal operation"
+        }
+      },
+      {
+        "description": "errors if executing a non-existent word",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "foo"
+          ]
+        },
+        "expected": {
+          "error": "undefined operation"
+        }
+      },
+      {
+        "description": "only defines locally",
+        "property": "evaluateBoth",
+        "input": {
+          "instructionsFirst": [
+            ": + - ;",
+            "1 1 +"
+          ],
+          "instructionsSecond": [
+            "1 1 +"
+          ]
+        },
+        "expected": [
+          [
+            0
+          ],
+          [
+            2
+          ]
+        ]
+      },
+      {
+        "description": "DUP is case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 DUP Dup dup"
+          ]
+        },
+        "expected": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "description": "DROP is case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 3 4 DROP Drop drop"
+          ]
+        },
+        "expected": [
+          1
+        ]
+      },
+      {
+        "description": "SWAP is case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 SWAP 3 Swap 4 swap"
+          ]
+        },
+        "expected": [
+          2,
+          3,
+          4,
+          1
+        ]
+      },
+      {
+        "description": "OVER is case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            "1 2 OVER Over over"
+          ]
+        },
+        "expected": [
+          1,
+          2,
+          1,
+          2,
+          1
+        ]
+      },
+      {
+        "description": "user-defined words are case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": foo dup ;",
+            "1 FOO Foo foo"
+          ]
+        },
+        "expected": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "description": "definitions are case-insensitive",
+        "property": "evaluate",
+        "input": {
+          "instructions": [
+            ": SWAP DUP Dup dup ;",
+            "1 swap"
+          ]
+        },
+        "expected": [
+          1,
+          1,
+          1,
+          1
+        ]
+      }
+    ]
+  },
+  "poker": {
+    "source": "https://raw.githubusercontent.com/exercism/problem-specifications/main/exercises/poker/canonical-data.json",
+    "version": null,
+    "cases": [
+      {
+        "description": "single hand always wins",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5S 7H 8D JC"
+          ]
+        },
+        "expected": [
+          "4S 5S 7H 8D JC"
+        ]
+      },
+      {
+        "description": "highest card out of all hands wins",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4D 5S 6S 8D 3C",
+            "2S 4C 7S 9H 10H",
+            "3S 4S 5D 6H JH"
+          ]
+        },
+        "expected": [
+          "3S 4S 5D 6H JH"
+        ]
+      },
+      {
+        "description": "a tie has multiple winners",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4D 5S 6S 8D 3C",
+            "2S 4C 7S 9H 10H",
+            "3S 4S 5D 6H JH",
+            "3H 4H 5C 6C JD"
+          ]
+        },
+        "expected": [
+          "3S 4S 5D 6H JH",
+          "3H 4H 5C 6C JD"
+        ]
+      },
+      {
+        "description": "multiple hands with the same high cards, tie compares next highest ranked, down to last card",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "3S 5H 6S 8D 7H",
+            "2S 5D 6D 8C 7S"
+          ]
+        },
+        "expected": [
+          "3S 5H 6S 8D 7H"
+        ]
+      },
+      {
+        "description": "winning high card hand also has the lowest card",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 5H 6S 8D 7H",
+            "3S 4D 6D 8C 7S"
+          ]
+        },
+        "expected": [
+          "2S 5H 6S 8D 7H"
+        ]
+      },
+      {
+        "description": "one pair beats high card",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 6C 8D KH",
+            "2S 4H 6S 4D JH"
+          ]
+        },
+        "expected": [
+          "2S 4H 6S 4D JH"
+        ]
+      },
+      {
+        "description": "highest pair wins",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 2H 6S 2D JH",
+            "2S 4H 6C 4D JD"
+          ]
+        },
+        "expected": [
+          "2S 4H 6C 4D JD"
+        ]
+      },
+      {
+        "description": "both hands have the same pair, high card wins",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4H 4S AH JC 3D",
+            "4C 4D AS 5D 6C"
+          ]
+        },
+        "expected": [
+          "4H 4S AH JC 3D"
+        ]
+      },
+      {
+        "description": "two pairs beats one pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 8H 6S 8D JH",
+            "4S 5H 4C 8C 5C"
+          ]
+        },
+        "expected": [
+          "4S 5H 4C 8C 5C"
+        ]
+      },
+      {
+        "description": "both hands have two pairs, highest ranked pair wins",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 8H 2D 8D 3H",
+            "4S 5H 4C 8S 5D"
+          ]
+        },
+        "expected": [
+          "2S 8H 2D 8D 3H"
+        ]
+      },
+      {
+        "description": "both hands have two pairs, with the same highest ranked pair, tie goes to low pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S QS 2C QD JH",
+            "JD QH JS 8D QC"
+          ]
+        },
+        "expected": [
+          "JD QH JS 8D QC"
+        ]
+      },
+      {
+        "description": "both hands have two identically ranked pairs, tie goes to remaining card (kicker)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "JD QH JS 8D QC",
+            "JS QS JC 2D QD"
+          ]
+        },
+        "expected": [
+          "JD QH JS 8D QC"
+        ]
+      },
+      {
+        "description": "both hands have two pairs that add to the same value, win goes to highest pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "6S 6H 3S 3H AS",
+            "7H 7S 2H 2S AC"
+          ]
+        },
+        "expected": [
+          "7H 7S 2H 2S AC"
+        ]
+      },
+      {
+        "description": "two pairs first ranked by largest pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "5C 2S 5S 4H 4C",
+            "6S 2S 6H 7C 2C"
+          ]
+        },
+        "expected": [
+          "6S 2S 6H 7C 2C"
+        ]
+      },
+      {
+        "description": "three of a kind beats two pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 8H 2H 8D JH",
+            "4S 5H 4C 8S 4H"
+          ]
+        },
+        "expected": [
+          "4S 5H 4C 8S 4H"
+        ]
+      },
+      {
+        "description": "both hands have three of a kind, tie goes to highest ranked triplet",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 2H 2C 8D JH",
+            "4S AH AS 8C AD"
+          ]
+        },
+        "expected": [
+          "4S AH AS 8C AD"
+        ]
+      },
+      {
+        "description": "with multiple decks, two players can have same three of a kind, ties go to highest remaining cards",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S AH AS 7C AD",
+            "4S AH AS 8C AD"
+          ]
+        },
+        "expected": [
+          "4S AH AS 8C AD"
+        ]
+      },
+      {
+        "description": "with multiple decks, two players can have same three of a kind, ties go to highest remaining cards",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "5S AH AS 7C AD",
+            "4S AH AS 8C AD"
+          ]
+        },
+        "expected": [
+          "4S AH AS 8C AD"
+        ]
+      },
+      {
+        "description": "a straight beats three of a kind",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 4C 8D 4H",
+            "3S 4D 2S 6D 5C"
+          ]
+        },
+        "expected": [
+          "3S 4D 2S 6D 5C"
+        ]
+      },
+      {
+        "description": "aces can end a straight (10 J Q K A)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 4C 8D 4H",
+            "10D JH QS KD AC"
+          ]
+        },
+        "expected": [
+          "10D JH QS KD AC"
+        ]
+      },
+      {
+        "description": "aces can start a straight (A 2 3 4 5)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 4C 8D 4H",
+            "4D AH 3S 2D 5C"
+          ]
+        },
+        "expected": [
+          "4D AH 3S 2D 5C"
+        ]
+      },
+      {
+        "description": "aces cannot be in the middle of a straight (Q K A 2 3)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2C 3D 7H 5H 2S",
+            "QS KH AC 2D 3S"
+          ]
+        },
+        "expected": [
+          "2C 3D 7H 5H 2S"
+        ]
+      },
+      {
+        "description": "both hands with a straight, tie goes to highest ranked card",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 6C 7S 8D 5H",
+            "5S 7H 8S 9D 6H"
+          ]
+        },
+        "expected": [
+          "5S 7H 8S 9D 6H"
+        ]
+      },
+      {
+        "description": "even though an ace is usually high, a 5-high straight is the lowest-scoring straight",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2H 3C 4D 5D 6H",
+            "4S AH 3S 2D 5H"
+          ]
+        },
+        "expected": [
+          "2H 3C 4D 5D 6H"
+        ]
+      },
+      {
+        "description": "flush beats a straight",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4C 6H 7D 8D 5H",
+            "2S 4S 5S 6S 7S"
+          ]
+        },
+        "expected": [
+          "2S 4S 5S 6S 7S"
+        ]
+      },
+      {
+        "description": "both hands have a flush, tie goes to high card, down to the last one if necessary",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4H 7H 8H 9H 6H",
+            "2S 4S 5S 6S 7S"
+          ]
+        },
+        "expected": [
+          "4H 7H 8H 9H 6H"
+        ]
+      },
+      {
+        "description": "both hands have a flush, tie goes to high card, down to the last one if necessary",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2H 7H 8H 9H 6H",
+            "3S 5S 6S 7S 8S"
+          ]
+        },
+        "expected": [
+          "2H 7H 8H 9H 6H"
+        ]
+      },
+      {
+        "description": "full house beats a flush",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "3H 6H 7H 8H 5H",
+            "4S 5H 4C 5D 4H"
+          ]
+        },
+        "expected": [
+          "4S 5H 4C 5D 4H"
+        ]
+      },
+      {
+        "description": "both hands have a full house, tie goes to highest-ranked triplet",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4H 4S 4D 9S 9D",
+            "5H 5S 5D 8S 8D"
+          ]
+        },
+        "expected": [
+          "5H 5S 5D 8S 8D"
+        ]
+      },
+      {
+        "description": "with multiple decks, both hands have a full house with the same triplet, tie goes to the pair",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "5H 5S 5D 9S 9D",
+            "5H 5S 5D 8S 8D"
+          ]
+        },
+        "expected": [
+          "5H 5S 5D 9S 9D"
+        ]
+      },
+      {
+        "description": "four of a kind beats a full house",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 4D 5D 4H",
+            "3S 3H 2S 3D 3C"
+          ]
+        },
+        "expected": [
+          "3S 3H 2S 3D 3C"
+        ]
+      },
+      {
+        "description": "both hands have four of a kind, tie goes to high quad",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2S 2H 2C 8D 2D",
+            "4S 5H 5S 5D 5C"
+          ]
+        },
+        "expected": [
+          "4S 5H 5S 5D 5C"
+        ]
+      },
+      {
+        "description": "with multiple decks, both hands with identical four of a kind, tie determined by kicker",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "3S 3H 2S 3D 3C",
+            "3S 3H 4S 3D 3C"
+          ]
+        },
+        "expected": [
+          "3S 3H 4S 3D 3C"
+        ]
+      },
+      {
+        "description": "straight flush beats four of a kind",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4S 5H 5S 5D 5C",
+            "7S 8S 9S 6S 10S"
+          ]
+        },
+        "expected": [
+          "7S 8S 9S 6S 10S"
+        ]
+      },
+      {
+        "description": "aces can end a straight flush (10 J Q K A)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "KC AH AS AD AC",
+            "10C JC QC KC AC"
+          ]
+        },
+        "expected": [
+          "10C JC QC KC AC"
+        ]
+      },
+      {
+        "description": "aces can start a straight flush (A 2 3 4 5)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "KS AH AS AD AC",
+            "4H AH 3H 2H 5H"
+          ]
+        },
+        "expected": [
+          "4H AH 3H 2H 5H"
+        ]
+      },
+      {
+        "description": "aces cannot be in the middle of a straight flush (Q K A 2 3)",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2C AC QC 10C KC",
+            "QH KH AH 2H 3H"
+          ]
+        },
+        "expected": [
+          "2C AC QC 10C KC"
+        ]
+      },
+      {
+        "description": "both hands have a straight flush, tie goes to highest-ranked card",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "4H 6H 7H 8H 5H",
+            "5S 7S 8S 9S 6S"
+          ]
+        },
+        "expected": [
+          "5S 7S 8S 9S 6S"
+        ]
+      },
+      {
+        "description": "even though an ace is usually high, a 5-high straight flush is the lowest-scoring straight flush",
+        "property": "bestHands",
+        "input": {
+          "hands": [
+            "2H 3H 4H 5H 6H",
+            "4D AD 3D 2D 5D"
+          ]
+        },
+        "expected": [
+          "2H 3H 4H 5H 6H"
+        ]
+      }
+    ]
   }
 }
