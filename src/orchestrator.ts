@@ -6,7 +6,7 @@ import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapte
 import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
-import type { AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, RevertOutcome, TaskOutcome, TaskSummary, ToolAuditEntry } from './ipc-types';
+import type { AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, RevertOutcome, TaskOutcome, TaskSummary, TaskVerification, TaskVerificationStatus, ToolAuditEntry } from './ipc-types';
 import type { Adapter, RunAttachment, Stoppable } from './adapters/types';
 import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
@@ -14,8 +14,8 @@ import type { TextLocale } from './text';
 import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
 import { FileToolSession } from './adapters/file-tools';
 import { snapshotDir, diffSnapshots } from './snapshot';
-import { captureBaseline, changesSince, revertToBaseline } from './task-changes';
-import { verifyChanges, verifyNotes } from './verify';
+import { captureBaseline, changesSince, directoryIdentity, revertToBaseline } from './task-changes';
+import { verificationRevision, verifyChanges, verifyNotes } from './verify';
 import { readProjectRules } from './project-rules';
 import { lockedTests, changedTests } from './test-lock';
 import type { VerifyResult } from './verify';
@@ -38,6 +38,8 @@ const ASK_MAX_ANSWER_CHARS = 2000; // 自由輸入的回答上限
 const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/; // 與 attachments 的目錄名規則一致
 
 class Orchestrator extends EventEmitter {
+  private verificationTarget: { message: LiveMessage; baseline: TaskBaseline } | null = null;
+  private maintenance = false;
   // 修復回合鎖住的既有測試檔(見 src/test-lock.ts)
   lockedForFix: string[] = [];
   // 修復回合開始前的快照:修復把事情弄糟時,可以只收回修復那一段
@@ -161,6 +163,7 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 對外操作 ----------
   async userMessage(text: string, mode: string, attachments: AttachmentMeta[] = []) {
+    if (this.maintenance) throw new Error(this.text('sys.reverifyBusy'));
     // 有了新訊息,之前失敗的回合就不再是「最近一次」,前情與附件也不同了,不再提供重試
     this.clearRetryable();
     const list = Array.isArray(attachments) ? attachments : [];
@@ -201,7 +204,7 @@ class Orchestrator extends EventEmitter {
   // 那正是這個產品最不能出錯的地方。指定回覆是單一回合,不牽涉後續階段,重跑是乾淨的。
   // 也只開放給最後一次任務裡的失敗:之後的訊息會改變前情與附件,重跑的就不是同一件事。
   async retry(messageId: string): Promise<{ ok: boolean; error?: string }> {
-    if (this.running) return { ok: false, error: this.text('sys.retryBusy') };
+    if (this.running || this.maintenance) return { ok: false, error: this.text('sys.retryBusy') };
     const idx = this.messages.findIndex((m) => m.id === messageId);
     const msg = this.messages[idx];
     const agent = msg && this.agents.find((a) => a.id === msg.agentId);
@@ -305,17 +308,87 @@ class Orchestrator extends EventEmitter {
   // 停損用的:成員卡住、改壞了,與其一個一個檔案復原,不如乾淨地退回去重來。
   // scope:'task' 還原到任務開始前;'repair' 只收回修復回合(保留執行階段做對的部分)
   async revertTask(scope: 'task' | 'repair' = 'task'): Promise<RevertOutcome> {
-    if (this.running) return { ok: false, reason: 'running', restored: 0, deleted: 0, skipped: [], failed: [] };
+    if (this.running || this.maintenance) return { ok: false, reason: 'running', restored: 0, deleted: 0, skipped: [], failed: [] };
     const baseline = scope === 'repair' ? this.fixBaseline : this.taskBaseline;
     if (!baseline) return { ok: false, reason: 'no-baseline', restored: 0, deleted: 0, skipped: [], failed: [] };
-    const r = await revertToBaseline(baseline);
-    const ok = r.failed.length === 0;
-    this.system(this.text(ok ? (scope === 'repair' ? 'sys.revertedFix' : 'sys.reverted') : 'sys.revertPartly', {
-      restored: r.restored.length,
-      deleted: r.deleted.length,
-      list: [...r.skipped, ...r.failed.map((f) => f.file)].map((f) => `- \`${f}\``).join('\n'),
-    }), { level: ok && !r.skipped.length ? undefined : 'warn', tag: 'revert' });
-    return { ok, ...(ok ? {} : { reason: 'failed' as const }), restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped, failed: r.failed };
+    this.maintenance = true;
+    try {
+      const r = await revertToBaseline(baseline);
+      const ok = r.failed.length === 0;
+      this.system(this.text(ok ? (scope === 'repair' ? 'sys.revertedFix' : 'sys.reverted') : 'sys.revertPartly', {
+        restored: r.restored.length,
+        deleted: r.deleted.length,
+        list: [...r.skipped, ...r.failed.map((f) => f.file)].map((f) => `- \`${f}\``).join('\n'),
+      }), { level: ok && !r.skipped.length ? undefined : 'warn', tag: 'revert' });
+      return { ok, ...(ok ? {} : { reason: 'failed' as const }), restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped, failed: r.failed };
+    } finally { this.maintenance = false; }
+  }
+
+  private async verificationRootMatches(target: NonNullable<Orchestrator['verificationTarget']>): Promise<boolean> {
+    if (this.verificationTarget !== target || this.config.settings.workDir !== target.baseline.cwd || !target.baseline.root) return false;
+    const root = await directoryIdentity(target.baseline.cwd);
+    return !!root && root.path === target.baseline.root.path && root.dev === target.baseline.root.dev && root.ino === target.baseline.root.ino;
+  }
+
+  async taskVerificationStatus(messageId: string): Promise<TaskVerificationStatus> {
+    const unavailable: TaskVerificationStatus = { freshness: 'unknown', canReverify: false, command: '', cwd: '' };
+    const target = this.verificationTarget;
+    if (this.running || this.maintenance || !target || target.message.id !== messageId || !await this.verificationRootMatches(target)) return unavailable;
+    const command = this.config.settings.verifyCommand || '';
+    const revision = await verificationRevision(target.baseline.cwd);
+    if (this.running || this.maintenance || !await this.verificationRootMatches(target) || command !== (this.config.settings.verifyCommand || '')) return unavailable;
+    const evidence = target.message.taskSummary?.verification;
+    const commands = [...(evidence?.gates || []).map((gate) => gate.command), ...(evidence?.skippedCommands || [])].join('\n');
+    const configured = command.split('\n').map((line) => line.trim()).filter(Boolean).join('\n');
+    const freshness = !evidence?.revision || !revision ? 'unknown'
+      : evidence.freshness === 'stale' || evidence.revision !== revision || commands !== configured ? 'stale'
+      : evidence.freshness === 'current' ? 'current' : 'unknown';
+    return { freshness, canReverify: true, command, cwd: target.baseline.cwd };
+  }
+
+  async reverifyTask(messageId: string, confirmedCommand: string): Promise<{ ok: boolean; error?: string }> {
+    if (this.running || this.maintenance) return { ok: false, error: this.text('sys.reverifyBusy') };
+    const target = this.verificationTarget;
+    if (!target || target.message.id !== messageId || confirmedCommand !== (this.config.settings.verifyCommand || '')) return { ok: false, error: this.text('sys.reverifyUnavailable') };
+    this.maintenance = true;
+    this.running = true;
+    this.stopped = false;
+    this.taskCwd = target.baseline.cwd;
+    this.setPhase({ code: 'verify' });
+    try {
+      if (!await this.verificationRootMatches(target)) return { ok: false, error: this.text('sys.reverifyUnavailable') };
+      const previous = target.message.taskSummary!;
+      const changed = diffSnapshots(target.baseline.snapshot, await snapshotDir(target.baseline.cwd));
+      const files = changed === null ? null : [...new Set([...changed, ...previous.files.map((file) => file.path), ...(previous.verification?.checkedFiles || [])])];
+      if (this.stopped || !await this.verificationRootMatches(target)) return { ok: false, error: this.text('sys.reverifyUnavailable') };
+      const result = await verifyChanges(target.baseline.cwd, files, confirmedCommand, this.locale,
+        (child: any) => { this.procs.add(child); child.on('close', () => this.procs.delete(child)); if (this.stopped) child.kill('SIGTERM'); },
+        () => this.stopped || this.verificationTarget !== target);
+      if (this.stopped || !await this.verificationRootMatches(target)) return { ok: false, error: this.text('sys.reverifyUnavailable') };
+      const diff = await changesSince(target.baseline);
+      if (this.stopped || this.verificationTarget !== target) return { ok: false, error: this.text('sys.reverifyUnavailable') };
+      const summary: TaskSummary = {
+        ...previous,
+        ...this.verificationSummary(result),
+        verificationHistory: [...(previous.verificationHistory || []), ...(previous.verification ? [previous.verification] : [])],
+        reviewStale: previous.reviewStale || !previous.verification?.revision || previous.verification.revision !== result.revision || result.freshness !== 'current',
+        ...(diff.ok ? { files: diff.files.slice(0, TASK_SUMMARY_FILES).map((file) => ({ path: file.path, status: file.status, added: file.added, removed: file.removed })), moreFiles: Math.max(0, diff.totalFiles - TASK_SUMMARY_FILES) } : {}),
+      };
+      this.updateMessage(target.message, { taskSummary: summary, text: taskSummaryText(summary, this.locale) }, true);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: this.text('sys.reverifyUnavailable') };
+    } finally {
+      this.maintenance = false;
+      this.running = false;
+      this.taskCwd = null;
+      this.setPhase({ code: 'idle' });
+    }
+  }
+
+  private verificationSummary(result: VerifyResult): Pick<TaskSummary, 'verify' | 'verification'> {
+    const verification: TaskVerification = { checked: result.checked, checkedFiles: result.checkedFiles, syntax: result.syntax, gates: result.gates || [], checkedAt: result.checkedAt, scopeKnown: result.scopeKnown, unchecked: result.unchecked || [], skippedCommands: result.skippedCommands || [], revision: result.revision, freshness: result.freshness };
+    return { verify: !result.ran ? 'none' : result.ok ? 'passed' : 'failed', verification };
   }
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
@@ -365,12 +438,17 @@ class Orchestrator extends EventEmitter {
       files,
       moreFiles,
       usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
-      ...(verify ? { verify: !verify.ran ? 'none' as const : verify.ok ? 'passed' as const : 'failed' as const } : {}),
+      ...(verify ? this.verificationSummary(verify) : {}),
       ...(testsTouched ? { testsTouched: true } : {}),
       ...(repairBroke ? { repairBroke: true } : {}),
       ...(rollback ? { rollback } : {}),
     };
-    this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
+    if (summary.verification?.revision && baseline) {
+      const current = await verificationRevision(baseline.cwd);
+      if (current !== summary.verification.revision) summary.verification.freshness = current ? 'stale' : 'unknown';
+    }
+    const message = this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
+    this.verificationTarget = baseline && verify ? { message, baseline } : null;
   }
 
   answerText(question: PendingQuestion, answer: QuestionAnswer) {
@@ -403,6 +481,7 @@ class Orchestrator extends EventEmitter {
   }
 
   reset() {
+      this.verificationTarget = null;
     this.stop();
     this.clearAsk();
     this.clearEmitTimers();
@@ -425,6 +504,7 @@ class Orchestrator extends EventEmitter {
   // 會收到(依上限截斷的)完整對話紀錄,而不是只有新訊息。
   loadConversation({ messages, conversationId }: { messages?: unknown; conversationId?: string | null } = {}) {
     if (this.running) throw new Error('目前仍在進行中,請先停止再載入歷史對話');
+    this.verificationTarget = null;
     // 待答問題不寫進 session,載入歷史對話時一律當成已經 defer
     this.clearAsk();
     this.clearEmitTimers();
@@ -534,6 +614,8 @@ class Orchestrator extends EventEmitter {
   // 任務的共同外殼:檢查成員與工作目錄、暫存附件、結束時一定清理。
   // body(agents, cwd) 是實際流程(完整圓桌或 @ 指定回覆)。
   async runExclusive(body: (agents: AgentConfig[], cwd: string) => Promise<void>) {
+    if (this.maintenance) return;
+    this.verificationTarget = null;
     const agents = this.agents;
     if (agents.length === 0) { this.system(this.text('sys.noAgents'), { level: 'error' }); return; }
     const cwd = this.config.settings.workDir;

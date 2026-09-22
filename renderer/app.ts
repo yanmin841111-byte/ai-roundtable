@@ -6,9 +6,11 @@ import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
 import { isPhaseInfo } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
+import { icon } from './icons';
 import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape } from './util';
 import { openDiff, loadDiff } from './diff-view';
 import { renderTaskSummary } from './task-card';
+import { refreshTaskVerifications } from './task-verification';
 import { setupLineups, renderLineupButton } from './lineup-menu';
 import { setupTerminal, toggleTerminal, syncTerminalTheme, relocalizeTerminal } from './terminal';
 import { envFixHtml, bindEnvFix, describeCliHealth, setEnvFixHandlers } from './env-fix';
@@ -109,7 +111,7 @@ async function init() {
   });
 
   window.api.onMessage((m) => renderMessage(m, { animate: true }));
-  window.api.onState(setState);
+  window.api.onState((state) => { setState(state); if (!state.running) refreshTaskVerifications(); });
   window.api.onReset(() => {
     clearTimeline();
     clearPendingAttachments();
@@ -1080,6 +1082,9 @@ function renderSidebar() {
   for (const a of config.agents) {
     const el = document.createElement('div');
     el.className = 'agent-card' + (a.enabled === false ? ' disabled' : '');
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', a.name);
     el.dataset.agentId = a.id;
     el.style.setProperty('--c', a.color); // 頭像外圈的成員色淡光
     // 健康狀態要畫在成員卡上。以前只在「轉接器沒註冊」時給徽章,所以綁到一個沒安裝的
@@ -1106,6 +1111,9 @@ function renderSidebar() {
         ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
       </div>`;
     el.onclick = () => openModal(a.id);
+    el.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openModal(a.id); }
+    };
     list.appendChild(el);
   }
   $<HTMLInputElement>('#work-dir').value = config.settings.workDir || '';
@@ -1592,6 +1600,8 @@ function disableQuestionCard(reason: 'answered' | 'expired'): void {
 function enabledAgents() { return (config && config.agents ? config.agents : []).filter((a) => a.enabled !== false); }
 
 function updateComposerHint() {
+  const mode = $<HTMLSelectElement>('#mode');
+  mode.title = t(`mode.${mode.value}`);
   const mentioned = Marker.findMentions ? Marker.findMentions($<HTMLTextAreaElement>('#input').value, enabledAgents()) : [];
   const names = joinNames(mentioned.map((a) => a.name));
   let text = '';
@@ -1754,7 +1764,7 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   else delete el.dataset.agentId;
   if (m.kind === 'agent') renderAgentMessage(el, m);
   else if (m.kind === 'user') renderUserMessage(el, m);
-  else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary);
+  else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary, m.id);
   else { el.innerHTML = systemHtml(m); bindEnvFix(el); }
   if (isNew && placed!.isNewNode) insertTimelineMarkers(placed!.node, m);
   if (el.parentElement && el.parentElement.classList.contains('msg-group')) el.classList.remove('msg-continue');
@@ -2411,7 +2421,7 @@ function setupComposerAttachments() {
   button.className = 'ghost small icon';
   button.title = t('composer.attach');
   button.setAttribute('aria-label', t('composer.attach'));
-  button.textContent = '📎';
+  button.appendChild(icon('attach'));
   button.onclick = () => pickAttachments();
   bar.insertBefore(button, bar.querySelector<HTMLElement>('.spacer'));
 

@@ -10,9 +10,12 @@
 // 結果會交給審查者與修復回合,也寫進結果卡——「審查通過」不能只是模型說通過。
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import { snapshotDir, diffSnapshots } from './snapshot';
 import { runProcess, truncate } from './adapters/process';
 import { tx } from './text';
 import type { TextLocale } from './text';
+import type { TaskVerification } from './ipc-types';
 
 export const SYNTAX_MAX_FILES = 40;
 const SYNTAX_TIMEOUT_MS = 10_000;
@@ -32,6 +35,13 @@ export interface GateResult {
 }
 
 export interface VerifyResult {
+  revision?: string;
+  freshness?: TaskVerification['freshness'];
+  checkedFiles?: string[];
+  checkedAt?: number;
+  scopeKnown?: boolean;
+  unchecked?: TaskVerification['unchecked'];
+  skippedCommands?: string[];
   // 載不起來的檔案(路徑相對工作目錄)
   syntax: Array<{ file: string; error: string }>;
   // 依序跑過的門檻:一道沒過就停,所以最後一筆才是失敗的那道
@@ -54,18 +64,31 @@ export async function verifyChanges(
   command: string,
   locale: TextLocale = 'zh-Hant',
   stop?: (child: unknown) => void,
+  cancelled: () => boolean = () => false,
 ): Promise<VerifyResult> {
-  const files = (changed || [])
-    .filter((f) => SYNTAX_EXTS.has(path.extname(f).toLowerCase()))
-    .slice(0, SYNTAX_MAX_FILES);
+  const beforeRevision = await verificationRevision(cwd);
+  const files = [...new Set(changed || [])];
+  const unchecked: NonNullable<TaskVerification['unchecked']> = [];
   const syntax: VerifyResult['syntax'] = [];
+  const checkedFiles: string[] = [];
   let checked = 0;
+  let attempted = 0;
   for (const file of files) {
+    if (cancelled()) break;
     const full = path.join(cwd, file);
     // 刪掉的檔案不檢查:那不是「壞掉」,是這次任務刪的
-    if (!fs.existsSync(full)) continue;
-    checked++;
+    try { await fs.promises.access(full); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unchecked.push({ file, reason: 'unavailable' });
+      continue;
+    }
+    if (!SYNTAX_EXTS.has(path.extname(file).toLowerCase())) { unchecked.push({ file, reason: 'unsupported' }); continue; }
+    if (attempted >= SYNTAX_MAX_FILES) { unchecked.push({ file, reason: 'limit' }); continue; }
+    attempted++;
     const error = path.extname(file).toLowerCase() === '.json' ? checkJson(full) : await checkJs(full, locale);
+    if (error === undefined) { unchecked.push({ file, reason: 'unavailable' }); continue; }
+    checked++;
+    checkedFiles.push(file);
     // 訊息裡的絕對路徑換成相對路徑:這段會進對話紀錄與匯出
     if (error) syntax.push({ file, error: truncate(relativize(error, full, file), 500) });
   }
@@ -73,7 +96,9 @@ export async function verifyChanges(
   // 一行一道,依序跑:先 lint、再 type check、再測試。第一道沒過就停——
   // 後面那些多半是同一個錯的回音,而且模型一次修一件事比較有機會修對。
   const gates: GateResult[] = [];
-  for (const line of command.split('\n').map((l) => l.trim()).filter(Boolean)) {
+  const commands = command.split('\n').map((line) => line.trim()).filter(Boolean);
+  for (const line of commands) {
+    if (cancelled()) break;
     let output = '';
     const r = await runProcess(line, [], { cwd, shell: true, timeoutMs: COMMAND_TIMEOUT_MS, locale }, {
       onProc: (child) => stop && stop(child),
@@ -95,7 +120,15 @@ export async function verifyChanges(
   const failed = gates.find((g) => !g.ok);
 
   const ran = checked > 0 || gates.length > 0;
+  const revision = await verificationRevision(cwd);
   return {
+    ...(beforeRevision ? { revision: beforeRevision } : {}),
+    freshness: cancelled() || !beforeRevision || !revision ? 'unknown' : beforeRevision === revision ? 'current' : 'stale',
+    checkedFiles,
+    checkedAt: Date.now(),
+    scopeKnown: changed !== null,
+    unchecked,
+    skippedCommands: commands.slice(gates.length),
     syntax,
     ...(gates.length ? { gates } : {}),
     ...(failed ? { command: failed } : {}),
@@ -103,6 +136,35 @@ export async function verifyChanges(
     ran,
     ok: syntax.length === 0 && !failed,
   };
+}
+
+export async function verificationRevision(cwd: string, maxBytes = 20 * 1024 * 1024): Promise<string | null> {
+  try {
+    const root = await fs.promises.realpath(cwd);
+    const identity = await fs.promises.stat(root);
+    const before = await snapshotDir(root, 10000, true);
+    if (!before) return null;
+    const hash = crypto.createHash('sha256');
+    hash.update(JSON.stringify([root, identity.dev, identity.ino]));
+    let bytes = 0;
+    for (const file of [...before.keys()].sort()) {
+      const size = Number(before.get(file)!.split(':')[0]);
+      if (bytes + size > maxBytes) return null;
+      hash.update(JSON.stringify([file, size]));
+      const handle = await fs.promises.open(path.join(root, file), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stream = handle.createReadStream();
+      for await (const chunk of stream) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) return null;
+        hash.update(chunk);
+      }
+    }
+    const after = await snapshotDir(root, 10000, true);
+    const currentRoot = await fs.promises.realpath(cwd);
+    const currentIdentity = await fs.promises.stat(currentRoot);
+    if (currentRoot !== root || currentIdentity.dev !== identity.dev || currentIdentity.ino !== identity.ino || diffSnapshots(before, after)?.length !== 0) return null;
+    return hash.digest('hex');
+  } catch { return null; }
 }
 
 // 錯誤訊息裡的絕對路徑換成相對路徑。要連實際路徑一起換:macOS 的 /var 是 /private/var 的
@@ -120,8 +182,10 @@ function realpathOrNull(full: string): string | null {
   try { return fs.realpathSync(full); } catch { return null; }
 }
 
-function checkJson(full: string): string | null {
-  try { JSON.parse(fs.readFileSync(full, 'utf8')); return null; } catch (e) { return String((e as Error).message || e); }
+function checkJson(full: string): string | null | undefined {
+  let source: string;
+  try { source = fs.readFileSync(full, 'utf8'); } catch { return undefined; }
+  try { JSON.parse(source); return null; } catch (error) { return String((error as Error).message || error); }
 }
 
 // node --check 只解析、不執行:模組裡的程式碼不會被跑到,但語法錯誤一定抓得到。
@@ -149,14 +213,17 @@ async function nodeCheck(args: string[], stdin: string | undefined, locale: Text
 // 而 Electron 內建的 Node 20 預設不會去猜(新版 node 會)。結果是:同一個 ESM 寫法的 .js,
 // 開發機上 node --check 過,在 app 裡卻被判成「Unexpected token 'export'」,
 // 然後修復回合被派去修一個根本沒壞的檔案。所以兩種解析都試,兩種都不過才算壞。
-async function checkJs(full: string, locale: TextLocale): Promise<string | null> {
+async function checkJs(full: string, locale: TextLocale): Promise<string | null | undefined> {
   const r = await nodeCheck(['--check', full], undefined, locale);
-  if (!r || r.ok) return null;
+  if (!r) return undefined;
+  if (r.ok) return null;
+  if (!/SyntaxError:/.test(r.error)) return undefined;
   if (path.extname(full).toLowerCase() !== '.js') return r.error;
   let source: string;
-  try { source = fs.readFileSync(full, 'utf8'); } catch { return r.error; }
+  try { source = fs.readFileSync(full, 'utf8'); } catch { return undefined; }
   const esm = await nodeCheck(['--input-type=module', '--check'], source, locale);
-  if (!esm || esm.ok) return null;
+  if (!esm) return undefined;
+  if (esm.ok) return null;
   // 兩種都不過:如果 CommonJS 那次的錯就是在抱怨「這看起來是 ES module」,
   // 那段訊息對使用者沒有意義,報 ES module 解析出來的錯比較貼近真正的問題。
   if (!/ES module|import statement|Unexpected token '(export|import)'/.test(r.error)) return r.error;

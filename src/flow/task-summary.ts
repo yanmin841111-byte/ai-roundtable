@@ -6,6 +6,24 @@ import type { TaskSummary } from '../ipc-types';
 
 // 結果卡的純文字版:匯出成 Markdown、重開歷史紀錄時用
 export const TASK_SUMMARY_FILES = 30;
+export function restoreVerification(raw: any): TaskSummary['verification'] {
+  if (!raw || !Number.isInteger(raw.checked) || raw.checked < 0 || !Array.isArray(raw.syntax) || !Array.isArray(raw.gates)) return undefined;
+  return {
+    ...(typeof raw.revision === 'string' && /^[a-f0-9]{64}$/.test(raw.revision) ? { revision: raw.revision } : {}),
+    freshness: raw.freshness === 'stale' ? 'stale' : 'unknown',
+    checked: raw.checked,
+    checkedFiles: Array.isArray(raw.checkedFiles) ? raw.checkedFiles.filter((file: unknown) => typeof file === 'string') : [],
+    ...(typeof raw.checkedAt === 'number' && raw.checkedAt > 0 && Number.isFinite(new Date(raw.checkedAt).getTime()) ? { checkedAt: raw.checkedAt } : {}),
+    scopeKnown: raw.scopeKnown === true,
+    unchecked: Array.isArray(raw.unchecked) ? raw.unchecked.filter((item: any) => item && typeof item.file === 'string' && ['unsupported', 'limit', 'unavailable'].includes(item.reason)).map((item: any) => ({ file: item.file, reason: item.reason })) : [],
+    skippedCommands: Array.isArray(raw.skippedCommands) ? raw.skippedCommands.filter((command: unknown) => typeof command === 'string') : [],
+    syntax: raw.syntax.filter((item: any) => item && typeof item.file === 'string' && typeof item.error === 'string')
+      .map((item: any) => ({ file: item.file, error: item.error })),
+    gates: raw.gates.filter((gate: any) => gate && typeof gate.command === 'string' && typeof gate.ok === 'boolean' && typeof gate.output === 'string')
+      .map((gate: any) => ({ command: gate.command, ok: gate.ok, code: Number.isInteger(gate.code) ? gate.code : null, output: gate.output, timedOut: gate.timedOut === true, ...(gate.notFound === true ? { notFound: true } : {}) })),
+  };
+}
+
 export function taskSummaryText(summary: TaskSummary, locale: TextLocale): string {
   const members = summary.members.map((m) => tx(locale, 'sys.taskSummary.member', {
     name: m.name,
@@ -26,9 +44,32 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
     summary.rollback ? tx(locale, summary.rollback.status === 'complete'
       ? summary.rollback.scope === 'repair' ? 'sys.taskSummary.rollbackRepair' : 'sys.taskSummary.rollbackTask'
       : summary.rollback.status === 'partial' ? 'sys.taskSummary.rollbackPartial' : 'sys.taskSummary.rollbackUnavailable') : '',
+    verificationText(summary, locale),
+    ...(summary.verificationHistory || []).map((verification) => `${tx(locale, 'sys.taskSummary.previousVerification')}\n${verificationText({ ...summary, verification }, locale)}`),
+    summary.reviewStale ? tx(locale, 'sys.taskSummary.reviewStale') : '',
     members.join('\n'),
     files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
   ].filter(Boolean).join('\n\n');
+}
+
+function verificationText(summary: TaskSummary, locale: TextLocale): string {
+  const verification = summary.verification;
+  if (!verification) return '';
+  const lines = [tx(locale, 'sys.taskSummary.evidence', { n: verification.checked })];
+  lines.push(tx(locale, `sys.taskSummary.freshness.${verification.freshness || 'unknown'}`));
+  if (verification.checkedAt) lines.push(tx(locale, 'sys.taskSummary.checkedAt', { time: new Date(verification.checkedAt).toISOString() }));
+  lines.push(...(verification.checkedFiles || []).map((file) => `  ${file}`));
+  for (const failure of verification.syntax) lines.push(`${failure.file}: ${failure.error}`);
+  for (const gate of verification.gates) {
+    const outcome = gate.timedOut ? 'timeout' : gate.notFound ? 'unavailable' : gate.ok ? 'passed' : 'failed';
+    lines.push(`${tx(locale, `sys.taskSummary.check.${outcome}`)}: ${gate.command} (${gate.code ?? '-'})`);
+    if (gate.output) lines.push(gate.output.split('\n').map((line) => `    ${line}`).join('\n'));
+  }
+  if (!verification.gates.length) lines.push(tx(locale, 'sys.taskSummary.noCommands'));
+  if (!verification.scopeKnown) lines.push(tx(locale, 'sys.taskSummary.unknownScope'));
+  for (const item of verification.unchecked || []) lines.push(`${item.file}: ${tx(locale, `sys.taskSummary.check.${item.reason}`)}`);
+  for (const command of verification.skippedCommands || []) lines.push(`${tx(locale, 'sys.taskSummary.check.skipped')}: ${command}`);
+  return lines.join('\n');
 }
 
 
@@ -45,6 +86,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     .filter((f: any) => f && typeof f.path === 'string' && f.path && FILE_STATUSES.has(f.status))
     .slice(0, TASK_SUMMARY_FILES)
     .map((f: any) => ({ path: f.path, status: f.status, added: num(f.added), removed: num(f.removed) }));
+  const verification = restoreVerification(raw.verification);
   return {
     startedAt: num(raw.startedAt),
     endedAt: num(raw.endedAt),
@@ -52,6 +94,9 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     files,
     moreFiles: num(raw.moreFiles),
     ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
+    ...(verification ? { verification } : {}),
+    ...(Array.isArray(raw.verificationHistory) ? { verificationHistory: raw.verificationHistory.map(restoreVerification).filter((item: TaskSummary['verification']) => !!item) } : {}),
+    ...(raw.reviewStale === true ? { reviewStale: true } : {}),
     ...(raw.testsTouched === true ? { testsTouched: true } : {}),
     ...(raw.repairBroke === true ? { repairBroke: true } : {}),
     ...((raw.rollback?.scope === 'task' || raw.rollback?.scope === 'repair')

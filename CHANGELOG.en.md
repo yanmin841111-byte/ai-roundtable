@@ -4,13 +4,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
 ## [0.2.0] - 2026-09-22
 
-This release adds the built-in terminal, test-first flow, automatic verification, environment repair, rollback, and lineups.
+This release adds the built-in terminal, test-first flow, automatic verification, environment repair, rollback, lineups and an acceptance workspace, with UI and UX refinements.
 
 ### Added
+
+- Result cards prioritize outstanding issues, verification evidence and file changes; model approval no longer implies merge readiness. Checked time, file scope, commands, exit codes and bounded output are saved. Unsupported, over-limit, unavailable and skipped-after-failure checks are distinguished. History and text exports retain the evidence; older records explicitly show when evidence is missing.
+- Manual acceptance timing supports start, pause, accepted/incomplete outcomes and per-task JSON export. Records stay in local Electron localStorage, separate from the conversation, with no upload; reopening does not count offline time. Timed intervals are not automatically measured active work or evidence of reduced review effort. Existing task duration still excludes discussion and planning.
+- Verification evidence is tied to a bounded content fingerprint. Returning to the app, comparing manually, accepting and exporting check whether the latest live task still matches its evidence and configured commands; this is not continuous monitoring or filesystem isolation. The fingerprint excludes dependencies, caches, version-control and app staging directories, covers at most 10,000 files and 20 MiB, and reports unknown for incomplete, unreadable or symlinked scope. It does not verify environment or requirement correctness. Historical conversations are never trusted as current evidence or command authority.
+- The latest live task can be reverified after confirming the current working directory and configured commands, without model calls, automatic repair or automatic rollback. Commands can modify files; changes during checks make the evidence stale. Earlier verification records remain available, and earlier reviewer conclusions or human acceptance do not automatically apply to a new version. JSON exports distinguish historical acceptance from current-version acceptance and include verification evidence. General tasks can still record manual acceptance without claiming file-version verification.
 
 - Cross-review now runs with a clean context: the reviewer sees the requirements, the other member's report, the actual changes and the verification result, but not the discussion or execution, and does not resume its own conversation memory. The file operations actually performed are attached to the prompt instead.
 - Test-first flow (Discuss → Write tests → Implement → Cross-review): acceptance criteria become tests first, and those tests are locked during implementation.
@@ -42,7 +45,7 @@ This release adds the built-in terminal, test-first flow, automatic verification
 
 - Cross-review closes two gaps found by the `eval:ab` evaluation: a member whose execution stopped partway after changing files used to skip review, leaving broken files unchecked, and is now reviewed; after a repair, the original reviewer re-checks the work, which counts as approved only if the re-check passes, and anything still wrong goes into the summary. Reviewers are also asked to check each requirement of the task, and suggestions that do not affect correctness no longer count as something to fix.
 - The license changed from MIT to [PolyForm Noncommercial 1.0.0](LICENSE): free for personal, research, education and non-profit use; commercial use is not permitted. Versions published before the change (including v0.1.0) remain under MIT.
-- A visual refresh across the interface: cool-toned neutrals, brand-blue gradients and glows, a faint dot-grid background, a frosted top bar, thinner lines and tabular numerals; both the light and dark themes were retuned.
+- A quieter graphite workspace with blue primary actions, less glow, fewer decorative gradients and smaller corners. Tool icons, keyboard focus and bilingual tooltips are consistent. Result cards place evidence and changed files before human acceptance, with expandable member details and no duplicate acceptance of the current version. Compact composer labels retain full workflow tooltips, controls wrap when the terminal opens, and attachment warnings are no longer truncated. Member rows support keyboard activation, and dark-mode primary controls have stronger contrast.
 - Once the lead's plan output (usually JSON) parses, it is folded away and only the plan card is shown; output that failed to parse stays fully visible.
 - System messages, errors and API adapter messages from the main process follow the interface language, and so do the file-tool descriptions, errors and memory placeholders the model reads, so an English meeting no longer gives the model mixed-language instructions.
 - Status lights turn green only when things actually work: cloud API keys are verified when settings open, unreachable endpoints show an actionable hint, and member cards flag CLIs that are missing or not logged in.

@@ -45,6 +45,7 @@ export type PhaseCode =
   | 'tests'
   | 'review'
   | 'repair'
+  | 'verify'
   | 'summary'
   // 成員在討論階段提問,流程停在這裡等使用者回答
   | 'ask';
@@ -318,6 +319,26 @@ export interface ChatMessage {
 //   failed     執行階段就失敗了
 export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed';
 
+export interface TaskVerification {
+  revision?: string;
+  freshness?: 'current' | 'stale' | 'unknown';
+  checked: number;
+  checkedFiles?: string[];
+  checkedAt?: number;
+  scopeKnown?: boolean;
+  unchecked?: Array<{ file: string; reason: 'unsupported' | 'limit' | 'unavailable' }>;
+  skippedCommands?: string[];
+  syntax: Array<{ file: string; error: string }>;
+  gates: Array<{ command: string; ok: boolean; code: number | null; output: string; timedOut: boolean; notFound?: boolean }>;
+}
+
+export interface TaskVerificationStatus {
+  freshness: 'current' | 'stale' | 'unknown';
+  canReverify: boolean;
+  command: string;
+  cwd: string;
+}
+
 export interface TaskSummary {
   startedAt: number;
   endedAt: number;
@@ -329,6 +350,9 @@ export interface TaskSummary {
   usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
   // app 自己跑的自動驗證(語法檢查與驗證指令):passed 通過、failed 沒過、none 沒有東西可驗
   verify?: 'passed' | 'failed' | 'none';
+  verification?: TaskVerification;
+  verificationHistory?: TaskVerification[];
+  reviewStale?: boolean;
   // 修復回合把事情弄糟了:驗證在執行後是通過的,修復之後變成不通過。
   // app 知道這件事,就不該只印一行紅字——結果卡要說出來,並且把「只收回修復」放在旁邊。
   repairBroke?: boolean;
@@ -622,6 +646,8 @@ export interface IpcContract {
   'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
   'diff:changes': { args: []; result: DiffResult };
   'task:revert': { args: [scope?: 'task' | 'repair']; result: RevertOutcome };
+  'task:verification': { args: [messageId: string]; result: TaskVerificationStatus };
+  'task:reverify': { args: [messageId: string, confirmedCommand: string]; result: { ok: boolean; error?: string } };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
   'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
@@ -693,6 +719,8 @@ export interface RendererApi {
   // 工作目錄目前的檔案改動;唯讀,不提供套用或還原
   getDiff(): Promise<DiffResult>;
   revertTask(scope?: 'task' | 'repair'): Promise<RevertOutcome>;
+  taskVerification(messageId: string): Promise<TaskVerificationStatus>;
+  reverifyTask(messageId: string, confirmedCommand: string): Promise<{ ok: boolean; error?: string }>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
   quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
   modelCapability(payload: { adapterId: string; model: string; live?: boolean }): Promise<ModelCapability | null>;

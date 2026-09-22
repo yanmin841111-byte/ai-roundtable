@@ -7,7 +7,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { verifyChanges, verifyNotes, SYNTAX_MAX_FILES } = require('../src/verify');
+const { verifyChanges, verifyNotes, verificationRevision, SYNTAX_MAX_FILES } = require('../src/verify');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
@@ -33,6 +33,9 @@ test('語法檢查:壞的 js 與 json 抓得到,好的不誤報,非程式檔不�
   const r = await verifyChanges(dir, ['good.js', 'bad.js', 'good.json', 'bad.json', 'notes.txt', 'nested/deep.mjs'], '');
   assert.deepStrictEqual(r.syntax.map((s: any) => s.file).sort(), ['bad.js', 'bad.json']);
   assert.strictEqual(r.checked, 5, '.txt 不算');
+  assert.deepStrictEqual(r.unchecked, [{ file: 'notes.txt', reason: 'unsupported' }]);
+  assert.strictEqual(r.scopeKnown, true);
+  assert.ok(r.checkedAt > 0);
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.ran, true);
   // 訊息裡不留絕對路徑:這段會進對話紀錄與匯出
@@ -65,6 +68,12 @@ test('刪掉的檔案不算壞掉;沒有可檢查的東西就是「沒有驗證�
   assert.strictEqual(gone.ran, false, '沒有檢查到任何東西,不能說「通過」');
   assert.strictEqual(verifyNotes(gone, 'zh-Hant'), null);
   assert.strictEqual((await verifyChanges(dir, null, '')).ran, false);
+  assert.strictEqual((await verifyChanges(dir, null, '')).scopeKnown, false);
+  fs.mkdirSync(path.join(dir, 'directory.json'));
+  const unavailable = await verifyChanges(dir, ['directory.json'], '');
+  assert.strictEqual(unavailable.ran, false);
+  assert.deepStrictEqual(unavailable.syntax, []);
+  assert.deepStrictEqual(unavailable.unchecked, [{ file: 'directory.json', reason: 'unavailable' }]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -106,6 +115,44 @@ test('檔案很多時只檢查前面幾十個,不會把整個工作目錄跑一�
   const dir = dirWith(files);
   const r = await verifyChanges(dir, Object.keys(files), '');
   assert.strictEqual(r.checked, SYNTAX_MAX_FILES);
+  assert.strictEqual(r.unchecked.length, 10);
+  assert.ok(r.unchecked.every((item: any) => item.reason === 'limit'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('停止後不啟動後續驗證指令,證據不得標為目前版本', async () => {
+  const dir = dirWith({ 'a.js': 'module.exports = 1;\n' });
+  try {
+    let cancelled = false;
+    const result = await verifyChanges(dir, ['a.js'], 'exit 0\necho unsafe > later.txt', 'en', () => { cancelled = true; }, () => cancelled);
+    assert.strictEqual(result.freshness, 'unknown');
+    assert.deepStrictEqual(result.skippedCommands, ['echo unsafe > later.txt']);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'later.txt')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('驗證指紋涵蓋內容、新增刪除與依賴原始碼,指令改檔不得算最新證據', async () => {
+  const dir = dirWith({ 'a.js': 'module.exports = 1;\n', 'dependency.txt': 'one' });
+  const first = await verifyChanges(dir, ['a.js'], 'exit 0');
+  assert.strictEqual(first.freshness, 'current');
+  assert.strictEqual(first.revision, await verificationRevision(dir));
+  const stamp = fs.statSync(path.join(dir, 'dependency.txt'));
+  fs.writeFileSync(path.join(dir, 'dependency.txt'), 'two');
+  fs.utimesSync(path.join(dir, 'dependency.txt'), stamp.atime, stamp.mtime);
+  assert.notStrictEqual(first.revision, await verificationRevision(dir), 'same-size edits with restored timestamps still invalidate evidence');
+  const changed = await verificationRevision(dir);
+  fs.writeFileSync(path.join(dir, 'new.txt'), 'new');
+  assert.notStrictEqual(changed, await verificationRevision(dir));
+  fs.unlinkSync(path.join(dir, 'new.txt'));
+  assert.strictEqual(changed, await verificationRevision(dir));
+  const mutation = await verifyChanges(dir, ['a.js'], 'echo changed > dependency.txt');
+  assert.strictEqual(mutation.ok, true);
+  assert.strictEqual(mutation.freshness, 'stale');
+  assert.strictEqual(await verificationRevision(dir, 1), null, 'bounded hashing must not claim a partial revision');
+  fs.symlinkSync('a.js', path.join(dir, 'link.js'));
+  assert.strictEqual(await verificationRevision(dir), null, 'symlinks outside the scope cannot be treated as verified');
+  const unknown = await verifyChanges(dir, ['a.js'], '');
+  assert.strictEqual(unknown.freshness, 'unknown');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -116,6 +163,7 @@ test('多道門檻:依序跑,一道沒過就停,並說出是哪一道、前面�
   assert.strictEqual(r.command.command, 'echo 型別錯了 >&2; exit 2', '失敗的那道要指名');
   assert.strictEqual(r.ok, false);
   assert.strictEqual(fs.existsSync(path.join(dir, 'ran.txt')), false, '沒過就停,後面的不跑');
+  assert.deepStrictEqual(r.skippedCommands, ['echo 不該跑到 > ran.txt']);
   const notes = verifyNotes(r, 'zh-Hant');
   assert.match(notes, /型別錯了/);
   assert.match(notes, /在它之前這幾道都通過了.*echo lint-ok/s);

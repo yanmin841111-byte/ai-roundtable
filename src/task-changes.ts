@@ -38,7 +38,7 @@ export interface TaskBaseline {
 
 const sizeOf = (fingerprint: string) => Number(fingerprint.split(':')[0]) || 0;
 
-async function directoryIdentity(cwd: string): Promise<TaskBaseline['root']> {
+export async function directoryIdentity(cwd: string): Promise<TaskBaseline['root']> {
   try {
     const real = await fs.promises.realpath(cwd);
     const stat = await fs.promises.lstat(real);

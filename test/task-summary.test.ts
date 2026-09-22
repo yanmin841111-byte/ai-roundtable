@@ -70,6 +70,10 @@ test('每位成員的結果和流程的走向一致;改了哪些檔案、用量�
   assert.ok(s.usage.turnsWithUsage > 0 && s.usage.turnsWithUsage < s.usage.turns, '只有 Alice 回報用量:要記下有回合沒回報');
   assert.strictEqual(s.usage.inputTokens, 100 * s.usage.turnsWithUsage);
   assert.ok(s.endedAt >= s.startedAt);
+  assert.strictEqual(s.verification.checked, 2);
+  assert.deepStrictEqual(s.verification.syntax, []);
+  assert.deepStrictEqual(s.verification.gates, []);
+  assert.deepStrictEqual(s.verification.checkedFiles.sort(), ['a.js', 'b.js']);
   assert.match(card.text, /任務結果/, '純文字版給匯出與歷史紀錄用');
   assert.match(card.text, /a\.js \+2 −0/);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -104,12 +108,117 @@ test('結果卡只給人看,不送進成員之後的提示詞', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('最新任務可重驗但不呼叫模型、不自動回退,舊證據與審查結論保留', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-reverify-'));
+  try {
+    const { card, prompts, orc } = await run(dir, [
+      { id: 'author', name: 'Author', canEdit: true, task: 'a.js', writes: { 'a.js': 'module.exports = 1;\n' } },
+      { id: 'reader', name: 'Reader', canEdit: false, task: 'review' },
+    ]);
+    const count = prompts.length;
+    const original = card.taskSummary.verification;
+    const members = card.taskSummary.members;
+    assert.strictEqual((await orc.taskVerificationStatus(card.id)).freshness, 'current');
+    fs.writeFileSync(path.join(dir, 'a.js'), 'function broken( {');
+    assert.strictEqual((await orc.taskVerificationStatus(card.id)).freshness, 'stale');
+    assert.strictEqual((await orc.reverifyTask(card.id, 'unexpected-command')).ok, false);
+    assert.strictEqual((await orc.reverifyTask(card.id, '')).ok, true);
+    assert.strictEqual(card.taskSummary.verify, 'failed');
+    assert.strictEqual(card.taskSummary.reviewStale, true);
+    assert.deepStrictEqual(card.taskSummary.members, members);
+    assert.deepStrictEqual(card.taskSummary.verificationHistory, [original]);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'a.js'), 'utf8'), 'function broken( {');
+    fs.writeFileSync(path.join(dir, 'a.js'), 'module.exports = 2;\n');
+    assert.strictEqual((await orc.reverifyTask(card.id, '')).ok, true);
+    assert.strictEqual(card.taskSummary.verify, 'passed');
+    assert.strictEqual(card.taskSummary.reviewStale, true);
+    assert.strictEqual(card.taskSummary.verificationHistory.length, 2);
+    assert.strictEqual(prompts.length, count);
+    const restored = O.restoreMessage(JSON.parse(JSON.stringify(card)));
+    assert.strictEqual(restored.taskSummary.verification.freshness, 'unknown');
+    assert.strictEqual(restored.taskSummary.verificationHistory.length, 2);
+    orc.loadConversation({ messages: [card] });
+    assert.strictEqual((await orc.taskVerificationStatus(card.id)).canReverify, false);
+    assert.strictEqual((await orc.reverifyTask(card.id, '')).ok, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('重驗期間拒絕交錯操作;停止、設定變動與工作目錄替換不得執行指令', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-reverify-guards-'));
+  const dir = path.join(root, 'work');
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(dir); fs.mkdirSync(outside);
+  try {
+    const { card, orc } = await run(dir, [
+      { id: 'author', name: 'Author', canEdit: true, task: 'a.js', writes: { 'a.js': 'module.exports = 1;\n' } },
+      { id: 'reader', name: 'Reader', canEdit: false, task: 'review' },
+    ]);
+    const previous = card.taskSummary;
+    orc.config.settings.verifyCommand = 'echo unsafe > escaped.txt';
+    assert.strictEqual((await orc.taskVerificationStatus(card.id)).freshness, 'stale', 'changed commands invalidate previous evidence');
+    assert.strictEqual((await orc.reverifyTask(card.id, '')).ok, false);
+    const pending = orc.reverifyTask(card.id, orc.config.settings.verifyCommand);
+    assert.strictEqual((await orc.reverifyTask(card.id, orc.config.settings.verifyCommand)).ok, false);
+    assert.strictEqual((await orc.revertTask()).reason, 'running');
+    await assert.rejects(() => orc.userMessage('another task', 'divide'));
+    orc.stop();
+    assert.strictEqual((await pending).ok, false);
+    assert.strictEqual(card.taskSummary, previous);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'escaped.txt')), false);
+    fs.renameSync(dir, path.join(root, 'original'));
+    fs.symlinkSync(outside, dir, 'dir');
+    assert.strictEqual((await orc.taskVerificationStatus(card.id)).canReverify, false);
+    assert.strictEqual((await orc.reverifyTask(card.id, orc.config.settings.verifyCommand)).ok, false);
+    assert.strictEqual(fs.existsSync(path.join(outside, 'escaped.txt')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('人工驗收只累計主動開始的區段,重開不計入離線時間,未完成不算通過', () => {
+  const { ReviewTimer } = require('../src/task-review');
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) || null, setItem: (key: string, value: string) => values.set(key, value) };
+  let now = 1000;
+  const timer = new ReviewTimer('task-1', 500, 200, storage, () => now, () => now);
+  assert.strictEqual(timer.data.startedAt, null);
+  timer.start();
+  now += 2000;
+  timer.checkpoint();
+  assert.strictEqual(timer.data.reviewMs, 2000);
+  timer.pause();
+  now += 5000;
+  timer.start();
+  now += 3000;
+  timer.decide('incomplete');
+  assert.strictEqual(timer.data.reviewMs, 5000);
+  assert.strictEqual(timer.data.outcome, 'incomplete');
+  now += 100000;
+  const restored = new ReviewTimer('task-1', 500, 200, storage, () => now, () => now);
+  assert.strictEqual(restored.running, false);
+  assert.deepStrictEqual(restored.data, timer.data);
+  restored.start();
+  now += 1000;
+  restored.decide('accepted');
+  assert.strictEqual(restored.data.reviewMs, 6000);
+  assert.strictEqual(restored.data.outcome, 'accepted');
+  assert.strictEqual(restored.data.decidedAt, now);
+  restored.decide('accepted', 'revision:checkedAt');
+  assert.strictEqual(new ReviewTimer('task-1', 500, 200, storage).data.acceptedEvidence, 'revision:checkedAt');
+  assert.strictEqual(new ReviewTimer('task-2', 500, 200, storage).data.reviewMs, 0);
+  values.set(timer.key, JSON.stringify({ ...timer.data, reviewMs: -1 }));
+  assert.strictEqual(new ReviewTimer('task-1', 500, 200, storage).data.startedAt, null);
+  const unavailable = new ReviewTimer('task-3', 500, 200, { getItem: () => null, setItem: () => { throw new Error('disk full'); } });
+  unavailable.start();
+  assert.strictEqual(unavailable.saved, false);
+  unavailable.pause();
+});
+
 test('載入紀錄:形狀正確的保留,壞掉的欄位丟掉', () => {
   const ok = O.restoreMessage({ id: 's', kind: 'system', tag: 'task-summary', text: 'x', taskSummary: {
     startedAt: 1, endedAt: 5, members: [{ name: 'A', outcome: 'approved', reviewers: ['B', 3] }, { name: 'X', outcome: 'magic' }],
     files: [{ path: 'a.js', status: 'added', added: 2, removed: -1 }, { path: '', status: 'added' }], moreFiles: 0,
     usage: { inputTokens: 10, outputTokens: 'x', costUsd: null, turns: 3, turnsWithUsage: 1 },
     rollback: { scope: 'repair', status: 'complete' },
+    verification: { checked: 1, syntax: [{ file: 'a.js', error: 'SyntaxError' }], gates: [{ command: 'npm test', ok: false, code: 1, output: 'expected 2', timedOut: false }] },
   } });
   assert.deepStrictEqual(ok.taskSummary.members, [{ name: 'A', outcome: 'approved', reviewers: ['B'] }]);
   assert.deepStrictEqual(ok.taskSummary.files, [{ path: 'a.js', status: 'added', added: 2, removed: 0 }]);
@@ -119,6 +228,17 @@ test('載入紀錄:形狀正確的保留,壞掉的欄位丟掉', () => {
   assert.match(taskSummaryText(ok.taskSummary, 'zh-Hant'), /已自動收回修復回合/);
   assert.match(taskSummaryText(ok.taskSummary, 'en'), /automatically rolled back/);
   assert.strictEqual(restoreTaskSummary({ ...ok.taskSummary, rollback: { scope: 'repair', status: 'magic' } }).rollback, undefined);
+  assert.deepStrictEqual(ok.taskSummary.verification, {
+    scopeKnown: false, unchecked: [], skippedCommands: [], checkedFiles: [], freshness: 'unknown',
+    checked: 1, syntax: [{ file: 'a.js', error: 'SyntaxError' }],
+    gates: [{ command: 'npm test', ok: false, code: 1, output: 'expected 2', timedOut: false }],
+  });
+  assert.strictEqual(restoreTaskSummary({ ...ok.taskSummary, verification: { checked: -1 } }).verification, undefined);
+  const invalidDate = restoreTaskSummary({ ...ok.taskSummary, verification: { ...ok.taskSummary.verification, checkedAt: Number.MAX_VALUE } });
+  assert.strictEqual(invalidDate.verification.checkedAt, undefined);
+  assert.doesNotThrow(() => taskSummaryText(invalidDate, 'en'));
+  assert.match(taskSummaryText(ok.taskSummary, 'en'), /Verification record[\s\S]*a.js: SyntaxError[\s\S]*Failed: npm test \(1\)[\s\S]*expected 2/);
+  assert.match(taskSummaryText(ok.taskSummary, 'zh-Hant'), /驗證紀錄[\s\S]*失敗: npm test/);
   assert.strictEqual(O.restoreMessage({ id: 't', kind: 'system', taskSummary: { members: 'x' } }).taskSummary, undefined);
 });
 

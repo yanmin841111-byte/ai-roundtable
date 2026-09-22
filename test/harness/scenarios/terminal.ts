@@ -56,6 +56,9 @@ async function main() {
       g.check(bar.scrollWidth <= bar.clientWidth + 1, `工具列在變窄之後仍然放得下(${barFit()})`);
       const reset = (g.$('#reset-btn') as HTMLElement).getBoundingClientRect();
       g.check(reset.right <= bar.getBoundingClientRect().right + 1, '最右邊的「新對話」沒有被擠出畫面');
+      const composer = g.$('.composer-box') as HTMLElement;
+      const controlsFit = () => Array.from(composer.querySelectorAll<HTMLElement>('select, button')).every((control) => control.getBoundingClientRect().right <= composer.getBoundingClientRect().right + 1 && control.getBoundingClientRect().left >= composer.getBoundingClientRect().left - 1);
+      g.check(controlsFit(), '終端開啟後流程、附件與送出都留在輸入區內');
 
       // 工作目錄要和成員一樣
       const workDir = (await api.getConfig()).settings.workDir;
@@ -121,6 +124,8 @@ async function main() {
       const reachable = resetBox.right <= barBox.right + 1 && resetBox.left >= barBox.left - 1;
       g.check(barEn.scrollWidth <= barEn.clientWidth + 1 || reachable, `英文介面下工具列放得下,或至少捲得到、點得到(${barFit()})`);
       barEn.scrollLeft = 0;
+      g.check(controlsFit(), '英文流程選單及送出操作不溢位');
+      g.check(!!(g.$('#mode') as HTMLElement).title && !!(g.$('#mode') as HTMLElement).getAttribute('aria-label'), '精簡流程名稱保留完整流程提示與可存取名稱');
       g.check(panel().offsetWidth >= 340, `讓回去之後面板仍有可用寬度(${panel().offsetWidth}px)`);
       (document.querySelector('input[name="ui-locale"][value="zh-Hant"]') as HTMLInputElement).click();
       await g.w(500);

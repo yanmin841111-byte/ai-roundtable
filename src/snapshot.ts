@@ -23,13 +23,13 @@ export type Snapshot = Map<string, string>;
 // 相對路徑(以 / 分隔)→「大小:修改時間」。超過上限或工作目錄本身讀不到時回 null(拿不到),
 // 不回一份不完整的快照假裝完整。讀不到的子資料夾直接略過:成員以同一個使用者身分執行,
 // 那裡它一樣讀不到。符號連結不跟隨,避免繞出工作目錄或繞成迴圈。
-export async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES): Promise<Snapshot | null> {
+export async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES, strict = false): Promise<Snapshot | null> {
   const out: Snapshot = new Map();
   let over = false;
   const walk = async (rel: string): Promise<void> => {
     let entries: fs.Dirent[];
     try { entries = await fs.promises.readdir(rel ? path.join(cwd, rel) : cwd, { withFileTypes: true }); }
-    catch (e) { if (!rel) throw e; return; }
+    catch (e) { if (!rel || strict) throw e; return; }
     if (rel && entries.some((e) => e.name === CACHE_TAG && e.isFile())) return;
     const files: string[] = [];
     const dirs: string[] = [];
@@ -38,9 +38,11 @@ export async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES): P
       const child = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) dirs.push(child);
       else if (e.isFile()) files.push(child);
+      else if (strict) { over = true; return; }
     }
     if (out.size + files.length > maxFiles) { over = true; return; }
     const stats = await Promise.all(files.map((f) => fs.promises.stat(path.join(cwd, f)).catch(() => null)));
+    if (strict && stats.some((stat) => !stat?.isFile())) { over = true; return; }
     files.forEach((f, i) => { const st = stats[i]; if (st) out.set(f, `${st.size}:${st.mtimeMs}`); });
     for (const d of dirs) { if (over) return; await walk(d); }
   };
