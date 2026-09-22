@@ -25,6 +25,13 @@ CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相
 - **測試先行流程**:先把驗收條件寫成測試,鎖起來,再實作到測試通過。
 - **專案規則**:工作目錄的 `CLAUDE.md`、`AGENTS.md`
   會自動放進每位成員的系統提示。
+- **反例**:審查者可以附上一段可執行的腳本,它必須在現在這份程式上跑出錯。app
+  自己跑一次:真的失敗才算數,竟然通過就標成「不成立」,不拿去逼人修。修好沒有由 app
+  重跑決定,不由任何成員宣告。
+- **反例語料庫**:確認過的反例存進工作目錄的
+  `.roundtable/counterexamples.json`,跟著專案走、可以
+  commit,之後每次任務開始前都會再跑一遍。
+- **棘輪**:語法檢查、驗證指令與反例攤成一組關卡,在任務開始前、執行後、修復後各量一次;任何一項從通過變成不通過就自動回退。本來就沒過的關卡不算這次任務的責任。
 - **停損**:成員卡住或改壞時,一鍵把工作目錄還原到任務開始前。
 - **討論 → 分工 → 平行執行 → 交叉審查 →
   總結**,全程即時串流顯示,包含工具呼叫與思考過程。
@@ -250,13 +257,14 @@ CLI 的 session
 | `src/orchestrator.ts`                                        | 討論、分工、執行、審查、@ 指定的流程                                                                        |
 | `src/flow/`                                                  | 流程用到的獨立部分:審查配對與結論、對話紀錄截斷、git 變更、分工解析、訊息還原、結果卡                       |
 | `src/snapshot.ts`、`src/task-changes.ts`                     | 工作目錄快照,與「這次任務改了什麼」的比對                                                                   |
+| `src/verify.ts`、`src/counterexample.ts`、`src/ratchet.ts`、`src/corpus.ts` | 自動驗證、審查者舉出的可執行反例、「不准變糟」的棘輪,以及跟著專案走的反例語料庫              |
 | `src/adapters/`                                              | 內建轉接器、擴充載入、CLI / API 通用轉接器                                                                  |
 | `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts` | 附件、歷史紀錄、API key 儲存                                                                                |
 | `src/terminal.ts`、`src/pty.exp`、`renderer/terminal.ts`     | 終端分頁:pty(借 macOS 內建的 expect,不需要原生模組)與右側面板                                               |
 | `src/git-check.ts`、`renderer/env-fix.ts`                    | 環境問題:偵測這台機器的 git 能不能用,以及「照實說一句話 + 一個可照做的下一步」的統一卡片                    |
 | `src/models.ts`、`src/model-rules.ts`、`src/usage.ts`        | 模型清單、強度規則、用量正規化                                                                              |
 | `adapters/templates/`                                        | 「+ 新增」裡的擴充範本                                                                                      |
-| `docs/`                                                      | 擴充撰寫說明與介面文案規格                                                                                  |
+| `docs/`                                                      | 擴充撰寫說明、介面文案規格,以及[接下來要做的](docs/next.md)                                                 |
 | `test/`                                                      | `npm test` 執行的測試;`test/e2e/` 是端對端測試                                                              |
 | `test/harness/`                                              | 隔離的真實 Electron 驗證與截圖,情境及用法見 [harness 說明](test/harness/README.md)                          |
 | `eval/`                                                      | 審查品質評測,以及「單人 vs 圓桌」對照實驗;都用真的模型跑固定題目,長時間的實驗可以用流水帳續跑               |

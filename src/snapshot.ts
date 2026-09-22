@@ -4,6 +4,8 @@
 import fs from 'fs';
 import path from 'path';
 import { RUNTIME_DIR } from './attachments';
+// 反例語料庫(見 corpus.ts):屬於專案、應該跟著專案被 commit,但不是任何成員這次的改動
+import { CORPUS_DIR } from './corpus';
 
 // ---------- 工作目錄快照 ----------
 // 審查要看的改動 = 執行階段前後,工作目錄裡大小或修改時間變了的檔案(含新增與刪除)。
@@ -15,9 +17,13 @@ const SNAPSHOT_MAX_FILES = 100000;
 // 版本控制、相依套件、框架快取與 app 自己的暫存:量大,也不是審查的對象。
 // dist、build、vendor 這類名字不略過:有些專案的原始碼就放在裡面。
 const SNAPSHOT_SKIP = new Set(['.git', '.hg', '.svn', 'node_modules', 'bower_components', '.venv', 'venv', '__pycache__', '.tox',
-  '.next', '.nuxt', '.gradle', 'Pods', '.DS_Store', RUNTIME_DIR]);
+  '.next', '.nuxt', '.gradle', 'Pods', '.DS_Store', RUNTIME_DIR, CORPUS_DIR]);
 // 依 Cache Directory Tagging 規範標記自己是快取的目錄(例如 Rust 的 target/)也略過
 const CACHE_TAG = 'CACHEDIR.TAG';
+// app 自己在工作目錄最上層寫的一次性檔案(目前只有審查者的反例腳本,見 counterexample.ts)。
+// 它們跑完就刪,但快照可能正好落在執行中間——被算進差異的話,會變成「沒有人寫過的檔案」
+// 出現在檔案改動裡,還會被送去語法檢查與審查。用前綴略過,不是用完整檔名:反例一次可能有好幾個。
+const SNAPSHOT_SKIP_PREFIX = '.roundtable-ce-';
 export type Snapshot = Map<string, string>;
 
 // 相對路徑(以 / 分隔)→「大小:修改時間」。超過上限或工作目錄本身讀不到時回 null(拿不到),
@@ -34,7 +40,7 @@ export async function snapshotDir(cwd: string, maxFiles = SNAPSHOT_MAX_FILES, st
     const files: string[] = [];
     const dirs: string[] = [];
     for (const e of entries) {
-      if (SNAPSHOT_SKIP.has(e.name)) continue;
+      if (SNAPSHOT_SKIP.has(e.name) || e.name.startsWith(SNAPSHOT_SKIP_PREFIX)) continue;
       const child = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) dirs.push(child);
       else if (e.isFile()) files.push(child);

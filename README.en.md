@@ -30,6 +30,18 @@ work, execute it, and review each other.
   implement until they pass.
 - **Project conventions**: `CLAUDE.md` or `AGENTS.md` in the working directory
   goes into every member's system prompt.
+- **Counterexamples**: a reviewer can attach an executable script that has to
+  fail against the current code. The app runs it: only a real failure counts, and
+  one that unexpectedly passes is marked unsubstantiated rather than used to
+  force a fix. Whether it got fixed is decided by the app re-running it, not by
+  any member's claim.
+- **Counterexample corpus**: confirmed counterexamples are stored in
+  `.roundtable/counterexamples.json` in the working directory, so they travel
+  with the project, can be committed, and run again before every future task.
+- **Ratchet**: syntax checks, verify commands and counterexamples become one set
+  of gates, measured before the task, after execution and after repair. Any gate
+  that goes from passing to failing is rolled back automatically. Gates that were
+  already failing are not this task's responsibility.
 - **A way out**: when a member gets stuck or breaks things, revert the working
   directory to how it was before the task, in one click.
 - **Discuss → divide → execute in parallel → cross-review → summarize**,
@@ -331,13 +343,14 @@ and `adapters/` can be opened from "Settings → Data & logs":
 | `src/orchestrator.ts`                                        | Discussion, division, execution, review and @-mention flow                                                                                             |
 | `src/flow/`                                                  | Self-contained parts of the flow: review pairing and verdicts, transcript truncation, git changes, plan parsing, message restore, the result card      |
 | `src/snapshot.ts`, `src/task-changes.ts`                     | Working-directory snapshots and "what did this task change"                                                                                            |
+| `src/verify.ts`, `src/counterexample.ts`, `src/ratchet.ts`, `src/corpus.ts` | Automatic verification, executable counterexamples raised by reviewers, the "never get worse" ratchet, and the per-project counterexample corpus |
 | `src/adapters/`                                              | Built-in adapters, extension loading, generic CLI / API adapters                                                                                       |
 | `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts` | Attachments, history, API key storage                                                                                                                  |
 | `src/terminal.ts`, `src/pty.exp`, `renderer/terminal.ts`     | Terminal tabs: the pty (borrowed from the expect that ships with macOS, so no native module) and the right-hand panel                                  |
 | `src/git-check.ts`, `renderer/env-fix.ts`                    | Environment problems: whether git can run on this machine, and the shared card that states what happened plus one thing to do about it                 |
 | `src/models.ts`, `src/model-rules.ts`, `src/usage.ts`        | Model lists, effort rules, usage normalization                                                                                                         |
 | `adapters/templates/`                                        | Extension templates shown under "+ Add"                                                                                                                |
-| `docs/`                                                      | Extension guide and interface copy spec                                                                                                                |
+| `docs/`                                                      | Extension guide, interface copy spec, and [what is next](docs/next.en.md)                                                                              |
 | `test/`                                                      | Tests run by `npm test`; `test/e2e/` is the end-to-end run                                                                                             |
 | `test/harness/`                                              | Isolated real-Electron checks and screenshots; see the [harness guide](test/harness/README.md) for scenarios and usage                                 |
 | `eval/`                                                      | Review-quality evaluation and the solo-vs-roundtable experiment: real models on a fixed set of tasks; long runs resume from a journal                  |

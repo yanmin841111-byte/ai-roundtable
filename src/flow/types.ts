@@ -106,6 +106,8 @@ export interface FixOutcome {
   // 修復後重跑的自動驗證(形狀見 src/verify.ts 的 VerifyResult)。
   // 這裡用 unknown:types.ts 不 import verify(會變成循環相依),實際型別由 orchestrator 處理
   verify?: unknown;
+  // 修復後重跑的反例(形狀見 src/counterexample.ts 的 CounterexampleRun),同樣用 unknown
+  counterexamples?: unknown;
 }
 
 export interface SummaryInput extends Partial<FixOutcome> {

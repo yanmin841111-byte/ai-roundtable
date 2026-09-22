@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Counterexamples**: alongside prose, a reviewer can attach an executable Node.js script (a ` ```counterexample ` block) that must fail against the current code. The app runs it once, giving three outcomes: a genuine failure is *confirmed* and becomes a gate the repair round has to pass; a script that unexpectedly passes is *unsubstantiated* — reported honestly, but never used to force a fix; a script that cannot run at all counts for neither side. Whether something got fixed is decided by the app re-running it, not by any member's claim. Scripts run from throwaway files at the top of the working directory, are deleted afterwards, and never count as a member's changes. At most 3 per review.
+  Why: experiment 7 showed the reviewer's diagnosis was already good enough (once finding 5 problems during discussion, one more than were planted). The loss happened in translating that diagnosis into prose for a weaker model to act on.
+- **Counterexample corpus**: confirmed counterexamples are stored in `.roundtable/counterexamples.json` inside the working directory, so they travel with the project and can be committed. They run again before every future task, which makes last month's bug visible if it is reintroduced this month. Capped at 50 entries / 256 KB; when full it says so rather than silently dropping the oldest. Retiring a stale claim is a one-line deletion.
+- **Ratchet**: syntax checks, verify commands and counterexamples are flattened into one vector of boolean gates, measured before the task, after execution and after repair. Any gate going from passing to failing triggers an automatic rollback — either of the repair alone or of the whole task. Only gates measured on both sides are compared; a gate present on one side only is "unknown", never a fabricated regression. Gates that were already failing are not this task's responsibility.
+  Why: experiment 7 found no difference in the primary metric, but the roundtable doubled both tails — 6/16 improved and 6/16 badly damaged, against 3/16 each for solo. The ratchet does not make models more accurate; it removes the lower half of the distribution.
+- **Pre-task baseline**: in coding mode, the verify command and the corpus counterexamples run once before any member starts, recording which gates were already passing. Without it, "execution broke this" and "it was already broken" are indistinguishable — experiment 7's poker-fix solo runs took a 35/39 starting point down to 1/39, and the old check only compared post-execution against post-repair, so it never saw it.
+
+### Changed
+
+- The rollback decision moved from "did the repair turn a passing verification into a failing one" to the ratchet above. It adds a baseline comparison and can see fine-grained gates: a project verify command is one coarse boolean, where "3 tests failing" and "10 tests failing" look identical.
+- Evidence tiers: only the user's own gates (syntax checks, verify commands) and counterexamples confirmed during this task can trigger an automatic rollback. Counterexamples inherited from the corpus still run and are still reported, but do not trigger a rollback on their own — an old counterexample may test the wrong requirement, and a task may be deliberately changing that behaviour. The principle: **the more independently verifiable something is, the more weight it carries**.
+
 ### Fixed
 
 - A repair round that breaks any previously passing verification gate is rolled back automatically and reverified, not only when syntax breaks. The work remains incomplete.

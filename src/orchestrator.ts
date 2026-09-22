@@ -16,6 +16,10 @@ import { FileToolSession } from './adapters/file-tools';
 import { snapshotDir, diffSnapshots } from './snapshot';
 import { captureBaseline, changesSince, directoryIdentity, revertToBaseline } from './task-changes';
 import { verificationRevision, verifyChanges, verifyNotes } from './verify';
+// 反例與棘輪:把審查從「意見」變成可執行的證據,再用它守住「不准變糟」(見 counterexample.ts / ratchet.ts)
+import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, type Counterexample, type CounterexampleRun } from './counterexample';
+import { gateState, decideRatchet, describeChanges, type GateState } from './ratchet';
+import { loadCorpus, additions, saveCorpus, corpusCounterexamples } from './corpus';
 import { readProjectRules } from './project-rules';
 import { lockedTests, changedTests } from './test-lock';
 import type { VerifyResult } from './verify';
@@ -551,6 +555,11 @@ class Orchestrator extends EventEmitter {
         this.fixBaseline = null;
         // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
         if (this.stopped) return;
+        // 自動驗證、測試鎖、棘輪都是「寫程式」模式才有的東西:文件、分析、腦力激盪跑它們沒有意義
+        const coding = this.config.settings.workStyle !== 'general';
+        // 棘輪的基準線:任何人動手之前先量一次。沒有它,「執行就弄壞了」和「本來就是壞的」分不出來
+        const before = coding ? await this.baselinePhase(cwd) : null;
+        if (this.stopped) return;
         // 測試先行(tdd):先讓每位成員把驗收條件寫成測試,再實作。
         // 實作回合鎖住剛寫好的測試——不然「讓測試通過」最短的路就是改測試(見 src/test-lock.ts)。
         const testFirst = mode === 'tdd';
@@ -576,8 +585,6 @@ class Orchestrator extends EventEmitter {
         const reviewed = [...reports, ...salvaged];
         // 先由 app 自己驗證(語法檢查與使用者設定的驗證指令),結果交給審查者:
         // 評測量到審查者讀完檔案照樣放行載不起來的程式,讀是看不出執行時的錯的
-        // 自動驗證與測試鎖是「寫程式」模式才有的東西:文件、分析、腦力激盪的任務跑它們沒有意義
-        const coding = this.config.settings.workStyle !== 'general';
         const verify = coding ? await this.verifyPhase(cwd, changed) : undefined;
         if (this.stopped) return;
         // 測試鎖:任務開始前就存在的測試檔被動到,要說出來;修復回合則直接擋下(見 src/test-lock.ts)
@@ -586,9 +593,12 @@ class Orchestrator extends EventEmitter {
         const reviews = await this.reviewPhase(agents, reviewed, changed, failed, undefined, verify, touchedTests, conflicts);
         if (this.stopped) return;
         this.markUnreviewed(reviewed, reviews);
-        const fix = await this.fixPhase(reviews, reviewed, verify, touchedTests, cwd);
+        // 審查者舉出的反例:app 自己跑一次,確認得了的才拿去當修復回合的關卡
+        const counterexamples = coding ? await this.counterexamplePhase(reviews, cwd, before?.runs || []) : [];
         if (this.stopped) return;
-        await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding);
+        const fix = await this.fixPhase(reviews, reviewed, verify, touchedTests, cwd, counterexamples);
+        if (this.stopped) return;
+        await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding, counterexamples);
         if (this.stopped) return;
         for (const report of [...reports, ...failed].filter((report) => unmerged.includes(report.agent.id))) {
           if (!fix.unresolved.some((issue) => issue.agent.id === report.agent.id)) {
@@ -596,14 +606,21 @@ class Orchestrator extends EventEmitter {
           }
         }
         const afterFix = fix.verify as VerifyResult | undefined;
-        const repairBroke = !!(verify && afterFix && afterFix.ran && (
-          verify.ran && verify.ok && !afterFix.ok
-          || verify.gates?.some((gate) => gate.ok && afterFix.gates?.some((after) => after.command === gate.command && !after.ok))
-        ));
+        const afterCe = (fix.counterexamples as CounterexampleRun[] | undefined) || counterexamples;
+        // 棘輪:把三個時間點的關卡向量攤開來比(見 src/ratchet.ts)。
+        // 舊的判斷只比「執行後 vs 修復後」,看不見執行階段本身就把東西弄壞的情況;
+        // 基準線那一層就是為了看見它(實驗 7 的 poker-fix 單人組把 35/39 打成 1/39)。
+        const executeState = gateState(verify, counterexamples);
+        const afterState = fix.verify || fix.counterexamples ? gateState(afterFix || verify, afterCe) : null;
+        // 只收回修復需要修復前的快照;沒有它就只能整段回退或不回退
+        const canRevertRepair = !!this.fixBaseline && changed !== null && !!verify && !verify.syntax.length;
+        const decision = decideRatchet({ baseline: before?.state, execute: executeState, afterFix: afterState, canRevertRepair });
+        this.reportRatchet(decision);
+        const repairBroke = decision.reason === 'repair-regressed';
+        // 語法錯誤照舊一定要收:那不是「比較差」,是根本載不起來
         const unloadable = !!(afterFix || verify)?.syntax.length;
-        // 執行階段就載不起來:整段撤回。執行階段語法是乾淨的、只是修復退步:只收回修復。
-        const scope = (repairBroke || unloadable) && verify && !verify.syntax.length && changed !== null ? 'repair' : 'task';
-        const contained = await this.containUnloadable(cwd, afterFix || verify, scope, repairBroke || unloadable);
+        const scope = decision.scope !== 'none' ? decision.scope : (unloadable && canRevertRepair ? 'repair' : 'task');
+        const contained = await this.containUnloadable(cwd, afterFix || verify, scope, decision.scope !== 'none' || unloadable);
         if (this.stopped) return;
         if (contained.rollback) {
           const affected = scope === 'task'
@@ -615,6 +632,9 @@ class Orchestrator extends EventEmitter {
             }
           }
         }
+        // 確認過的反例留進專案的語料庫。回退過就不收:那次改動已經不在了,
+        // 而反例描述的是當時那份程式的問題,留下來只會讓之後的基準線莫名其妙是紅的。
+        if (coding && !contained.rollback) this.saveCounterexamples(cwd, counterexamples, task);
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
         if (this.stopped) return;
         await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke, rollback: contained.rollback });
@@ -910,10 +930,16 @@ class Orchestrator extends EventEmitter {
     return salvaged;
   }
 
+  // 「停止」要殺得掉的子行程。自動驗證、基準線與反例都會開行程,三邊用同一份登記。
+  trackProc = (child: any) => {
+    this.procs.add(child);
+    child.on('close', () => this.procs.delete(child));
+    if (this.stopped) { try { child.kill('SIGTERM'); } catch {} }
+  };
+
   // 自動驗證:不靠模型判斷,app 自己跑(見 src/verify.ts)。執行後與修復後各跑一次。
   async verifyPhase(cwd: string, changed: string[] | null): Promise<VerifyResult> {
-    const result = await verifyChanges(cwd, changed, this.config.settings.verifyCommand || '', this.locale,
-      (child: any) => { this.procs.add(child); child.on('close', () => this.procs.delete(child)); });
+    const result = await verifyChanges(cwd, changed, this.config.settings.verifyCommand || '', this.locale, this.trackProc);
     const notes = verifyNotes(result, this.locale);
     if (!result.ran) this.system(this.text('sys.verifyNone'));
     // 指令根本不存在時,下一步是去設定改掉它——不是去讀程式碼找 bug
@@ -924,6 +950,145 @@ class Orchestrator extends EventEmitter {
     });
     else this.system(this.text('sys.verifyOk'), { tag: 'verify' });
     return result;
+  }
+
+  // 棘輪的基準線:在任何成員動手之前,先量一次這個工作目錄現在是什麼狀態。
+  //
+  // 為什麼需要:沒有基準線,「執行階段就把東西弄壞了」和「它本來就是壞的」分不出來。
+  // 實驗 7 的 poker-fix 單人組有兩次把起點 35/39 打成 1/39 與 0/39,而舊的判斷只比
+  // 「執行後 vs 修復後」——修復沒有讓它更糟,於是不回退。可是相對使用者按下送出之前,
+  // 那是一次純粹的破壞,而畫面上看不出來。
+  //
+  // 量兩樣:使用者設定的驗證指令,以及語料庫裡累積下來的反例(見 corpus.ts)。
+  // 這時候不做語法檢查——還沒有人改任何檔案,沒有「這次改動的檔案」可以檢查。
+  //
+  // 基準線只是紀錄,不是要求:本來就沒過的關卡不會變成這次任務的責任。
+  // 棘輪比的是「有沒有變糟」,不是「有沒有全過」。
+  async baselinePhase(cwd: string): Promise<{ verify?: VerifyResult; runs: CounterexampleRun[]; state: GateState }> {
+    const command = (this.config.settings.verifyCommand || '').trim();
+    const corpus = corpusCounterexamples(loadCorpus(cwd));
+    if (!command && !corpus.length) return { runs: [], state: { entries: [] } };
+    this.setPhase({ code: 'verify' });
+    const verify = command
+      ? await verifyChanges(cwd, [], command, this.locale, this.trackProc, () => this.stopped)
+      : undefined;
+    const runs = corpus.length && !this.stopped
+      ? await runCounterexamples(cwd, corpus, this.locale, this.trackProc, () => this.stopped)
+      : [];
+    // 語法那一項不列入:這時候沒有改動過的檔案,列進去會在執行後變成「一邊有一邊沒有」
+    const state = gateState(verify, runs, ['gate']);
+    const failing = state.entries.filter((entry) => !entry.ok);
+    this.system(failing.length
+      ? this.text('sys.baselineFailing', {
+        passed: state.entries.length - failing.length,
+        total: state.entries.length,
+        list: describeChanges(failing.map(({ kind, key, label, weight }) => ({ kind, key, label, weight })), this.locale),
+      })
+      : this.text('sys.baselineClean', { total: state.entries.length }), { tag: 'verify' });
+    return { verify, runs, state };
+  }
+
+  // 審查者舉出的反例:app 自己跑一次,結果分三種(見 counterexample.ts)。
+  //
+  // 這是把審查從「意見」換成「證據」的那一步。實驗 7 的現場顯示診斷品質本來就夠好,
+  // 損失發生在傳輸——診斷寫成文字,再由一顆比較弱的模型照著文字動手。反例讓那段路
+  // 不再需要理解:要修的人拿到的是一段會跑出錯的程式,修好沒有也由 app 自己跑,不由誰宣告。
+  async counterexamplePhase(reviews: Review[], cwd: string, carry: Counterexample[] = []): Promise<CounterexampleRun[]> {
+    // carry 是語料庫那幾道:基準線已經量過一次,執行之後要再量一次,棘輪才比得出來。
+    // 它們不參與下面的「確認 / 不成立」判定——那是針對這次審查新舉出來的反例。
+    const list: Counterexample[] = [...carry];
+    const dropped: string[] = [];
+    for (const rv of reviews) {
+      const parsed = parseCounterexamples(rv.text);
+      parsed.blocks.forEach((block, i) => {
+        list.push({
+          id: `${rv.reviewer.id}-${rv.target.agent.id}-${i + 1}`,
+          reviewerId: rv.reviewer.id,
+          reviewerName: rv.reviewer.name,
+          targetId: rv.target.agent.id,
+          title: block.title,
+          source: block.source,
+        });
+      });
+      for (const item of parsed.dropped) {
+        dropped.push(this.text('sys.ceDroppedItem', {
+          reviewer: rv.reviewer.name,
+          title: item.title || this.text('ce.untitled'),
+          reason: this.text(({ limit: 'ce.dropLimit', tooLong: 'ce.dropTooLong', empty: 'ce.dropEmpty' } as const)[item.reason]),
+        }));
+      }
+    }
+    // 沒收下的要說出來。半截的腳本跑起來多半是語法錯誤,而語法錯誤在這裡會被讀成
+    // 「問題確認了」——靜默丟掉比較安全,但使用者會以為審查者什麼也沒舉。
+    if (dropped.length) this.system(this.text('sys.ceDropped', { list: dropped.join('\n') }), { level: 'warn', tag: 'counterexample' });
+    if (!list.length || this.stopped) return [];
+    this.setPhase({ code: 'verify' });
+    const runs = await runCounterexamples(cwd, list, this.locale, this.trackProc, () => this.stopped);
+    this.reportCounterexamples(runs.filter((run) => !run.id.startsWith('corpus-')));
+    return runs;
+  }
+
+  reportCounterexamples(runs: CounterexampleRun[]) {
+    const confirmed = runs.filter((run) => classifyConfirmation(run) === 'confirmed');
+    const unsubstantiated = runs.filter((run) => classifyConfirmation(run) === 'unsubstantiated');
+    const unusable = runs.filter((run) => classifyConfirmation(run) === 'unusable');
+    const line = (run: CounterexampleRun) => this.text('sys.ceItem', { reviewer: run.reviewerName, title: run.title || this.text('ce.untitled') });
+    if (confirmed.length) {
+      this.system(this.text('sys.ceConfirmed', { n: confirmed.length, list: confirmed.map(line).join('\n') }), { level: 'warn', tag: 'counterexample' });
+    }
+    // 「不成立」要照實說,而且不拿去逼人修:審查者指出問題卻舉不出可重現的例子時,
+    // 這一條沒有被證實。實驗 3 量到「審查通過」只有 64% 真的是對的,反過來的誤判一樣要防。
+    if (unsubstantiated.length) {
+      this.system(this.text('sys.ceUnsubstantiated', { list: unsubstantiated.map(line).join('\n') }), { tag: 'counterexample' });
+    }
+    if (unusable.length) {
+      this.system(this.text('sys.ceUnusable', { list: unusable.map(line).join('\n') }), { level: 'warn', tag: 'counterexample' });
+    }
+  }
+
+  // 棘輪的結果照實說出來。改善與退步都要講——只講退步的話,使用者會以為棘輪只是個煞車。
+  reportRatchet(decision: ReturnType<typeof decideRatchet>) {
+    const latest = decision.fromExecute || decision.fromBaseline;
+    if (!latest) return;
+    const regressed = latest.regressed;
+    // 語料庫的舊主張分開講:它不會觸發回退,但使用者應該看得到「有一條累積下來的關卡
+    // 現在不過了」——可能是這次真的改壞了,也可能是那條主張本來就過時了。
+    const inherited = regressed.filter((change) => change.weight === 'inherited');
+    const blocked = regressed.filter((change) => change.weight !== 'inherited');
+    if (blocked.length) {
+      this.system(this.text('sys.ratchetRegressed', { list: describeChanges(blocked, this.locale) }), { level: 'warn', tag: 'verify' });
+    }
+    if (inherited.length) {
+      this.system(this.text('sys.ratchetInherited', { list: describeChanges(inherited, this.locale) }), { level: 'warn', tag: 'counterexample' });
+    }
+    if (latest.improved.length) {
+      this.system(this.text('sys.ratchetImproved', { list: describeChanges(latest.improved, this.locale) }), { tag: 'verify' });
+    }
+  }
+
+  // 修復之後把同一批反例再跑一次。id 不變,棘輪才對得起來。
+  async recheckCounterexamples(cwd: string, runs: CounterexampleRun[]): Promise<CounterexampleRun[]> {
+    const again = runs.filter((run) => classifyConfirmation(run) !== 'unusable');
+    if (!again.length || this.stopped) return runs;
+    return runCounterexamples(cwd, again, this.locale, this.trackProc, () => this.stopped);
+  }
+
+  // 確認過的反例留進專案的語料庫,成為它永久的關卡(見 corpus.ts)。
+  // 只收「真的重現了問題」的那些:不成立的收進去會讓之後每一次的基準線都從一個
+  // 不可信的起點開始。
+  saveCounterexamples(cwd: string, runs: CounterexampleRun[], task: string) {
+    const fresh = runs.filter((run) => !run.id.startsWith('corpus-'));
+    if (!fresh.length) return;
+    const existing = loadCorpus(cwd);
+    const incoming = additions(fresh, task, existing);
+    if (!incoming.length) return;
+    const outcome = saveCorpus(cwd, existing, incoming);
+    if (outcome.error) {
+      this.system(this.text('sys.corpusFailed', { error: outcome.error }), { level: 'warn', tag: 'counterexample' });
+      return;
+    }
+    if (outcome.added) this.system(this.text('sys.corpusSaved', { n: outcome.added, total: outcome.total }), { tag: 'counterexample' });
+    if (outcome.rejected) this.system(this.text('sys.corpusFull', { n: outcome.rejected }), { level: 'warn', tag: 'counterexample' });
   }
 
   async containUnloadable(cwd: string, verify: VerifyResult | undefined, scope: 'task' | 'repair', shouldRollback = !!verify?.syntax.length): Promise<{ verify: VerifyResult | undefined; rollback?: TaskSummary['rollback'] }> {
@@ -1077,6 +1242,9 @@ class Orchestrator extends EventEmitter {
         // 實測本機模型會在指出錯誤之後照樣寫上 [NO_ISSUES],或把它接在句尾而不是單獨一行。
         '',
         this.text('prompt.reviewWhat'),
+        // 反例:把「我覺得這裡不對」換成「這段跑起來會錯」。只對改得動檔案的目標要求——
+        // 唯讀成員的工作不會改動檔案,對它舉反例沒有對象。
+        readOnlyTarget ? null : this.text('prompt.reviewCounterexample'),
         this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
       ];
       const prompt = lines.filter((line): line is string => line !== null).join('\n');
@@ -1180,7 +1348,7 @@ class Orchestrator extends EventEmitter {
 
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
-  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string): Promise<FixOutcome> {
+  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string, counterexamples: CounterexampleRun[] = []): Promise<FixOutcome> {
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
     const reviewFailed = reviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'failed');
     if (reviewFailed.length) {
@@ -1198,6 +1366,22 @@ class Orchestrator extends EventEmitter {
       const issue = issues.get(t.agent.id) || { agent: t.agent, task: t.task, notes: [] };
       issues.set(t.agent.id, issue);
       issue.notes.push(this.text('prompt.reviewNote', { reviewer: rv.reviewer.name, text: stripMarker(rv.text, NO_ISSUES) }));
+    }
+    // 確認過的反例:和自動驗證同一層級——app 自己跑出來的,不是誰的意見。
+    // 差別在於它指名道姓:修的人拿到的是一段會跑出錯的程式,不必先讀懂審查者的文字描述。
+    // 實驗 7 的損失就發生在那段翻譯上(見 src/counterexample.ts 開頭)。
+    const ceNotes = counterexampleNotes(counterexamples, this.locale);
+    if (ceNotes) {
+      // 反例是針對某位成員的成果舉出來的,優先找那個人;對不上就找所有可能改過檔的人
+      for (const run of counterexamples.filter((item) => classifyConfirmation(item) === 'confirmed')) {
+        const owner = reviewed.find((report) => report.agent.id === run.targetId && effectiveCanEdit(report.agent));
+        const targets = owner ? [owner] : reviewed.filter((report) => effectiveCanEdit(report.agent));
+        for (const target of targets) {
+          const issue = issues.get(target.agent.id) || { agent: target.agent, task: target.task, notes: [] };
+          issues.set(target.agent.id, issue);
+          if (!issue.notes.includes(ceNotes)) issue.notes.push(ceNotes);
+        }
+      }
     }
     // 自動驗證沒過:不管審查者說什麼都要處理。這是 app 實際跑出來的結果,不是誰的意見
     if (verify && verify.ran && !verify.ok) {
@@ -1240,6 +1424,8 @@ class Orchestrator extends EventEmitter {
         // 既有的測試檔在修復回合鎖起來:要讓測試通過請改實作。API 成員由檔案工具直接擋下,
         // CLI 成員擋不到,所以提示裡講明,真的改了也會在複查與結果卡上標出來
         this.lockedForFix.length ? this.text('prompt.fixTestLock', { list: this.lockedForFix.join('、') }) : null,
+        // 反例就是這一回合的驗收標準,而且是 app 自己跑的:說「已經修好了」不算數
+        ceNotes ? this.text('prompt.fixCounterexampleRule') : null,
         '',
         this.text('prompt.fixTask', { task: it.task }),
         '',
@@ -1288,7 +1474,7 @@ class Orchestrator extends EventEmitter {
   // 修復後的複查:修好的成員再給原本的審查者看一次(只複查一次,不再修)。
   // 以前修完就算數,但評測裡修復回合會把原本對的地方改壞,修完卻沒有人看得到。
   // 複查通過才算「審查通過」;還有問題就帶進總結;複查本身失敗則維持「已修復(未再審查)」。
-  async rereviewPhase(agents: AgentConfig[], reviews: Review[], fix: FixOutcome, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, cwd: string, touchedTests: string[] = [], coding = true) {
+  async rereviewPhase(agents: AgentConfig[], reviews: Review[], fix: FixOutcome, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, cwd: string, touchedTests: string[] = [], coding = true, counterexamples: CounterexampleRun[] = []) {
     fix.rereviews = [];
     if ((!(fix.repaired || []).length && !fix.fixFailed.length) || this.stopped) return;
     // 修復之後重跑一次自動驗證:修復可能修好、也可能改壞,兩種都要由 app 自己確認
@@ -1296,6 +1482,11 @@ class Orchestrator extends EventEmitter {
     if (this.stopped) return;
     const verify = coding ? await this.verifyPhase(cwd, changed) : undefined;
     fix.verify = verify;
+    // 同一批反例再跑一次(id 不變,棘輪才對得起來)。修好沒有由這裡決定,不由修復回合的回報決定——
+    // 實驗 7 有一次修復宣稱已修正,保存的檔案卻多一個 }, 獨立語法檢查與模組載入都失敗。
+    const afterCe = coding ? await this.recheckCounterexamples(cwd, counterexamples) : counterexamples;
+    fix.counterexamples = afterCe;
+    if (coding && afterCe.length) this.reportCounterexamples(afterCe.filter((run) => !run.passed));
     // 修復之後再看一次:CLI 成員擋不住,真的改了既有測試檔就要標出來給複查者與結果卡
     const afterTests = coding ? lockedTests(snapBefore, changed) : [];
     fix.testsTouched = afterTests;
@@ -1316,6 +1507,9 @@ class Orchestrator extends EventEmitter {
       } });
     }
     if (!pairs.length) return;
+    // 複查者拿到的是 app 跑出來的反例狀態,不是修復者說的
+    const ceStatus = counterexampleStatus(afterCe, this.locale);
+    if (ceStatus) for (const pair of pairs) pair.target.previousNotes = [...(pair.target.previousNotes || []), ceStatus];
     const rereviews = await this.reviewPhase(agents, pairs.map((p) => p.target), changed, [], pairs, verify, afterTests);
     fix.rereviews = rereviews;
     const still = rereviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'issues');
