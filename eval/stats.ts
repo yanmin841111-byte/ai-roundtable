@@ -1,6 +1,26 @@
 // 評測用的統計:次數少的時候,「12/15 比 11/14」這種差距幾乎一定是運氣。
 // 把不確定性一起報出來,才不會把雜訊讀成結論。
 
+export function failureSimilarity(failures: Array<readonly string[] | null>): { mean: number | null; pairs: number; bothCorrect: number; unavailable: number } {
+  let sum = 0;
+  let pairs = 0;
+  let bothCorrect = 0;
+  let unavailable = 0;
+  for (let left = 0; left < failures.length; left++) {
+    for (let right = left + 1; right < failures.length; right++) {
+      const first = failures[left];
+      const second = failures[right];
+      if (first === null || second === null) { unavailable++; continue; }
+      const union = new Set([...first, ...second]);
+      if (!union.size) { bothCorrect++; continue; }
+      const secondSet = new Set(second);
+      sum += [...new Set(first)].filter((id) => secondSet.has(id)).length / union.size;
+      pairs++;
+    }
+  }
+  return { mean: pairs ? sum / pairs : null, pairs, bothCorrect, unavailable };
+}
+
 // Wilson 分數區間:比例的 95% 信賴區間。次數少、比例接近 0 或 1 時比常態近似可靠
 export function wilson(k: number, n: number, z = 1.96): [number, number] {
   if (n <= 0) return [0, 1];

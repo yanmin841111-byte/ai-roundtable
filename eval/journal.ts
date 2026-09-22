@@ -9,7 +9,8 @@ import path from 'path';
 
 export interface JournalEntry {
   task: string;
-  condition: 'solo' | 'roundtable';
+  condition: string;
+  protocol?: string;
   commit: string;
   // 這一次的結果(形狀與 ab.ts 的 AbRun 相同)
   run: Record<string, unknown>;
@@ -22,7 +23,7 @@ export function readJournal(file: string): JournalEntry[] {
     if (!line.trim()) continue;
     try {
       const e = JSON.parse(line);
-      if (e && typeof e.task === 'string' && (e.condition === 'solo' || e.condition === 'roundtable') && e.run) out.push(e);
+      if (e && typeof e.task === 'string' && typeof e.condition === 'string' && /^[a-z][a-z0-9-]*$/.test(e.condition) && e.run) out.push(e);
     } catch { /* 寫到一半被中斷的最後一行:丟掉就好 */ }
   }
   return out;
@@ -35,7 +36,7 @@ export function appendJournal(file: string, entry: JournalEntry): void {
 }
 
 // 這一輪還要跑幾次:同一個 commit、同一題、同一種條件的紀錄才算數
-export function remaining(entries: JournalEntry[], task: string, condition: 'solo' | 'roundtable', commit: string, runs: number): number {
+export function remaining(entries: JournalEntry[], task: string, condition: string, commit: string, runs: number): number {
   const done = entries.filter((e) => e.task === task && e.condition === condition && e.commit === commit).length;
   return Math.max(0, runs - done);
 }

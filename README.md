@@ -58,6 +58,16 @@ CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相
 - **直接用你現有的 CLI 訂閱**,不需要另外申請 API key;API 類成員的 key
   用作業系統安全儲存加密保存。
 
+## 目前的證據界線
+
+**「多個 AI 互相審查比單人更好」目前尚未被本專案的評測證實,不是已被證偽。**
+同模型互審的實驗 3、5、6 後來因修復回合未取得檔案工具而作廢;小模型執行、Claude Code
+把關的實驗 7 未支持 H3(主指標差距 -6.7 個百分點,p = 0.631)。Claude Code + Codex
+同桌這個旗艦組合尚未量過。方法、失敗批次與限制見 [實驗紀錄](eval/EXPERIMENTS.md)。
+
+棘輪只防止**已量到且可比較的關卡**退步,受限於驗證涵蓋範圍與回退是否成功,不保證整個任務正確。
+反例修復後通過只證明那些具體檢查已通過,不代表所有需求都滿足。
+
 ## 需求
 
 - macOS(其他平台尚未測試)
@@ -102,6 +112,8 @@ npm run dist
 - **討論 → 分工執行 → 交叉審查**
   1. 成員依序輪流發言,每人看得到之前所有人的話。某成員認為已有共識時會在回覆末尾寫
      `[AGREED]`;同一回合全員同意即進入分工,否則到達「最大討論回合」後強制進入。
+     設定可改成「獨立首輪後互評」:首輪每人只拿任務、附件與專案規範,不續接舊 session;
+     全員完成後才受理提問並互評,至少兩輪。陣容會保存討論方式。這是 context 隔離,不是 CLI 權限沙箱。
   2. 主持人輸出 JSON 分工表,盡量讓每人負責不同檔案。
   3. 兩位以上可改檔的成員**平行**執行時,各自使用隔離目錄,結束後只合併沒有重疊的改動。重疊或無法安全合併的版本保留在訊息列出的目錄,成果標成未完成。無法準備隔離目錄時改在原目錄**依序**執行,並照實說明。
   4. **app 自己驗證**(只有「寫程式」模式):改動的 `.js`、`.json`
@@ -249,26 +261,26 @@ CLI 的 session
 
 ## 專案結構
 
-| 路徑                                                         | 說明                                                                                                        |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `main.ts`、`preload.ts`                                      | Electron 主程序與 IPC 介面                                                                                  |
-| `src/ipc-types.ts`、`renderer/api.d.ts`                      | 主程序與介面共用的 IPC 型別                                                                                 |
-| `renderer/`                                                  | 介面(HTML / CSS / TypeScript,由 esbuild 打包);`app.ts` 是主程式,`diff-view.ts`、`task-card.ts` 是獨立的元件 |
-| `src/orchestrator.ts`                                        | 討論、分工、執行、審查、@ 指定的流程                                                                        |
-| `src/flow/`                                                  | 流程用到的獨立部分:審查配對與結論、對話紀錄截斷、git 變更、分工解析、訊息還原、結果卡                       |
-| `src/snapshot.ts`、`src/task-changes.ts`                     | 工作目錄快照,與「這次任務改了什麼」的比對                                                                   |
-| `src/verify.ts`、`src/counterexample.ts`、`src/ratchet.ts`、`src/corpus.ts` | 自動驗證、審查者舉出的可執行反例、「不准變糟」的棘輪,以及跟著專案走的反例語料庫              |
-| `src/adapters/`                                              | 內建轉接器、擴充載入、CLI / API 通用轉接器                                                                  |
-| `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts` | 附件、歷史紀錄、API key 儲存                                                                                |
-| `src/terminal.ts`、`src/pty.exp`、`renderer/terminal.ts`     | 終端分頁:pty(借 macOS 內建的 expect,不需要原生模組)與右側面板                                               |
-| `src/git-check.ts`、`renderer/env-fix.ts`                    | 環境問題:偵測這台機器的 git 能不能用,以及「照實說一句話 + 一個可照做的下一步」的統一卡片                    |
-| `src/models.ts`、`src/model-rules.ts`、`src/usage.ts`        | 模型清單、強度規則、用量正規化                                                                              |
-| `adapters/templates/`                                        | 「+ 新增」裡的擴充範本                                                                                      |
-| `docs/`                                                      | 擴充撰寫說明、介面文案規格,以及[接下來要做的](docs/next.md)                                                 |
-| `test/`                                                      | `npm test` 執行的測試;`test/e2e/` 是端對端測試                                                              |
-| `test/harness/`                                              | 隔離的真實 Electron 驗證與截圖,情境及用法見 [harness 說明](test/harness/README.md)                          |
-| `eval/`                                                      | 審查品質評測,以及「單人 vs 圓桌」對照實驗;都用真的模型跑固定題目,長時間的實驗可以用流水帳續跑               |
-| `dist/`                                                      | `npm run build` 的輸出,app 實際載入的是這裡(不進版控)                                                       |
+| 路徑                                                                        | 說明                                                                                                        |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `main.ts`、`preload.ts`                                                     | Electron 主程序與 IPC 介面                                                                                  |
+| `src/ipc-types.ts`、`renderer/api.d.ts`                                     | 主程序與介面共用的 IPC 型別                                                                                 |
+| `renderer/`                                                                 | 介面(HTML / CSS / TypeScript,由 esbuild 打包);`app.ts` 是主程式,`diff-view.ts`、`task-card.ts` 是獨立的元件 |
+| `src/orchestrator.ts`                                                       | 討論、分工、執行、審查、@ 指定的流程                                                                        |
+| `src/flow/`                                                                 | 流程用到的獨立部分:審查配對與結論、對話紀錄截斷、git 變更、分工解析、訊息還原、結果卡                       |
+| `src/snapshot.ts`、`src/task-changes.ts`                                    | 工作目錄快照,與「這次任務改了什麼」的比對                                                                   |
+| `src/verify.ts`、`src/counterexample.ts`、`src/ratchet.ts`、`src/corpus.ts` | 自動驗證、審查者舉出的可執行反例、「不准變糟」的棘輪,以及跟著專案走的反例語料庫                             |
+| `src/adapters/`                                                             | 內建轉接器、擴充載入、CLI / API 通用轉接器                                                                  |
+| `src/attachments.ts`、`src/session-log.ts`、`src/secrets.ts`                | 附件、歷史紀錄、API key 儲存                                                                                |
+| `src/terminal.ts`、`src/pty.exp`、`renderer/terminal.ts`                    | 終端分頁:pty(借 macOS 內建的 expect,不需要原生模組)與右側面板                                               |
+| `src/git-check.ts`、`renderer/env-fix.ts`                                   | 環境問題:偵測這台機器的 git 能不能用,以及「照實說一句話 + 一個可照做的下一步」的統一卡片                    |
+| `src/models.ts`、`src/model-rules.ts`、`src/usage.ts`                       | 模型清單、強度規則、用量正規化                                                                              |
+| `adapters/templates/`                                                       | 「+ 新增」裡的擴充範本                                                                                      |
+| `docs/`                                                                     | 擴充撰寫說明、介面文案規格,以及[接下來要做的](docs/next.md)                                                 |
+| `test/`                                                                     | `npm test` 執行的測試;`test/e2e/` 是端對端測試                                                              |
+| `test/harness/`                                                             | 隔離的真實 Electron 驗證與截圖,情境及用法見 [harness 說明](test/harness/README.md)                          |
+| `eval/`                                                                     | 審查品質評測,以及「單人 vs 圓桌」對照實驗;都用真的模型跑固定題目,長時間的實驗可以用流水帳續跑               |
+| `dist/`                                                                     | `npm run build` 的輸出,app 實際載入的是這裡(不進版控)                                                       |
 
 ## 貢獻
 

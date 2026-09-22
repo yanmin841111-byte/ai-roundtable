@@ -101,6 +101,22 @@ test('單人 vs 圓桌的彙總:執行回合失敗照樣計分,app 沒跑完的�
   assert.deepStrictEqual(s, { runs: 3, errors: 1, allPass: 1, passRate: 0.7, execFailed: 1, avgSeconds: 20, avgTokens: 0 });
 });
 
+test('失敗集合有穩定 ID,Jaccard 區分全對、不同錯誤與缺資料', () => {
+  const { runHiddenTests, materialize } = require('../eval/hidden-tests');
+  const { failureSimilarity } = require('../eval/stats');
+  const dir = materialize({ 'm.js': 'module.exports = { ok: true };' });
+  try {
+    const task = { entry: 'm.js', tests: "t('same', () => assert.ok(M().ok));\nt('same', () => assert.ok(!M().ok));" };
+    assert.deepStrictEqual(runHiddenTests(dir, task, 15000, true).failedTests, ['1']);
+    assert.deepStrictEqual(runHiddenTests(dir, { ...task, entry: 'missing.js' }, 15000, true).failedTests, ['0', '1']);
+    assert.deepStrictEqual(failureSimilarity([[], []]), { mean: null, pairs: 0, bothCorrect: 1, unavailable: 0 });
+    assert.strictEqual(failureSimilarity([['0'], ['1']]).mean, 0);
+    assert.strictEqual(failureSimilarity([['0', '1'], ['1']]).mean, 0.5);
+    assert.strictEqual(failureSimilarity([['1', '1'], ['1']]).mean, 1);
+    assert.deepStrictEqual(failureSimilarity([null, ['1']]), { mean: null, pairs: 0, bothCorrect: 0, unavailable: 1 });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('統計:Wilson 信賴區間、Fisher 精確檢定與所需次數跟教科書的數字一致', () => {
   const { wilson, fisherExact, runsNeeded } = require('../eval/stats');
   const near = (x: number, y: number, eps = 0.002) => assert.ok(Math.abs(x - y) < eps, `${x} ≠ ${y}`);
@@ -115,6 +131,97 @@ test('統計:Wilson 信賴區間、Fisher 精確檢定與所需次數跟教科�
   // 80% → 95% 每組約要 76 次(常態近似)
   assert.ok(Math.abs(runsNeeded(0.8, 0.95) - 76) <= 2, String(runsNeeded(0.8, 0.95)));
   assert.strictEqual(runsNeeded(0.5, 0.5), Infinity);
+});
+
+test('通用候選 runner:可見性隔離、公開關卡棘輪、用量未知與預算上限', async () => {
+  const { runCandidates, selectCandidate } = require('../eval/conditions');
+  const gate = (ok: boolean) => ({ entries: [{ kind: 'gate', key: 'public-test', label: 'public-test', weight: 'owned', ok }] });
+  const candidate = (value: string, ok: boolean, tokens: number | null = 10) => ({ value, gates: gate(ok), tokens, usable: true });
+  const calls: string[][] = [];
+  const produce = async (index: number, visible: string[]) => { calls.push([...visible]); return candidate(String(index), index === 1); };
+  const sequential = await runCandidates({ attempts: 3, visibility: 'sequential' }, produce);
+  assert.deepStrictEqual(calls, [[], ['0'], ['0', '1']]);
+  assert.strictEqual(sequential.selectedIndex, 1);
+  calls.length = 0;
+  await runCandidates({ attempts: 3, visibility: 'independent-first' }, produce);
+  assert.deepStrictEqual(calls, [[], [], []]);
+  assert.strictEqual(selectCandidate(candidate('incumbent', true), candidate('regression', false)), false);
+  assert.strictEqual(selectCandidate(candidate('incumbent', true), candidate('tie', true)), false);
+  assert.strictEqual(selectCandidate(candidate('incumbent', true), { ...candidate('missing', true), gates: { entries: [] } }), false);
+  const budget = await runCandidates({ attempts: 10, visibility: 'independent-first', tokenBudget: 25 }, produce);
+  assert.deepStrictEqual(budget.budget, { target: 25, tokens: 30, attempts: 3, stop: 'target-reached' });
+  const unknown = await runCandidates({ attempts: 10, visibility: 'independent-first', tokenBudget: 25 }, async () => candidate('unknown', true, null));
+  assert.deepStrictEqual(unknown.budget, { target: 25, tokens: null, attempts: 1, stop: 'usage-unavailable' });
+  const capped = await runCandidates({ attempts: 2, visibility: 'independent-first', tokenBudget: 25 }, produce);
+  assert.strictEqual(capped.budget.stop, 'attempt-limit');
+  await assert.rejects(() => runCandidates({ attempts: Infinity }, produce), /positive integer/);
+});
+
+test('候選評測整合:隔離原始檔、公開後整合、預算只按公開關卡選擇', async () => {
+  const { runCondition } = require('../eval/ab');
+  const { parseConditions } = require('../eval/conditions');
+  assert.throws(() => parseConditions('solo,typo'), /conditions/);
+  assert.throws(() => parseConditions('solo,solo'), /conditions/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-candidates-'));
+  const previous = process.env.EVAL_EVIDENCE_DIR;
+  process.env.EVAL_EVIDENCE_DIR = path.join(root, 'evidence');
+  const calls: any[] = [];
+  const task = { id: 'fixture', task: 'implement entry.js', entry: 'entry.js', files: { 'entry.js': 'module.exports = { value: 0 };' }, tests: "t('hidden', () => assert.strictEqual(M().value, 2));\nfs.writeFileSync(ENTRY, 'module.exports = { value: 99 };');" };
+  const launch = async (options: any) => {
+    calls.push(options);
+    const workDir = fs.mkdtempSync(path.join(root, 'work-'));
+    fs.writeFileSync(path.join(workDir, 'entry.js'), `module.exports = { value: ${calls.length} };`);
+    return { ok: true, value: { inputTokens: 10, outputTokens: 5, usageComplete: true }, elapsedMs: 1000, workDir, cleanup: () => fs.rmSync(workDir, { recursive: true, force: true }) };
+  };
+  try {
+    const options = { candidates: 2, rounds: 2, verifyCommand: '' };
+    const sequential = await runCondition(task, 'sequential-candidates', 1, 'fixture', options, launch);
+    assert.strictEqual(sequential.candidates.length, 2);
+    assert.strictEqual(calls.length, 3);
+    assert.ok(calls[1].constants.task.includes('Previous candidate files'));
+    assert.ok(!calls[1].constants.task.includes('value: 99'), 'hidden-test side effects cannot alter shared candidates');
+    assert.ok(calls[2].constants.task.includes('Critique these candidate files'));
+    assert.ok(calls.every((call) => JSON.stringify(call.files) === JSON.stringify(task.files)));
+    assert.ok(calls.every((call) => !call.constants.task.includes("t('hidden'")));
+    calls.length = 0;
+    await runCondition(task, 'independent-candidates', 1, 'fixture', options, launch);
+    assert.ok(!calls[1].constants.task.includes('Previous candidate files'));
+    calls.length = 0;
+    const budget = await runCondition(task, 'solo-budget', 1, 'fixture', { ...options, tokenBudget: 25 }, launch);
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(budget.budget.tokens, 30);
+    assert.strictEqual(budget.selectedCandidate, null, 'equal public gates retain the original even when a candidate passes hidden tests');
+    assert.strictEqual(budget.pass, 0);
+    assert.strictEqual(budget.candidates[1].pass, 1);
+    assert.ok(budget.evidenceId);
+    assert.deepStrictEqual(fs.readdirSync(root), ['evidence']);
+  } finally {
+    if (previous === undefined) delete process.env.EVAL_EVIDENCE_DIR; else process.env.EVAL_EVIDENCE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('評測 CLI:預覽不啟動 app,未知參數、無效次數與未核准實驗拒絕', () => {
+  const { spawnSync } = require('child_process');
+  const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', path.resolve(__dirname, '../eval/ab.ts'), ...args], { encoding: 'utf8' });
+  const preview = cli('--dry-run', '--conditions', 'sequential-candidates,independent-candidates,solo-budget', '--token-budget', '100', '--tasks', 'forth-fix');
+  assert.strictEqual(preview.status, 0, preview.stderr);
+  const parsed = JSON.parse(preview.stdout);
+  assert.strictEqual(parsed.options.tokenBudget, 100);
+  assert.ok(parsed.protocol && parsed.commit);
+  for (const args of [['--runs', '0'], ['--conditions', 'typo'], ['--unknown'], ['--rounds'], ['--tasks', 'forth-fix']]) {
+    const result = cli(...args);
+    assert.notStrictEqual(result.status, 0, JSON.stringify(args));
+    assert.match(result.stderr, /positive integer|conditions|Invalid option|Missing value|approval/);
+  }
+});
+
+test('多條件流水帳與回報:保留新條件,不同 protocol 不混算', () => {
+  const { prepareReports, buildReportIntegrity } = require('../eval/report-integrity');
+  const entries = ['first', 'second'].map((protocol) => ({ task: 'fixture', condition: 'independent-candidates', commit: 'same', protocol, run: { error: false } }));
+  const report = buildReportIntegrity(prepareReports(entries));
+  assert.strictEqual(report.groups.length, 2);
+  assert.strictEqual(report.groups[0]['independent-candidates'].runs, 1);
 });
 
 test('分層置換檢定:明顯的差距 p 小、沒有差距 p 大、只在同一題裡交換、結果可重現', () => {

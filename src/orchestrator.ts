@@ -401,8 +401,8 @@ class Orchestrator extends EventEmitter {
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
   // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
-  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, testsTouched, repairBroke, rollback }: {
-    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; testsTouched?: boolean; repairBroke?: boolean; rollback?: TaskSummary['rollback'];
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, counterexamples, repairedCounterexamples, testsTouched, repairBroke, rollback }: {
+    startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; counterexamples?: CounterexampleRun[]; repairedCounterexamples?: CounterexampleRun[]; testsTouched?: boolean; repairBroke?: boolean; rollback?: TaskSummary['rollback'];
   }) {
     const unresolved = new Set([...fix.unresolved.map((u) => u.agent.id), ...fix.fixFailed.map((f) => f.item.agent.id)]);
     const rescued = new Set(salvaged.map((s) => s.agent.id));
@@ -439,6 +439,18 @@ class Orchestrator extends EventEmitter {
     const measured = turns.filter((m) => m.usage);
     const sum = (key: 'inputTokens' | 'outputTokens' | 'costUsd') => measured.reduce((n, m) => n + (Number(m.usage?.[key]) || 0), 0);
     const hasCost = measured.some((m) => typeof m.usage?.costUsd === 'number');
+    const repairedById = new Map((repairedCounterexamples || []).map((run) => [run.id, run]));
+    const counterexampleSummary: TaskSummary['counterexamples'] = counterexamples?.map((run) => {
+      const repaired = repairedById.get(run.id);
+      return {
+        title: run.title,
+        reviewer: run.reviewerName,
+        confirmation: classifyConfirmation(run),
+        ...(repaired ? { afterRepair: repaired.unusable ? 'unusable' as const : repaired.passed ? 'passed' as const : 'failed' as const } : {}),
+        output: run.output,
+        ...(repaired ? { repairOutput: repaired.output } : {}),
+      };
+    });
     const summary: TaskSummary = {
       startedAt,
       endedAt: Date.now(),
@@ -447,6 +459,7 @@ class Orchestrator extends EventEmitter {
       moreFiles,
       usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
       ...(verify ? this.verificationSummary(verify) : {}),
+      ...(counterexampleSummary ? { counterexamples: counterexampleSummary } : {}),
       ...(testsTouched ? { testsTouched: true } : {}),
       ...(repairBroke ? { repairBroke: true } : {}),
       ...(rollback ? { rollback } : {}),
@@ -606,7 +619,8 @@ class Orchestrator extends EventEmitter {
           }
         }
         const afterFix = fix.verify as VerifyResult | undefined;
-        const afterCe = (fix.counterexamples as CounterexampleRun[] | undefined) || counterexamples;
+        const repairedCounterexamples = fix.counterexamples as CounterexampleRun[] | undefined;
+        const afterCe = repairedCounterexamples || counterexamples;
         // 棘輪:把三個時間點的關卡向量攤開來比(見 src/ratchet.ts)。
         // 舊的判斷只比「執行後 vs 修復後」,看不見執行階段本身就把東西弄壞的情況;
         // 基準線那一層就是為了看見它(實驗 7 的 poker-fix 單人組把 35/39 打成 1/39)。
@@ -637,7 +651,7 @@ class Orchestrator extends EventEmitter {
         if (coding && !contained.rollback) this.saveCounterexamples(cwd, counterexamples, task);
         await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
         if (this.stopped) return;
-        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke, rollback: contained.rollback });
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, counterexamples, repairedCounterexamples, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke, rollback: contained.rollback });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
         await this.summaryPhase(task, 'discuss', {});
@@ -737,21 +751,36 @@ class Orchestrator extends EventEmitter {
 
   // 階段一:輪流討論直到全員同意或到達回合上限
   async discussPhase(agents: AgentConfig[], task: string) {
-    const maxRounds = Math.max(1, Number(this.config.settings.maxRounds) || 3);
+    const independent = this.config.settings.discussionMode === 'independent-first';
+    const maxRounds = Math.max(independent ? 2 : 1, Number(this.config.settings.maxRounds) || 3);
     for (let round = 1; round <= maxRounds; round++) {
       this.setPhase({ code: 'discuss', round, maxRounds });
       let agreedCount = 0;
+      const isolated = independent && round === 1;
+      const questions: Array<{ agent: AgentConfig; raw: string }> = [];
       for (const agent of agents) {
         if (this.stopped) return false;
-        const { text, raw } = await this.turn(agent, this.discussPrompt(agent, task, round, maxRounds), { phase: { code: 'discuss', round, maxRounds } });
+        const prompt = isolated
+          ? [this.text('prompt.task', { task }), this.text('prompt.discussIndependent')].join('\n')
+          : this.discussPrompt(agent, task, round, maxRounds);
+        const { text, raw, error } = await this.turn(agent, prompt, { phase: { code: 'discuss', round, maxRounds }, freshContext: isolated, hideAgreed: isolated });
+        if (isolated) {
+          if (!error) questions.push({ agent, raw });
+          continue;
+        }
         // 提問只在討論階段成立:這裡是唯一循序執行的地方,不會有兩位成員同時搶待答狀態。
         // 只有這裡吃 raw,其餘流程一律用已剝除的 text。
         const asked = await this.maybeAsk(agent, raw, round, maxRounds);
         if (this.stopped) return false;
         // 只認「最後幾行、單獨成行」的標記,避免成員在內文中提到它就被誤判為同意
         // 反問使用者的成員這回合不算同意:他自己都還沒下結論
-        if (!asked && hasMarker(text, AGREED)) agreedCount++;
+        if (!error && !asked && hasMarker(text, AGREED)) agreedCount++;
       }
+      for (const question of questions) {
+        if (this.stopped) return false;
+        await this.maybeAsk(question.agent, question.raw, round, maxRounds);
+      }
+      if (isolated) continue;
       if (agreedCount === agents.length) { this.system(this.text('sys.agreed', { round })); return true; }
     }
     return false;
@@ -1601,11 +1630,11 @@ class Orchestrator extends EventEmitter {
 
   // 可續接的成員只在第一次發言時收到完整附件區塊(含內嵌文字),之後靠 session 記憶;
   // 不可續接的成員每回合都要重送,否則下一輪就完全不知道有附件這回事。
-  attachmentPrompt(agent: AgentConfig, adapter: Adapter | null, resumable: boolean, staged = this.staged) {
+  attachmentPrompt(agent: AgentConfig, adapter: Adapter | null, resumable: boolean, staged = this.staged, remember = true) {
     if (!this.attachments.length) return '';
     const seen = this.attachmentsSeen.has(agent.id);
     if (seen && resumable) return '';
-    this.attachmentsSeen.add(agent.id);
+    if (remember) this.attachmentsSeen.add(agent.id);
     const { needCwd } = attachmentCapabilities(adapter);
     return buildAttachmentPrompt(this.userDataDir, this.attachments, adapter, { staged: needCwd ? staged : [], locale: this.locale });
   }
@@ -1630,7 +1659,7 @@ class Orchestrator extends EventEmitter {
       if (m === current || m.status === 'running') continue;
       // 任務敘述與分工結果是後面每一句話的前提,截斷時一定要保留
       if (m.kind === 'user') entries.push({ text: `[${this.text('transcript.user')}${mentionLabel(m, this.locale)}]:\n${m.text}`, pinned: i === this.taskStartIndex || i === firstUser });
-      else if (m.kind === 'agent' && m.agentId !== agent.id && m.text) entries.push({ text: `[${m.agentName}]:\n${m.text}` });
+      else if (m.kind === 'agent' && m.text && (m.agentId !== agent.id || (this.config.settings.discussionMode === 'independent-first' && isPhaseInfo(m.phase) && m.phase.code === 'discuss' && m.phase.round === 1))) entries.push({ text: `[${m.agentName}]:\n${m.text}` });
       // 舊紀錄沒有 tag 欄位,退回比對當時的文案
       else if (m.kind === 'system' && m.level !== 'error' && (m.tag === 'plan' || m.text.startsWith('**分工結果**'))) entries.push({ text: `[${this.text('transcript.system')}]:\n${m.text}`, pinned: true });
       // 檔案工具的稽核紀錄:審查者一定要看得到成員實際改了什麼,
@@ -1658,7 +1687,7 @@ class Orchestrator extends EventEmitter {
       ? stageToCwd(this.userDataDir, this.conversationId, cwd, this.attachments) : null;
     if (isolatedAttachments?.error) this.system(this.text('sys.stageFailed', { error: isolatedAttachments.error }), { level: 'warn' });
     const staged = isolatedAttachments?.staged || this.staged;
-    const attachmentBlock = this.attachmentPrompt(agent, noImages ? withoutImages(adapter) : adapter, resumable, staged);
+    const attachmentBlock = this.attachmentPrompt(agent, noImages ? withoutImages(adapter) : adapter, resumable, staged, !freshContext);
     const prompt = [
       transcript ? (resumable ? this.text('transcript.new') : this.text('transcript.sofar')) + '\n' + transcript : '',
       attachmentBlock,

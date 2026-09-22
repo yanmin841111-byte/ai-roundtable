@@ -16,6 +16,18 @@ const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 const agent = (id: string, extra: any = {}) => ({ id, name: id.toUpperCase(), cli: 'claude', model: `m-${id}`, effort: '', persona: `${id} 原本的角色`, color: '#000', canEdit: true, enabled: true, customCommand: '', ...extra });
 const config = (agents: any[], settings: any = {}) => ({ agents, settings: { workDir: '/w', maxRounds: 3, mode: 'divide', leadAgentId: null, language: 'x', maxTranscriptChars: 1, ...settings } });
 
+test('討論方式隨陣容保存、套用與比對,舊陣容仍是循序', () => {
+  const current = config([agent('a')], { discussionMode: 'independent-first' });
+  const lineup = L.lineupFromConfig(current, 'independent', 'independent');
+  assert.strictEqual(lineup.discussionMode, 'independent-first');
+  assert.strictEqual(L.sanitizeLineups([lineup])[0].discussionMode, 'independent-first');
+  assert.strictEqual(L.applyLineup(config([agent('a')]), lineup).config.settings.discussionMode, 'independent-first');
+  assert.ok(L.lineupMatches(current, lineup));
+  assert.ok(!L.lineupMatches(config([agent('a')]), lineup));
+  assert.ok(L.lineupMatches(config([agent('a')]), { ...lineup, discussionMode: undefined }));
+  assert.strictEqual(L.applyLineup(current, { ...lineup, discussionMode: undefined }).config.settings.discussionMode, 'sequential');
+});
+
 test('存下目前啟用的成員、角色、實際的主持人、流程與回合數', () => {
   const c = config([agent('a'), agent('b', { enabled: false }), agent('c', { persona: '審查者' })], { leadAgentId: 'b', mode: 'discuss', maxRounds: 2 });
   const l = L.lineupFromConfig(c, '  審查組  ', 'L1');
@@ -90,7 +102,7 @@ test('設定檔裡的陣容:形狀不對整筆丟掉,欄位不對補預設值,�
     { id: 'nomembers', name: 'n', members: [] },
     null, 'x', { name: 'no id', members: [{ id: 'a' }] },
   ]);
-  assert.deepStrictEqual(out, [{ id: 'ok', name: '好的', members: [{ id: 'a', persona: 'p' }, { id: 'b', persona: '' }], leadAgentId: null, mode: 'divide', maxRounds: 10, workStyle: 'code' }]);
+  assert.deepStrictEqual(out, [{ id: 'ok', name: '好的', members: [{ id: 'a', persona: 'p' }, { id: 'b', persona: '' }], leadAgentId: null, mode: 'divide', maxRounds: 10, discussionMode: 'sequential', workStyle: 'code' }]);
   assert.deepStrictEqual(L.sanitizeLineups('nope'), []);
   assert.strictEqual(L.sanitizeLineups(Array.from({ length: 50 }, (_, i) => ({ id: `l${i}`, name: `n${i}`, members: [{ id: 'a' }] }))).length, L.LINEUPS_MAX);
 });

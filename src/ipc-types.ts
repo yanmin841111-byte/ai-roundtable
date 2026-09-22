@@ -78,9 +78,16 @@ export interface AgentConfig {
   customCommand: string;
 }
 
+export type DiscussionMode = 'sequential' | 'independent-first';
+
+export function normalizeDiscussionMode(value: unknown): DiscussionMode {
+  return value === 'independent-first' ? value : 'sequential';
+}
+
 export interface AppSettings {
   workDir: string;
   maxRounds: number;
+  discussionMode?: DiscussionMode;
   mode: string;
   leadAgentId: string | null;
   language: string;
@@ -107,6 +114,7 @@ export interface Lineup {
   leadAgentId: string | null;
   mode: string;
   maxRounds: number;
+  discussionMode?: DiscussionMode;
   // 工作模式(寫程式 / 一般任務):和流程一樣屬於「這桌怎麼開」
   workStyle?: 'general' | 'code';
 }
@@ -339,6 +347,15 @@ export interface TaskVerificationStatus {
   cwd: string;
 }
 
+export interface TaskCounterexample {
+  title: string;
+  reviewer: string;
+  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable';
+  afterRepair?: 'passed' | 'failed' | 'unusable';
+  output: string;
+  repairOutput?: string;
+}
+
 export interface TaskSummary {
   startedAt: number;
   endedAt: number;
@@ -355,6 +372,8 @@ export interface TaskSummary {
   verify?: 'passed' | 'syntax-only' | 'failed' | 'none';
   verification?: TaskVerification;
   verificationHistory?: TaskVerification[];
+  // 欄位缺席代表舊紀錄沒有保存反例證據,不是沒有反例。
+  counterexamples?: TaskCounterexample[];
   reviewStale?: boolean;
   // 修復回合把事情弄糟了:驗證在執行後是通過的,修復之後變成不通過。
   // app 知道這件事,就不該只印一行紅字——結果卡要說出來,並且把「只收回修復」放在旁邊。

@@ -74,10 +74,9 @@ suspicious-but-correct     6/10 判對 · 有讀檔 9 次
 上面的評測只量「審查者抓不抓得到錯」。這一組量的是整件事值不值得:**同一個模型、同一道題,一個人做完,和做完再給另一位審查、依意見修復,哪個比較常做對、各花多少時間。**
 
 ```bash
-npm run eval:ab                          # 5 題 × 2 種 × 3 次
-npm run eval:ab -- --runs 5 --tasks csv  # 只跑某幾題
-EVAL_REVIEWER_CLI=claude npm run eval:ab # 圓桌的審查者換成另一個模型(這裡是 Claude Code,會用到你的訂閱額度)
-npm run eval:ab -- --journal eval/results/run1.jsonl   # 可續跑:每跑完一次記一行,中斷後同一個指令接著跑
+npm run eval:ab -- --dry-run --runs 3 --tasks forth-fix,poker-fix
+# 取得同意並完成預登記後,使用同一份設定:
+npm run eval:ab -- --approve-experiment --runs 3 --tasks forth-fix,poker-fix --journal eval/results/run1.jsonl
 ```
 
 一輪實驗要好幾個小時,中間常常會被打斷。`--journal`
@@ -104,6 +103,55 @@ npm run eval:ab -- --journal eval/results/run1.jsonl   # 可續跑:每跑完一�
 | `duration`  | 要拒絕的輸入比要接受的多                |
 | `cart-bugs` | 使用者只回報一個症狀,檔案裡其實有三個錯 |
 | `csv`       | 引號、跳脫的引號、空欄位                |
+
+## 多條件與預算
+
+`--conditions` 接受以下條件,未知或重複名稱會拒絕。所有模型仍走同一套 adapter,
+候選 runner 不依賴題名、模型名稱或隱藏分數。
+
+| 條件                     | 行為                                                           |
+| ------------------------ | -------------------------------------------------------------- |
+| `solo`                   | 原本的單人流程,腳本審查                                        |
+| `roundtable`             | 循序討論,真實審查與修復                                        |
+| `independent-first`      | 相同圓桌流程,但第一輪為乾淨 context                            |
+| `sequential-candidates`  | N 個隔離單人候選,每人看得到先前候選檔案,最後共同公開給圓桌整合 |
+| `independent-candidates` | 相同候選與整合流程,但候選互不可見                              |
+| `solo-budget`            | 獨立單人候選,以公開關卡棘輪選擇,直到 token 目標或嘗試上限      |
+
+`--rounds` 預設 2,兩組須相同;`--candidates` 預設 4,也是預算組的最大嘗試次數。
+`--verify-command` 使用既有專案驗證機制,每行一道公開關卡。每個候選都從原始檔案與
+全新 app 開始,不共享 session、隱藏分數或前次改動。
+候選的「成員」是相同 executor 設定的獨立呼叫,不是產品陣容中的每個角色。
+因此候選條件量程式產出的錨定,不能直接宣稱量到了文字討論設定的效果。
+
+```bash
+npm run eval:ab -- --dry-run --conditions sequential-candidates,independent-candidates --candidates 4 --tasks forth-fix,poker-fix
+npm run eval:ab -- --dry-run --conditions solo-budget,roundtable --candidates 8 --token-budget 20000 --tasks forth-fix,poker-fix
+```
+
+數字只是語法範例,不是已核准的實驗設計。先校準並固定次數、預算、公開驗證與主要對照,
+把 `--dry-run` 的 commit / protocol 記進 [實驗紀錄](EXPERIMENTS.md),經同意才以
+`--approve-experiment` 取代 `--dry-run`。候選條件必須設定
+`EVAL_EVIDENCE_DIR=.eval-local/evidence`,每份候選都留完整證據,清理隔離工作目錄不會刪掉它。
+
+選擇只使用 [既有棘輪](../src/ratchet.ts) 的公開關卡:有改善且沒有退步才接受,
+原本通過的關卡消失也拒絕,平手留舊成果。只有語法檢查時,通常無法區分邏輯品質;
+不能為了產生漂亮結果而偷看隱藏測試。快照限 10,000 個檔案、單檔 256 KiB、總共 20 MiB
+且必須是完整 UTF-8 文字;不能完整保存或公開驗證會改動內容時明確中止。
+
+token 是輸入加輸出,**完整候選結束後**才檢查目標,可能超過一個候選的用量。
+`budget.stop` 區分 `target-reached`、`attempt-limit`、`usage-unavailable`;
+缺用量時是 `null`,不當成 0。達標不等於精確對齊,必須一起報實際總量、偏差與時間。
+不同模型 token 也不等於相同 FLOPs。校準須另行同意,不能看到正式結果後調預算。
+
+候選失敗測試用固定順序 ID 記錄,Jaccard 先對同次任務的配對取平均。
+兩人全對的配對不進分母、另列 `bothCorrect`;app 未完成列 `unavailable`。
+錯誤集合相似度不是 Pearson 相關係數,也不是準確率。總結分列候選相似度與整合後分數;
+比較以完整任務為樣本、依題目分層。多於兩條件的對照標為探索性,沒有做多重比較校正。
+
+流水帳需 commit **與 protocol** 都相同才續用。protocol 包含題目內容、模型設定、
+條件順序、次數、預算與驗證指令;dirty 版本另含原始碼指紋,不是共用一個 `-dirty`。
+結果檔 schema 2 保存各條件摘要、用量完整性、預算與對照;不會覆寫舊檔。
 
 ## 成果回報一致性(離線、探索性)
 

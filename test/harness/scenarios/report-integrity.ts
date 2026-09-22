@@ -59,7 +59,7 @@ async function main() {
     request.on('end', () => {
       const send = (code: number, body: unknown) => {
         response.writeHead(code, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify(body));
+        response.end(JSON.stringify({ ...(body as object), ...(request.url === '/v1/chat/completions' && code === 200 ? { usage: { prompt_tokens: 10, completion_tokens: 5 } } : {}) }));
       };
       try {
         if (request.url === '/v1/models') return send(200, { data: [{ id: 'fixture' }] });
@@ -100,7 +100,7 @@ async function main() {
       EVAL_EVIDENCE_DIR: evidenceRoot,
     });
     delete process.env.EVAL_KEEP_DIR;
-    const { runOnce } = await import('../../../eval/ab');
+    const { runOnce, runCondition } = await import('../../../eval/ab');
     for (const condition of ['solo', 'roundtable'] as const) {
       writes = 0;
       breakRepair = condition === 'roundtable';
@@ -163,6 +163,35 @@ async function main() {
       }
       appendJournal(journal, { task: task.id, condition, commit: 'fixture', run: { ...result } });
       console.log(`ok - ${condition}: disk, git, audits, full reports, verification, cleanup and evidence agree`);
+    }
+    breakRepair = false;
+    for (const condition of ['sequential-candidates', 'independent-candidates', 'solo-budget'] as const) {
+      const inputs: string[] = [];
+      const result = await runCondition(task, condition, 1, 'fixture', { candidates: 2, rounds: 2, verifyCommand: '', tokenBudget: 1 }, async (options) => {
+        inputs.push(String(options.constants?.task));
+        const app = await runApp({
+          ...options,
+          members: options.members.map((member) => member.id === 'rev' ? scriptedMember({ id: member.id, name: member.name }) : member),
+          adapters: [adapter], timeoutMs: 180_000,
+        });
+        assert.ok(app.ok, app.error);
+        return app;
+      });
+      assert.strictEqual(result.error, false);
+      assert.ok(result.usageComplete, 'Real API usage reaches the budget controller');
+      assert.strictEqual(result.candidates?.length, condition === 'solo-budget' ? 1 : 2);
+      assert.ok(result.candidates?.every((candidate) => candidate.pass === 1 && candidate.evidenceId));
+      if (condition === 'solo-budget') {
+        assert.strictEqual(result.budget?.stop, 'target-reached');
+        assert.strictEqual(result.selectedCandidate, null, 'Syntax-only ties retain baseline, not the hidden-test winner');
+        assert.strictEqual(result.pass, 0);
+      } else {
+        assert.strictEqual(inputs[1].includes('Previous candidate files'), condition === 'sequential-candidates');
+        assert.ok(inputs[2].includes('Critique these candidate files'));
+        assert.strictEqual(result.correlation?.bothCorrect, 1);
+        assert.strictEqual(result.pass, 1);
+      }
+      console.log(`ok - ${condition}: isolated candidates, visibility, real usage, public-only selection and retained evidence`);
     }
     const worksheet = reportWorksheet(journal);
     assert.strictEqual(worksheet.samples.length, 2);

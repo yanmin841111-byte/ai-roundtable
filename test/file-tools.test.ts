@@ -431,6 +431,38 @@ test('會工作的模型可以用完工具額度,不會在第 10 輪被切斷', 
   } finally { f.cleanup(); }
 });
 
+test('工具往返累加每次請求用量,缺漏與 fallback 不可冒充完整總量', async () => {
+  const { normalizeUsage } = require('../src/usage');
+  const f = fixture();
+  try {
+    for (const mode of ['complete', 'missing', 'partial', 'fallback', 'failed']) {
+      let requests = 0;
+      const fetchImpl = async () => {
+        requests++;
+        if ((mode === 'fallback' || mode === 'failed') && requests === 2) {
+          return { ok: false, status: mode === 'fallback' ? 400 : 500, text: async () => 'request failed' };
+        }
+        const usage = mode === 'missing' && requests === 2 ? undefined
+          : mode === 'partial' && requests === 2 ? { completion_tokens: 10 }
+          : { prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 10 } };
+        const message = requests < 3
+          ? { content: null, tool_calls: [{ id: `read-${requests}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'sample.txt' }) } }] }
+          : { content: 'done' };
+        return { ok: true, status: 200, json: async () => ({ choices: [{ message }], usage }) };
+      };
+      const spec = { id: 'local', type: 'openai', baseUrl: 'http://local/v1', models: ['m'], stream: false, supportsEdit: true, fileTools: { enabled: true } };
+      const result = await createOpenAIAdapter(spec, { fetchImpl }).run({ name: 'Q', model: 'm', canEdit: false }, ctx(f.root, { readOnlyFileTools: true }));
+      const usage = normalizeUsage(result.usage, 'openai');
+      assert.strictEqual(requests, mode === 'failed' ? 2 : 3, mode);
+      assert.strictEqual(usage.inputTokens, mode === 'complete' ? 300 : null, mode);
+      assert.strictEqual(usage.outputTokens, mode === 'complete' || mode === 'partial' ? 30 : null, mode);
+      assert.strictEqual(usage.cachedInputTokens, mode === 'complete' ? 30 : null, mode);
+      assert.strictEqual(result.usage.requests.length, requests, '保留逐次原始用量供核對');
+      assert.strictEqual(!!result.error, mode === 'failed', mode);
+    }
+  } finally { f.cleanup(); }
+});
+
 test('連續整輪工具呼叫都失敗就停,不用把額度耗完', async () => {
   const f = fixture();
   try {
@@ -477,6 +509,7 @@ test('串流回來的工具呼叫(分片的參數)接得回來,而且真的改�
       requests.push(JSON.parse(body));
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const send = (o: any) => res.write('data: ' + JSON.stringify(o) + '\n\n');
+      send({ choices: [], usage: { prompt_tokens: 50, completion_tokens: 5 } });
       if (requests.length === 1) {
         const args = JSON.stringify({ path: 'streamed.txt', content: '串流寫進去的新內容\n', reason: '建立新檔', createOnly: true });
         // 第一片:id + 函式名,參數是空的
@@ -491,6 +524,7 @@ test('串流回來的工具呼叫(分片的參數)接得回來,而且真的改�
       } else {
         send({ choices: [{ delta: { content: '寫好了。' } }] });
       }
+      send({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 10 } });
       res.end('data: [DONE]\n\n');
     });
   });
@@ -510,6 +544,9 @@ test('串流回來的工具呼叫(分片的參數)接得回來,而且真的改�
     assert.strictEqual(result.toolEvents.length, 1);
     assert.strictEqual(result.toolEvents[0].name, 'write_file', '分片的函式名要接回完整的名字');
     assert.strictEqual(result.toolEvents[0].ok, true);
+    const usage = require('../src/usage').normalizeUsage(result.usage, 'openai');
+    assert.strictEqual(usage.inputTokens, 200, '每次串流只計最後的 usage,再跨請求加總');
+    assert.strictEqual(usage.outputTokens, 20);
   } finally { server.close(); f.cleanup(); }
 });
 

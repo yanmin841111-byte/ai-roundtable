@@ -10,6 +10,7 @@ import { normalizeModels, normalizeCapabilities } from './spec';
 import { fileToolDefinitions, fileToolReadDefinitions, FILE_TOOL_MAX_CALLS, FileToolSession, toTranscriptEntry } from './file-tools';
 import type { AdapterCapabilities, Adapter, RunAttachment } from './types';
 import { tx } from '../text';
+import { normalizeUsage } from '../usage';
 import type { TextLocale } from '../text';
 import type { ModelCapability } from '../ipc-types';
 
@@ -356,6 +357,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       catch (e: any) { return { text: '', thinking: '', sessionId: ctx.sessionId || null, usage: null, error: tx(ctx.locale || locale(), 'api.fileToolsFailed', { error: e.message }), toolEvents: [] }; }
     }
     const deadline = Date.now() + timeoutMs;
+    const usageRecords: unknown[] = [];
 
     const request = async (messages: any[], textPrefix: string, thinkingPrefix: string) => {
       const body = {
@@ -435,6 +437,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         ...call,
         id: call.id || `call_${crypto.randomUUID()}`,
       }));
+      usageRecords.push(out.usage);
       return out;
     };
 
@@ -444,7 +447,6 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       const exchange: any[] = [{ role: 'user', content }];
       let text = '';
       let thinking = '';
-      let usage: any = null;
       let status = 0;
       let error: string | null = null;
       const toolEvents: any[] = [];
@@ -461,13 +463,12 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         if (Date.now() >= deadline) { error = timeoutMessage(ctx.locale || locale(), timeoutMs); break; }
         const result = await request([...systemMessages, ...history, ...exchange], text, thinking);
         status = result.status;
-        usage = result.usage || usage;
         if (result.text) text += result.text;
         if (result.thinking) thinking += result.thinking;
         if (result.error) { error = result.error; break; }
         if (!fileTools || !result.toolCalls.length) {
           exchange.push({ role: 'assistant', content: result.text || '' });
-          return { text, thinking, usage, error: null, status, exchange, toolEvents };
+          return { text, thinking, error: null, status, exchange, toolEvents };
         }
         if (result.toolCalls.length > fileTools.remainingCalls) {
           const call = result.toolCalls[0];
@@ -506,7 +507,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
         }
       }
       if (!error) error = tx(ctx.locale || locale(), 'api.toolRoundsExceeded', { n: maxApiRounds });
-      return { text, thinking, usage, error, status, exchange, toolEvents };
+      return { text, thinking, error, status, exchange, toolEvents };
     };
 
     let result = await runConversation(userContent);
@@ -556,7 +557,18 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       sessions.set(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory), ctx.locale || locale()), ctx.locale || locale()));
       ctx.onSession(sessionId);
     }
-    return { text: result.text, thinking: result.thinking, sessionId, usage: result.usage, error: result.error, toolEvents: result.toolEvents };
+    const normalized = usageRecords.map((record) => normalizeUsage(record, 'openai'));
+    const sum = (key: 'inputTokens' | 'outputTokens' | 'cachedInputTokens') =>
+      normalized.every((record) => record[key] !== null && record[key]! >= 0)
+        ? normalized.reduce((total, record) => total + record[key]!, 0) : null;
+    const usage = usageRecords.length <= 1 ? usageRecords[0] ?? null
+      : usageRecords.some((record) => record != null) ? {
+        prompt_tokens: sum('inputTokens'),
+        completion_tokens: sum('outputTokens'),
+        prompt_tokens_details: { cached_tokens: sum('cachedInputTokens') },
+        requests: usageRecords,
+      } : null;
+    return { text: result.text, thinking: result.thinking, sessionId, usage, error: result.error, toolEvents: result.toolEvents };
   }
 }
 

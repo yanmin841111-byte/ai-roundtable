@@ -244,6 +244,48 @@ test('載入紀錄:形狀正確的保留,壞掉的欄位丟掉', () => {
   assert.strictEqual(O.restoreMessage({ id: 't', kind: 'system', taskSummary: { members: 'x' } }).taskSummary, undefined);
 });
 
+test('沒有修復回合時不把原始反例結果寫成修復後通過', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-card-no-repair-'));
+  try {
+    const review = [
+      '```counterexample sum',
+      "require('assert').strictEqual(require('./sum.js')(1, 1), 2);",
+      '```',
+      '[NO_ISSUES]',
+    ].join('\n');
+    const { card, orc } = await run(dir, [
+      { id: 'author', name: 'Author', canEdit: true, task: 'sum.js', writes: { 'sum.js': 'module.exports = (left, right) => left + right;\n' } },
+      { id: 'reviewer', name: 'Reviewer', canEdit: false, task: 'Review', review },
+    ]);
+    assert.ok(!orc.messages.some((message: any) => message.kind === 'agent' && message.phase?.code === 'repair'));
+    assert.deepStrictEqual(card.taskSummary.counterexamples, [{ title: 'sum', reviewer: 'Reviewer', confirmation: 'unsubstantiated', output: '' }]);
+    assert.match(card.text, /未進行修復後重測/);
+    assert.ok(!card.text.includes('修復後通過'));
+    const restored = O.restoreMessage(JSON.parse(JSON.stringify(card)));
+    assert.strictEqual(restored.taskSummary.counterexamples[0].afterRepair, undefined);
+    assert.match(require('../src/flow/task-summary').taskSummaryText(restored.taskSummary, 'en'), /Not rerun after repair/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('反例證據會保留確認與修復後狀態,並進入中英文匯出', () => {
+  const { taskSummaryText, restoreTaskSummary } = require('../src/flow/task-summary');
+  const base = {
+    startedAt: 1, endedAt: 2, members: [], files: [], moreFiles: 0,
+    usage: { inputTokens: 0, outputTokens: 0, costUsd: null, turns: 0, turnsWithUsage: 0 },
+  };
+  const restored = restoreTaskSummary({ ...base, counterexamples: [{
+    title: '空輸入會崩潰', reviewer: 'Reviewer', confirmation: 'confirmed', afterRepair: 'passed',
+    output: 'TypeError: boom', repairOutput: 'ok',
+  }] });
+  assert.deepStrictEqual(restored.counterexamples, [{
+    title: '空輸入會崩潰', reviewer: 'Reviewer', confirmation: 'confirmed', afterRepair: 'passed',
+    output: 'TypeError: boom', repairOutput: 'ok',
+  }]);
+  assert.match(taskSummaryText(restored, 'zh-Hant'), /反例證據[\s\S]*Reviewer[\s\S]*空輸入會崩潰[\s\S]*已確認[\s\S]*修復後通過[\s\S]*TypeError: boom/);
+  assert.match(taskSummaryText(restored, 'en'), /Counterexample evidence[\s\S]*Reviewer[\s\S]*Empty input crashes|Counterexample evidence[\s\S]*Reviewer[\s\S]*空輸入會崩潰[\s\S]*Confirmed[\s\S]*Passed after repair/);
+  assert.strictEqual(restoreTaskSummary(base).counterexamples, undefined, '舊紀錄沒有此欄位,不能當成零個反例');
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

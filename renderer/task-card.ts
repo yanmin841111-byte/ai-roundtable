@@ -82,6 +82,28 @@ function evidenceRow(label: string, detail?: string, tone = ''): HTMLElement {
   return row;
 }
 
+function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary): void {
+  section.appendChild(sectionLabel(t('task.counterexamples.title')));
+  if (!summary.counterexamples) {
+    section.appendChild(evidenceRow(t('task.counterexamples.missing'), undefined, 'warn'));
+    return;
+  }
+  if (!summary.counterexamples.length) {
+    section.appendChild(evidenceRow(t('task.counterexamples.none')));
+    return;
+  }
+  for (const item of summary.counterexamples) {
+    const title = item.title || t('task.counterexamples.untitled');
+    const after = item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
+    const detail = [
+      item.output ? `${t('task.counterexamples.initialOutput')}\n${item.output}` : '',
+      item.repairOutput ? `${t('task.counterexamples.repairOutput')}\n${item.repairOutput}` : '',
+    ].filter(Boolean).join('\n\n');
+    const tone = item.confirmation === 'unusable' || (item.confirmation === 'confirmed' && item.afterRepair !== 'passed') ? 'warn' : '';
+    section.appendChild(evidenceRow(`${item.reviewer} · ${title}: ${t(`task.counterexamples.${item.confirmation}`)} · ${after}`, detail, tone));
+  }
+}
+
 function acceptanceEvidence(summary: TaskSummary): HTMLElement {
   const section = document.createElement('section');
   section.className = 'ts-evidence';
@@ -96,21 +118,22 @@ function acceptanceEvidence(summary: TaskSummary): HTMLElement {
   const verification = summary.verification;
   if (!verification) {
     section.appendChild(evidenceRow(t('task.evidence.missing'), undefined, 'warn'));
-    return section;
+  } else {
+    if (verification.checkedAt) section.appendChild(evidenceRow(t('task.evidence.at', { time: new Date(verification.checkedAt).toLocaleString(document.documentElement.lang || 'en') })));
+    section.appendChild(evidenceRow(t('task.evidence.syntax', { n: verification.checked }), verification.checkedFiles?.join('\n')));
+    for (const failure of verification.syntax) section.appendChild(evidenceRow(failure.file, failure.error, 'bad'));
+    for (const gate of verification.gates) {
+      const result = gate.timedOut ? 'timeout' : gate.notFound ? 'unavailable' : gate.ok ? 'passed' : 'failed';
+      section.appendChild(evidenceRow(`${t(`task.evidence.${result}`)}: ${gate.command}`, `${t('task.evidence.exit', { code: gate.code ?? '-' })}\n${gate.output}`, gate.ok ? '' : 'bad'));
+    }
+    if (!verification.gates.length) section.appendChild(evidenceRow(t('task.evidence.noCommands'), undefined, 'warn'));
+    for (const command of verification.skippedCommands || []) section.appendChild(evidenceRow(`${t('task.evidence.skipped')}: ${command}`, undefined, 'warn'));
+    if (!verification.scopeKnown) section.appendChild(evidenceRow(t('task.evidence.unknownScope'), undefined, 'warn'));
+    if (verification.unchecked?.length) {
+      section.appendChild(evidenceRow(t('task.evidence.unchecked', { n: verification.unchecked.length }), verification.unchecked.map((item) => `${item.file}: ${t(`task.evidence.${item.reason}`)}`).join('\n'), 'warn'));
+    }
   }
-  if (verification.checkedAt) section.appendChild(evidenceRow(t('task.evidence.at', { time: new Date(verification.checkedAt).toLocaleString(document.documentElement.lang || 'en') })));
-  section.appendChild(evidenceRow(t('task.evidence.syntax', { n: verification.checked }), verification.checkedFiles?.join('\n')));
-  for (const failure of verification.syntax) section.appendChild(evidenceRow(failure.file, failure.error, 'bad'));
-  for (const gate of verification.gates) {
-    const result = gate.timedOut ? 'timeout' : gate.notFound ? 'unavailable' : gate.ok ? 'passed' : 'failed';
-    section.appendChild(evidenceRow(`${t(`task.evidence.${result}`)}: ${gate.command}`, `${t('task.evidence.exit', { code: gate.code ?? '-' })}\n${gate.output}`, gate.ok ? '' : 'bad'));
-  }
-  if (!verification.gates.length) section.appendChild(evidenceRow(t('task.evidence.noCommands'), undefined, 'warn'));
-  for (const command of verification.skippedCommands || []) section.appendChild(evidenceRow(`${t('task.evidence.skipped')}: ${command}`, undefined, 'warn'));
-  if (!verification.scopeKnown) section.appendChild(evidenceRow(t('task.evidence.unknownScope'), undefined, 'warn'));
-  if (verification.unchecked?.length) {
-    section.appendChild(evidenceRow(t('task.evidence.unchecked', { n: verification.unchecked.length }), verification.unchecked.map((item) => `${item.file}: ${t(`task.evidence.${item.reason}`)}`).join('\n'), 'warn'));
-  }
+  appendCounterexampleEvidence(section, summary);
   return section;
 }
 

@@ -20,7 +20,7 @@ function fakeOrc(names: string[], scripts: Record<string, string[]> = {}, settin
     get: () => ({
       id: 'fake', supportsResume: false, supportsEdit: false,
       run: async (agent: any, ctx: any) => {
-        calls.push({ name: agent.name, prompt: ctx.prompt, systemPrompt: ctx.systemPrompt });
+        calls.push({ name: agent.name, prompt: ctx.prompt, systemPrompt: ctx.systemPrompt, sessionId: ctx.sessionId });
         await new Promise((r: any) => setTimeout(r, 1));
         const next = queues[agent.name].shift();
         return { text: next != null ? next : `${agent.name} 沒有其他意見` };
@@ -59,6 +59,68 @@ const userTexts = (orc: any) => orc.messages.filter((m: any) => m.kind === 'user
   const at = async (name: string, fn: () => Promise<void>) => { await fn(); n++; console.log('ok -', name); };
 
   // ---------- 基本流程 ----------
+
+  await at('獨立首輪不看彼此答案、不續接 session,公開後才互評', async () => {
+    const { orc, agents, calls } = fakeOrc(['甲', '乙'], {
+      甲: ['alpha-private\n[AGREED]', '[AGREED]'],
+      乙: ['beta-private\n[AGREED]', '[AGREED]'],
+    }, { discussionMode: 'independent-first', maxRounds: 1 });
+    orc.sessions = { a0: 'old-alpha', a1: 'old-beta' };
+    orc.lastSeen = { a0: 0, a1: 0 };
+    await orc.discussPhase(agents, 'shared-task');
+    assert.strictEqual(calls.length, 4);
+    for (const call of calls.slice(0, 2)) {
+      assert.ok(call.prompt.includes('shared-task'));
+      assert.ok(!call.prompt.includes('alpha-private') && !call.prompt.includes('beta-private'));
+      assert.strictEqual(call.sessionId, null);
+    }
+    for (const call of calls.slice(2)) {
+      assert.ok(call.prompt.includes('alpha-private') && call.prompt.includes('beta-private'));
+    }
+  });
+
+  await at('獨立首輪的附件不標成正式 session 已讀,第二輪仍收到完整內容', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const { addAttachments } = require('../src/attachments');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-independent-attachments-'));
+    try {
+      for (const previousSession of [null, 'previous-task-session']) {
+        const agent = { id: 'member', name: 'Member', cli: 'fake', enabled: true, canEdit: false };
+        const calls: any[] = [];
+        adapters.setRegistry({ get: () => ({
+          id: 'fake', supportsResume: true, capabilities: { attachments: ['textInline'] },
+          run: async (_agent: any, ctx: any) => {
+            calls.push({ sessionId: ctx.sessionId, attachments: ctx.attachments, prompt: ctx.prompt });
+            return { text: 'Generic response', sessionId: ctx.sessionId || `session-${calls.length}` };
+          },
+        }) });
+        const settings = { workDir: root, discussionMode: 'independent-first', maxRounds: 3, maxTranscriptChars: 0 };
+        const orc = new O.Orchestrator({ userDataDir: root, get: () => ({ agents: [agent], settings }) });
+        if (previousSession) orc.sessions[agent.id] = previousSession;
+        orc.attachments = addAttachments(root, orc.conversationId, [{ name: 'requirements.txt', data: Buffer.from('UNIQUE_ATTACHMENT_REQUIREMENT') }]).added;
+        await orc.discussPhase([agent], 'Use the attachment');
+        assert.deepStrictEqual(calls.map((call) => call.attachments.length), [1, 1, 0]);
+        assert.deepStrictEqual(calls.map((call) => call.prompt.includes('UNIQUE_ATTACHMENT_REQUIREMENT')), [true, true, false]);
+        assert.deepStrictEqual(calls.map((call) => call.sessionId), [null, previousSession, previousSession || 'session-2']);
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  await at('獨立首輪全部完成後才受理提問', async () => {
+    const { orc, agents, calls } = fakeOrc(['甲', '乙'], {
+      甲: [ASK('which?', 'shared-answer')],
+      乙: ['beta-private'],
+    }, { discussionMode: 'independent-first', maxRounds: 2 });
+    const done = orc.discussPhase(agents, 'task');
+    await waitFor(() => orc.pendingQuestion, '首輪後提問');
+    assert.strictEqual(calls.length, 2);
+    assert.ok(!calls[1].prompt.includes('which?'));
+    orc.answerQuestion({ id: orc.pendingQuestion.id, optionIds: ['a'], decision: 'answered' });
+    await done;
+    assert.ok(calls[2].prompt.includes('shared-answer'));
+    assert.ok(calls[3].prompt.includes('shared-answer'));
+  });
 
   await at('討論階段提問會暫停流程,回答後寫進對話紀錄並繼續', async () => {
     const { orc, calls, states, idle } = fakeOrc(['甲', '乙'], {

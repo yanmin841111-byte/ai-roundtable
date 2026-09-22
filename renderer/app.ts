@@ -169,7 +169,7 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
-  for (const id of ['#work-dir', '#max-rounds', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
   $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
@@ -1118,6 +1118,8 @@ function renderSidebar() {
   }
   $<HTMLInputElement>('#work-dir').value = config.settings.workDir || '';
   $<HTMLInputElement>('#max-rounds').value = String(config.settings.maxRounds || 3);
+  $<HTMLSelectElement>('#discussion-mode').value = config.settings.discussionMode === 'independent-first' ? 'independent-first' : 'sequential';
+  $<HTMLInputElement>('#max-rounds').min = config.settings.discussionMode === 'independent-first' ? '2' : '1';
   $<HTMLInputElement>('#language').value = config.settings.language || '繁體中文';
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
@@ -1133,7 +1135,8 @@ function renderSidebar() {
 
 function saveSettings() {
   config.settings.workDir = $<HTMLInputElement>('#work-dir').value.trim();
-  config.settings.maxRounds = Number($<HTMLInputElement>('#max-rounds').value) || 3;
+  config.settings.discussionMode = $<HTMLSelectElement>('#discussion-mode').value === 'independent-first' ? 'independent-first' : 'sequential';
+  config.settings.maxRounds = Math.max(config.settings.discussionMode === 'independent-first' ? 2 : 1, Number($<HTMLInputElement>('#max-rounds').value) || 3);
   config.settings.language = $<HTMLInputElement>('#language').value.trim() || '繁體中文';
   config.settings.leadAgentId = $<HTMLSelectElement>('#lead-agent').value || null;
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
@@ -1860,7 +1863,7 @@ function insertTimelineMarkers(el: HTMLElement, m: ChatMessage): void {
     el.before(divider);
   }
   if (round && String(round) !== (prev && prev.dataset.round || '')) {
-    const maxRounds = Number(config && config.settings && config.settings.maxRounds) || 0;
+    const maxRounds = Number(typeof m.phase === 'object' ? m.phase?.maxRounds : 0) || Number(config && config.settings && config.settings.maxRounds) || 0;
     const divider = document.createElement('div');
     divider.className = 'tl-round';
     divider.textContent = maxRounds ? t('timeline.round', { round, max: maxRounds }) : t('timeline.roundOnly', { round });

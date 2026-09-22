@@ -16,7 +16,7 @@ import { scriptedMember } from '../fixtures';
 // 對照組:一樣的操作,設定檔可以寫。沒有這一半,上面那些檢查只要介面永遠說失敗就全過了。
 async function writable() {
   const r = await runApp({
-    members: [scriptedMember({ id: 's1', name: '成員一' })],
+    members: [scriptedMember({ id: 's1', name: '成員一' }), scriptedMember({ id: 's2', name: '成員二' })],
     timeoutMs: 2 * 60 * 1000,
     scenario: async () => {
       const g: any = globalThis;
@@ -26,18 +26,27 @@ async function writable() {
       const rounds = g.$('#max-rounds') as HTMLInputElement;
       rounds.value = '2';
       rounds.dispatchEvent(new Event('change'));
+      const discussion = g.$('#discussion-mode') as HTMLSelectElement;
+      discussion.value = 'independent-first';
+      discussion.dispatchEvent(new Event('change'));
       const hint = await g.waitFor(() => {
         const el = g.$('#settings-saved') as HTMLElement;
         return el && !el.hidden ? el : null;
       }, 8000, '改完設定之後有回應');
       g.check(/已儲存/.test(hint.textContent || ''), `存得進去就說已儲存(顯示:${hint.textContent})`);
       g.check(!hint.classList.contains('failed'), '成功時不帶失敗樣式');
+      await g.shot('discussion-mode');
+      g.$('#settings-close').click();
+      const messages = await g.send('Discuss the task independently first.', 'discuss');
+      const discussionTurns = messages.filter((message: any) => message.kind === 'agent' && message.phase?.code === 'discuss');
+      g.check(discussionTurns.length === 4, '首輪即使全員同意也必須進入第二輪互評');
+      g.check(discussionTurns.every((message: any) => message.phase.maxRounds === 2), '兩輪設定帶到真實討論流程');
       return { text: hint.textContent };
     },
   });
   const ok = report('設定存得進去時說已儲存', r);
   const saved = JSON.parse(fs.readFileSync(path.join(r.userData, 'config.json'), 'utf8'));
-  const written = saved.settings.maxRounds === 2;
+  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first';
   console.log(written ? '  ok - 設定檔確實被寫進去了' : '  失敗:說存好了,檔案卻沒有改');
   r.cleanup();
   assert.ok(ok && written, r.error || '對照組失敗');

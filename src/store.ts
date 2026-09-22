@@ -36,6 +36,7 @@ function defaultConfig(): AppConfig {
     settings: {
       workDir: path.join(os.homedir(), 'AI_Roundtable_Workspace'),
       maxRounds: 3,
+      discussionMode: 'sequential',
       mode: 'divide',
       leadAgentId: null,
       language: '繁體中文',

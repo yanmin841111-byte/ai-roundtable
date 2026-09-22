@@ -78,6 +78,16 @@ async function main() {
       const card = msgs.find((m: any) => m.tag === 'task-summary');
       g.check(!!card, '有結果卡');
       g.check(!card.taskSummary.rollback, `沒有退步就不該回退(${JSON.stringify(card.taskSummary.rollback)})`);
+      const evidence = card.taskSummary.counterexamples || [];
+      const confirmedEvidence = evidence.find((item: any) => item.title === '1 + 1 應該是 2');
+      const unsubstantiatedEvidence = evidence.find((item: any) => item.title === '0 + 0 應該是 0');
+      g.check(confirmedEvidence?.confirmation === 'confirmed' && confirmedEvidence?.afterRepair === 'passed', `結果卡保存確認與修復後狀態(${JSON.stringify(evidence)})`);
+      g.check(unsubstantiatedEvidence?.confirmation === 'unsubstantiated', `結果卡保存不成立的反例(${JSON.stringify(evidence)})`);
+      await g.w(300);
+      const resultCard = document.querySelector('#timeline .task-summary') as HTMLElement | null;
+      const resultText = resultCard?.querySelector('.ts-evidence')?.textContent || '';
+      g.check(/反例證據/.test(resultText) && /1 \+ 1 應該是 2/.test(resultText) && /已確認/.test(resultText) && /修復後通過/.test(resultText), `結果卡畫面顯示已修復的反例(${resultText.slice(-500)})`);
+      g.check(/0 \+ 0 應該是 0/.test(resultText) && /不成立/.test(resultText), `結果卡畫面顯示不成立的反例(${resultText.slice(-500)})`);
       g.check(!msgs.some((m: any) => m.kind === 'system' && /有關卡從通過變成不通過/.test(m.text || '')), '不可以報告不存在的退步');
       // 語料庫與反例腳本都不可以被算成成員的改動
       const files = (card.taskSummary.files || []).map((f: any) => f.path);

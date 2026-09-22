@@ -17,7 +17,8 @@ export interface ReportAssessment {
 export interface ReportSample {
   id: string;
   task: string;
-  condition: 'solo' | 'roundtable';
+  condition: string;
+  protocol?: string;
   commit: string;
   error: boolean;
   evidenceId?: string;
@@ -29,6 +30,7 @@ export function prepareReports(entries: JournalEntry[]): ReportSample[] {
     id: `run-${index + 1}`,
     task: entry.task,
     condition: entry.condition,
+    ...(entry.protocol ? { protocol: entry.protocol } : {}),
     commit: entry.commit,
     error: entry.run.error !== false,
     ...(typeof entry.run.evidenceId === 'string' ? { evidenceId: entry.run.evidenceId } : {}),
@@ -42,7 +44,7 @@ export function summarizeReports(samples: ReportSample[]) {
     if (!sample.id || ids.has(sample.id)) throw new Error('Missing or duplicate run id');
     ids.add(sample.id);
     if (typeof sample.task !== 'string' || !sample.task || typeof sample.commit !== 'string' || !sample.commit
-      || !['solo', 'roundtable'].includes(sample.condition) || typeof sample.error !== 'boolean'
+      || !/^[a-z][a-z0-9-]*$/.test(sample.condition) || typeof sample.error !== 'boolean'
       || (sample.evidenceId !== undefined && !/^run-[a-zA-Z0-9-]+$/.test(sample.evidenceId))) throw new Error(`Invalid run: ${sample.id}`);
     const assessment = sample.assessment;
     if (!assessment || !['contradicted', 'supported', 'no-claim', 'unknown'].includes(assessment.verdict)
@@ -78,21 +80,22 @@ export function summarizeReports(samples: ReportSample[]) {
 
 export function buildReportIntegrity(samples: ReportSample[]) {
   summarizeReports(samples);
-  const commits = [...new Set(samples.map((sample) => sample.commit))].sort();
+  const groups = [...new Set(samples.map((sample) => JSON.stringify([sample.commit, sample.protocol || ''])))].sort();
   return {
     schema: 1,
     kind: 'report-integrity',
     exploratory: true,
-    groups: commits.map((commit) => ({
-      commit,
-      solo: summarizeReports(samples.filter((sample) => sample.commit === commit && sample.condition === 'solo')),
-      roundtable: summarizeReports(samples.filter((sample) => sample.commit === commit && sample.condition === 'roundtable')),
-      tasks: [...new Set(samples.filter((sample) => sample.commit === commit).map((sample) => sample.task))].sort().map((task) => ({
-        task,
-        solo: summarizeReports(samples.filter((sample) => sample.commit === commit && sample.task === task && sample.condition === 'solo')),
-        roundtable: summarizeReports(samples.filter((sample) => sample.commit === commit && sample.task === task && sample.condition === 'roundtable')),
-      })),
-    })),
+    groups: groups.map((group) => {
+      const [commit, protocol] = JSON.parse(group) as string[];
+      const matching = samples.filter((sample) => sample.commit === commit && (sample.protocol || '') === protocol);
+      const conditions = [...new Set(['solo', 'roundtable', ...matching.map((sample) => sample.condition)])];
+      const summarize = (items: ReportSample[]) => ({
+        ...Object.fromEntries(conditions.map((condition) => [condition, summarizeReports(items.filter((sample) => sample.condition === condition))])),
+        solo: summarizeReports(items.filter((sample) => sample.condition === 'solo')),
+        roundtable: summarizeReports(items.filter((sample) => sample.condition === 'roundtable')),
+      });
+      return { commit, ...(protocol ? { protocol } : {}), ...summarize(matching), tasks: [...new Set(matching.map((sample) => sample.task))].sort().map((task) => ({ task, ...summarize(matching.filter((sample) => sample.task === task)) })) };
+    }),
   };
 }
 
@@ -113,14 +116,14 @@ export function scoreWorksheet(journalFile: string, worksheet: ReturnType<typeof
   const byId = new Map(worksheet.samples.map((sample) => [sample.id, sample]));
   for (const sample of expected.samples) {
     const actual = byId.get(sample.id);
-    if (!actual || actual.task !== sample.task || actual.condition !== sample.condition || actual.commit !== sample.commit || actual.error !== sample.error || actual.evidenceId !== sample.evidenceId) throw new Error(`Run metadata changed: ${sample.id}`);
+    if (!actual || actual.task !== sample.task || actual.condition !== sample.condition || actual.commit !== sample.commit || actual.protocol !== sample.protocol || actual.error !== sample.error || actual.evidenceId !== sample.evidenceId) throw new Error(`Run metadata changed: ${sample.id}`);
   }
   return { ...buildReportIntegrity(worksheet.samples), rubric: 1, journalSha256: expected.journalSha256 };
 }
 
 export function saveReportEvidence(root: string, workDir: string, evidence: {
   task: string;
-  condition: 'solo' | 'roundtable';
+  condition: string;
   commit: string;
   originalFiles: Record<string, string>;
   transcript: unknown[] | null;

@@ -6,6 +6,7 @@ import type { TaskSummary } from '../ipc-types';
 
 // 結果卡的純文字版:匯出成 Markdown、重開歷史紀錄時用
 export const TASK_SUMMARY_FILES = 30;
+const TASK_COUNTEREXAMPLE_OUTPUT = 2000;
 export function restoreVerification(raw: any): TaskSummary['verification'] {
   if (!raw || !Number.isInteger(raw.checked) || raw.checked < 0 || !Array.isArray(raw.syntax) || !Array.isArray(raw.gates)) return undefined;
   return {
@@ -45,11 +46,30 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
       ? summary.rollback.scope === 'repair' ? 'sys.taskSummary.rollbackRepair' : 'sys.taskSummary.rollbackTask'
       : summary.rollback.status === 'partial' ? 'sys.taskSummary.rollbackPartial' : 'sys.taskSummary.rollbackUnavailable') : '',
     verificationText(summary, locale),
+    counterexamplesText(summary, locale),
     ...(summary.verificationHistory || []).map((verification) => `${tx(locale, 'sys.taskSummary.previousVerification')}\n${verificationText({ ...summary, verification }, locale)}`),
     summary.reviewStale ? tx(locale, 'sys.taskSummary.reviewStale') : '',
     members.join('\n'),
     files.length ? `${tx(locale, 'sys.taskSummary.files', { n: summary.files.length + summary.moreFiles })}\n${files.join('\n')}` : tx(locale, 'sys.taskSummary.noFiles'),
   ].filter(Boolean).join('\n\n');
+}
+
+function counterexamplesText(summary: TaskSummary, locale: TextLocale): string {
+  if (!summary.counterexamples) return tx(locale, 'sys.taskSummary.counterexamplesMissing');
+  if (!summary.counterexamples.length) return tx(locale, 'sys.taskSummary.counterexamplesNone');
+  const lines = [tx(locale, 'sys.taskSummary.counterexamples')];
+  for (const item of summary.counterexamples) {
+    const after = item.afterRepair ? tx(locale, `sys.taskSummary.counterexample.after.${item.afterRepair}`) : tx(locale, 'sys.taskSummary.counterexample.notRetested');
+    lines.push(tx(locale, 'sys.taskSummary.counterexample.item', {
+      reviewer: item.reviewer,
+      title: item.title || tx(locale, 'ce.untitled'),
+      confirmation: tx(locale, `sys.taskSummary.counterexample.${item.confirmation}`),
+      after,
+    }));
+    if (item.output) lines.push(item.output.split('\n').map((line) => `    ${line}`).join('\n'));
+    if (item.repairOutput) lines.push(item.repairOutput.split('\n').map((line) => `    ${line}`).join('\n'));
+  }
+  return lines.join('\n');
 }
 
 function verificationText(summary: TaskSummary, locale: TextLocale): string {
@@ -87,6 +107,18 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     .slice(0, TASK_SUMMARY_FILES)
     .map((f: any) => ({ path: f.path, status: f.status, added: num(f.added), removed: num(f.removed) }));
   const verification = restoreVerification(raw.verification);
+  const confirmations = new Set(['confirmed', 'unsubstantiated', 'unusable']);
+  const afterRepairStatuses = new Set(['passed', 'failed', 'unusable']);
+  const counterexamples = Array.isArray(raw.counterexamples) ? raw.counterexamples
+    .filter((item: any) => item && typeof item.title === 'string' && typeof item.reviewer === 'string' && confirmations.has(item.confirmation) && typeof item.output === 'string')
+    .map((item: any) => ({
+      title: item.title,
+      reviewer: item.reviewer,
+      confirmation: item.confirmation,
+      ...(afterRepairStatuses.has(item.afterRepair) ? { afterRepair: item.afterRepair } : {}),
+      output: item.output.slice(0, TASK_COUNTEREXAMPLE_OUTPUT),
+      ...(typeof item.repairOutput === 'string' ? { repairOutput: item.repairOutput.slice(0, TASK_COUNTEREXAMPLE_OUTPUT) } : {}),
+    })) : undefined;
   return {
     startedAt: num(raw.startedAt),
     endedAt: num(raw.endedAt),
@@ -96,6 +128,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     ...(raw.verify === 'passed' || raw.verify === 'syntax-only' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
     ...(verification ? { verification } : {}),
     ...(Array.isArray(raw.verificationHistory) ? { verificationHistory: raw.verificationHistory.map(restoreVerification).filter((item: TaskSummary['verification']) => !!item) } : {}),
+    ...(counterexamples ? { counterexamples } : {}),
     ...(raw.reviewStale === true ? { reviewStale: true } : {}),
     ...(raw.testsTouched === true ? { testsTouched: true } : {}),
     ...(raw.repairBroke === true ? { repairBroke: true } : {}),

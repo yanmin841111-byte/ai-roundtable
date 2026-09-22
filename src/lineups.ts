@@ -3,6 +3,7 @@
 // 換陣容只改「誰啟用」與角色描述,不會悄悄換掉誰的模型。
 // 主程序(載入設定時清理)與介面(套用、比對)共用這一份,不得 import electron 或 node 模組。
 import type { AppConfig, Lineup } from './ipc-types';
+import { normalizeDiscussionMode } from './ipc-types';
 
 export const LINEUPS_MAX = 30;
 export const LINEUP_NAME_MAX = 40;
@@ -27,6 +28,7 @@ export function lineupFromConfig(config: AppConfig, name: string, id: string): L
     leadAgentId: effectiveLead(config),
     mode: MODES.has(config.settings.mode) ? config.settings.mode : 'divide',
     maxRounds: clampRounds(config.settings.maxRounds),
+    discussionMode: normalizeDiscussionMode(config.settings.discussionMode),
     workStyle: config.settings.workStyle === 'general' ? 'general' : 'code',
   };
 }
@@ -52,7 +54,7 @@ export function applyLineup(config: AppConfig, lineup: Lineup): LineupApplied | 
     config: {
       ...config,
       agents,
-      settings: { ...config.settings, leadAgentId: lead, mode: lineup.mode, maxRounds: lineup.maxRounds, workStyle: lineup.workStyle === 'general' ? 'general' : 'code', activeLineupId: lineup.id },
+      settings: { ...config.settings, leadAgentId: lead, mode: lineup.mode, maxRounds: lineup.maxRounds, discussionMode: normalizeDiscussionMode(lineup.discussionMode), workStyle: lineup.workStyle === 'general' ? 'general' : 'code', activeLineupId: lineup.id },
     },
     missing: lineup.members.length - present.length,
   };
@@ -73,6 +75,7 @@ export function lineupMatches(config: AppConfig, lineup: Lineup): boolean {
   return effectiveLead(config) === lead
     && config.settings.mode === lineup.mode
     && style(config.settings.workStyle) === style(lineup.workStyle)
+    && normalizeDiscussionMode(config.settings.discussionMode) === normalizeDiscussionMode(lineup.discussionMode)
     && clampRounds(config.settings.maxRounds) === lineup.maxRounds;
 }
 
@@ -98,6 +101,7 @@ export function sanitizeLineups(raw: unknown): Lineup[] {
       leadAgentId: typeof l.leadAgentId === 'string' && members.some((m: { id: string }) => m.id === l.leadAgentId) ? l.leadAgentId : null,
       mode: MODES.has(l.mode) ? l.mode : 'divide',
       maxRounds: clampRounds(l.maxRounds),
+      discussionMode: normalizeDiscussionMode(l.discussionMode),
       workStyle: l.workStyle === 'general' ? 'general' : 'code',
     });
     if (out.length >= LINEUPS_MAX) break;

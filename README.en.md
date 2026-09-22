@@ -76,6 +76,19 @@ work, execute it, and review each other.
 - **Uses the CLI subscriptions you already have**; no extra API keys needed.
   Keys for API members are encrypted with the operating system's secure storage.
 
+## What the evidence supports
+
+**This project's evaluations have not demonstrated that multiple AIs reviewing each
+other outperform a solo agent. That is not the same as disproving it.** Same-model
+experiments 3, 5 and 6 were invalidated because repair turns lacked file tools.
+Experiment 7, a small executor with Claude Code reviewing, did not support H3
+(primary difference -6.7 percentage points, p = 0.631). The flagship Claude Code +
+Codex combination has not been measured. See the [experiment log](eval/EXPERIMENTS.md).
+
+The ratchet guards only measured, comparable gates, subject to check coverage and
+successful rollback; it does not establish task correctness. A repaired counterexample
+passing proves that particular check now passes, not that every requirement is met.
+
 ## Requirements
 
 - macOS (other platforms are untested)
@@ -128,13 +141,17 @@ After you send a task, depending on the mode:
      thinks there is agreement ends its reply with `[AGREED]`; when everyone
      agrees in the same round the work is divided, otherwise division is forced
      once "Max discussion rounds" is reached.
+     Settings also offer "Independent first, then critique": the first round receives
+     only the task, attachments and project rules, without resuming old sessions.
+     Questions and critique wait until everyone finishes; at least two rounds run.
+     Lineups remember this setting. This isolates context, not CLI permissions.
   2. The lead outputs a JSON work plan, keeping each member on different files
      where possible.
   3. When two or more members can edit files, they execute **in parallel** in
      separate directories. Only non-overlapping changes are merged back.
-    Overlapping or unsafe-to-merge versions remain at the reported paths and
-    the work is marked incomplete. If isolation cannot be prepared, members
-    run **sequentially** in the original directory and the app says so.
+     Overlapping or unsafe-to-merge versions remain at the reported paths and
+     the work is marked incomplete. If isolation cannot be prepared, members
+     run **sequentially** in the original directory and the app says so.
   4. **The app verifies the work itself** (only in "Writing code" mode): changed
      `.js` and `.json` files are syntax-checked so they can be loaded, and if a
      "verify command" is set (for example `npm test`) it runs in the working
@@ -146,12 +163,12 @@ After you send a task, depending on the mode:
      changes and the verification result — not the discussion or the execution,
      so the reviewer is not led by what the other member said. A member whose
      execution stopped partway but already changed files is reviewed too.
-    6. Review issues or failed verification trigger one repair round, followed by
-      verification and re-checking. A dedicated reviewer who identified issues
-      takes over repairs when allowed to edit and a third member can independently
-      re-check. Otherwise the original author repairs and the original reviewer
-      re-checks. Test-writing and repair turns run sequentially. Remaining issues
-      go into the summary.
+  6. Review issues or failed verification trigger one repair round, followed by
+     verification and re-checking. A dedicated reviewer who identified issues
+     takes over repairs when allowed to edit and a third member can independently
+     re-check. Otherwise the original author repairs and the original reviewer
+     re-checks. Test-writing and repair turns run sequentially. Remaining issues
+     go into the summary.
   7. The lead summarizes.
 - **Discuss only, no execution**: after agreement or the round limit, the lead
   summarizes.
@@ -335,26 +352,26 @@ and `adapters/` can be opened from "Settings → Data & logs":
 
 ## Project layout
 
-| Path                                                         | Description                                                                                                                                            |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `main.ts`, `preload.ts`                                      | Electron main process and the IPC bridge                                                                                                               |
-| `src/ipc-types.ts`, `renderer/api.d.ts`                      | IPC types shared by the main process and the interface                                                                                                 |
-| `renderer/`                                                  | The interface (HTML / CSS / TypeScript, bundled by esbuild); `app.ts` is the main program, `diff-view.ts` and `task-card.ts` are standalone components |
-| `src/orchestrator.ts`                                        | Discussion, division, execution, review and @-mention flow                                                                                             |
-| `src/flow/`                                                  | Self-contained parts of the flow: review pairing and verdicts, transcript truncation, git changes, plan parsing, message restore, the result card      |
-| `src/snapshot.ts`, `src/task-changes.ts`                     | Working-directory snapshots and "what did this task change"                                                                                            |
-| `src/verify.ts`, `src/counterexample.ts`, `src/ratchet.ts`, `src/corpus.ts` | Automatic verification, executable counterexamples raised by reviewers, the "never get worse" ratchet, and the per-project counterexample corpus |
-| `src/adapters/`                                              | Built-in adapters, extension loading, generic CLI / API adapters                                                                                       |
-| `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts` | Attachments, history, API key storage                                                                                                                  |
-| `src/terminal.ts`, `src/pty.exp`, `renderer/terminal.ts`     | Terminal tabs: the pty (borrowed from the expect that ships with macOS, so no native module) and the right-hand panel                                  |
-| `src/git-check.ts`, `renderer/env-fix.ts`                    | Environment problems: whether git can run on this machine, and the shared card that states what happened plus one thing to do about it                 |
-| `src/models.ts`, `src/model-rules.ts`, `src/usage.ts`        | Model lists, effort rules, usage normalization                                                                                                         |
-| `adapters/templates/`                                        | Extension templates shown under "+ Add"                                                                                                                |
-| `docs/`                                                      | Extension guide, interface copy spec, and [what is next](docs/next.en.md)                                                                              |
-| `test/`                                                      | Tests run by `npm test`; `test/e2e/` is the end-to-end run                                                                                             |
-| `test/harness/`                                              | Isolated real-Electron checks and screenshots; see the [harness guide](test/harness/README.md) for scenarios and usage                                 |
-| `eval/`                                                      | Review-quality evaluation and the solo-vs-roundtable experiment: real models on a fixed set of tasks; long runs resume from a journal                  |
-| `dist/`                                                      | Output of `npm run build`, which is what the app loads (not committed)                                                                                 |
+| Path                                                                        | Description                                                                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `main.ts`, `preload.ts`                                                     | Electron main process and the IPC bridge                                                                                                               |
+| `src/ipc-types.ts`, `renderer/api.d.ts`                                     | IPC types shared by the main process and the interface                                                                                                 |
+| `renderer/`                                                                 | The interface (HTML / CSS / TypeScript, bundled by esbuild); `app.ts` is the main program, `diff-view.ts` and `task-card.ts` are standalone components |
+| `src/orchestrator.ts`                                                       | Discussion, division, execution, review and @-mention flow                                                                                             |
+| `src/flow/`                                                                 | Self-contained parts of the flow: review pairing and verdicts, transcript truncation, git changes, plan parsing, message restore, the result card      |
+| `src/snapshot.ts`, `src/task-changes.ts`                                    | Working-directory snapshots and "what did this task change"                                                                                            |
+| `src/verify.ts`, `src/counterexample.ts`, `src/ratchet.ts`, `src/corpus.ts` | Automatic verification, executable counterexamples raised by reviewers, the "never get worse" ratchet, and the per-project counterexample corpus       |
+| `src/adapters/`                                                             | Built-in adapters, extension loading, generic CLI / API adapters                                                                                       |
+| `src/attachments.ts`, `src/session-log.ts`, `src/secrets.ts`                | Attachments, history, API key storage                                                                                                                  |
+| `src/terminal.ts`, `src/pty.exp`, `renderer/terminal.ts`                    | Terminal tabs: the pty (borrowed from the expect that ships with macOS, so no native module) and the right-hand panel                                  |
+| `src/git-check.ts`, `renderer/env-fix.ts`                                   | Environment problems: whether git can run on this machine, and the shared card that states what happened plus one thing to do about it                 |
+| `src/models.ts`, `src/model-rules.ts`, `src/usage.ts`                       | Model lists, effort rules, usage normalization                                                                                                         |
+| `adapters/templates/`                                                       | Extension templates shown under "+ Add"                                                                                                                |
+| `docs/`                                                                     | Extension guide, interface copy spec, and [what is next](docs/next.en.md)                                                                              |
+| `test/`                                                                     | Tests run by `npm test`; `test/e2e/` is the end-to-end run                                                                                             |
+| `test/harness/`                                                             | Isolated real-Electron checks and screenshots; see the [harness guide](test/harness/README.md) for scenarios and usage                                 |
+| `eval/`                                                                     | Review-quality evaluation and the solo-vs-roundtable experiment: real models on a fixed set of tasks; long runs resume from a journal                  |
+| `dist/`                                                                     | Output of `npm run build`, which is what the app loads (not committed)                                                                                 |
 
 ## Contributing
 

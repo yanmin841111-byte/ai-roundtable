@@ -96,10 +96,9 @@ task, does working alone, or working and then being reviewed and fixing the
 findings, get it right more often, and how long does each take?**
 
 ```bash
-npm run eval:ab                          # 5 tasks × 2 conditions × 3 runs
-npm run eval:ab -- --runs 5 --tasks csv  # only some tasks
-EVAL_REVIEWER_CLI=claude npm run eval:ab # use another model as the roundtable's reviewer (here Claude Code, which uses your subscription)
-npm run eval:ab -- --journal eval/results/run1.jsonl   # resumable: one line per finished run; the same command continues where it stopped
+npm run eval:ab -- --dry-run --runs 3 --tasks forth-fix,poker-fix
+# After approval and preregistration, use the same settings:
+npm run eval:ab -- --approve-experiment --runs 3 --tasks forth-fix,poker-fix --journal eval/results/run1.jsonl
 ```
 
 A run takes hours and often gets interrupted. `--journal` records each finished
@@ -136,6 +135,62 @@ variables above), to measure whether a second pair of eyes helps.
 | `duration`  | More inputs to reject than to accept                     |
 | `cart-bugs` | The user reports one symptom; the file has three bugs    |
 | `csv`       | Quotes, escaped quotes, empty fields                     |
+
+## Multiple conditions and budgets
+
+`--conditions` accepts the following unique names; unknown names are rejected. All models
+use the existing adapters. The candidate runner is independent of task/model names and hidden scores.
+
+| Condition                | Behavior                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `solo`                   | Original solo flow with scripted review                                                                |
+| `roundtable`             | Sequential discussion, real review and repair                                                          |
+| `independent-first`      | Same roundtable, with a clean-context first round                                                      |
+| `sequential-candidates`  | N isolated solo candidates see prior candidate files, then all are revealed for roundtable integration |
+| `independent-candidates` | Same candidate/integration flow, but candidates cannot see each other                                  |
+| `solo-budget`            | Independent solo candidates selected using public ratchet gates, until token target or attempt cap     |
+
+`--rounds` defaults to 2 and must match across arms. `--candidates` defaults to 4 and is
+also the budget arm's attempt cap. `--verify-command` uses existing public project gates,
+one command per line. Every candidate starts with original files and a fresh app, without
+shared sessions, hidden scores or prior edits. A candidate is an independent invocation
+of the same executor configuration, not each role in a product lineup. Candidate results
+measure code-output anchoring, not directly the effect of the product's text-discussion policy.
+
+```bash
+npm run eval:ab -- --dry-run --conditions sequential-candidates,independent-candidates --candidates 4 --tasks forth-fix,poker-fix
+npm run eval:ab -- --dry-run --conditions solo-budget,roundtable --candidates 8 --token-budget 20000 --tasks forth-fix,poker-fix
+```
+
+Numbers are syntax examples, not an approved design. Calibrate and fix sample size, budget,
+public gates and primary contrast first. Record the dry run's commit/protocol in the
+[experiment log](EXPERIMENTS.md), obtain approval, then replace `--dry-run` with
+`--approve-experiment`. Candidate conditions require `EVAL_EVIDENCE_DIR=.eval-local/evidence`;
+every candidate's complete evidence survives isolated-workspace cleanup.
+
+Selection uses the [existing ratchet](../src/ratchet.ts) on public gates only: accept an
+improvement without regressions, reject disappearance of previously passing gates, retain
+the incumbent on ties. Syntax-only gates usually cannot distinguish logical correctness;
+hidden tests must never break ties. Snapshots require complete UTF-8 text, at most 10,000
+files, 256 KiB per file and 20 MiB overall. Incomplete snapshots or public verification
+that changes content abort explicitly.
+
+The input-plus-output token target is checked **after a complete candidate**, so it may
+overshoot by one candidate. `budget.stop` distinguishes `target-reached`, `attempt-limit`
+and `usage-unavailable`; missing usage is `null`, not zero. Reaching the target is not
+exact matching: report actual totals, deviation and elapsed time. Tokens across models
+are not equal FLOPs. Calibration requires separate approval; never tune using formal outcomes.
+
+Failures use fixed-order test IDs. Jaccard is averaged over pairs within a complete run;
+both-empty pairs are excluded and counted as `bothCorrect`, incomplete apps as `unavailable`.
+Failure-set similarity is not Pearson correlation or accuracy. Candidate similarity and
+integrated scores stay separate. Comparisons use runs, not pairs, as samples and stratify
+by task. More than two conditions are exploratory, without multiple-comparison correction.
+
+Resumption requires both commit **and protocol** to match. The protocol covers task content,
+model settings, condition order, repetitions, budget and commands. Dirty sources receive
+a content fingerprint. Schema 2 reports contain per-condition summaries, usage coverage,
+budgets and contrasts, and never overwrite previous files.
 
 ## Report integrity (offline, exploratory)
 
