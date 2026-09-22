@@ -30,7 +30,7 @@ async function run(team: Member[]) {
     return { id, supportsEdit: true, supportsResume: false, capabilities: { attachments: ['textInline'] },
       run: async (_a: any, ctx: any) => {
         if (/【分工】/.test(ctx.prompt)) return { text: JSON.stringify(plan) };
-        if (/【執行】/.test(ctx.prompt)) { for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(dir, f), c); return { text: m.report || '完成' }; }
+        if (/【執行】/.test(ctx.prompt)) { for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(ctx.cwd, f), c); return { text: m.report || '完成' }; }
         if (/【交叉審查】/.test(ctx.prompt)) {
           const live = orc.messages.find((x: any) => x.status === 'running' && x.agentName === m.name && x.phase && x.phase.code === 'review');
           whileRunning.push(!!(live && live.review && live.review.target && !live.review.verdict));

@@ -19,6 +19,8 @@ export interface TurnOptions {
   ephemeral?: string;
   // 這一回合不可以寫入的檔案(相對工作目錄):修復回合的既有測試檔
   lockedPaths?: string[];
+  // 平行執行時的隔離目錄。沒有就用任務的工作目錄。
+  cwd?: string;
   // 乾淨 context:不送對話紀錄,也不續接這位成員自己的 session。
   // 審查回合用它,讓審查者只看需求與實際改動,不被執行者的說法帶著走。
   freshContext?: boolean;
@@ -59,6 +61,7 @@ export interface ExecReport {
   error: string | null;
   // 這位成員在執行階段實際做了哪些檔案操作;沒有使用工具時是空陣列
   toolEvents?: ToolAuditEntry[];
+  changedPaths?: string[];
   // 執行回合中途失敗、但已經動過檔案,照樣送審時的失敗原因(審查者要知道檔案可能只改了一半)
   failedWith?: string;
   // 修復後的複查:上一輪的審查意見(複查者要確認這些問題修好了、也沒有弄壞別的)
@@ -84,6 +87,8 @@ export interface Issue {
 export interface FixFailure {
   item: Issue;
   error: string | null;
+  repairer?: AgentConfig;
+  rechecker?: AgentConfig;
   // 修復回合的檔案操作(寫進稽核用)
   toolEvents?: ToolAuditEntry[];
 }
@@ -93,7 +98,7 @@ export interface FixOutcome {
   reviewFailed: Review[];
   fixFailed: FixFailure[];
   // 修復回合成功跑完的成員與它的修復回報(之後會再複查一次)
-  repaired?: Array<{ item: Issue; report: string }>;
+  repaired?: Array<{ item: Issue; report: string; repairer?: AgentConfig; rechecker?: AgentConfig; toolEvents?: ToolAuditEntry[] }>;
   // 修復後的複查
   rereviews?: Review[];
   // 修復回合之後(含修復本身)動到的既有測試檔

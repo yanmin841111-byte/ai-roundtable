@@ -79,9 +79,9 @@ export function reviewVerdict(text: string | null | undefined, error: string | n
 
 // 這位成員自己用工具改過的檔案(精確)
 export function ownPaths(report: ExecReport): Set<string> {
-  return new Set((report.toolEvents || [])
+  return new Set([...(report.changedPaths || []), ...(report.toolEvents || [])
     .filter((e) => e.ok !== false && e.tool !== 'read_file' && e.path)
-    .map((e) => String(e.path)));
+    .map((e) => String(e.path))]);
 }
 
 // CLI 被審者要審的檔案:自己的工具紀錄(通常沒有)+ 工作目錄的差異。附內容有數量上限,
@@ -89,8 +89,8 @@ export function ownPaths(report: ExecReport): Set<string> {
 // CLI 成員可能也改了同一個檔案,排除掉就會把它的改動藏起來。
 // 回傳完整清單;超過 REVIEW_FILES_MAX 的部分由呼叫端截掉並註明還有幾個。
 export function reviewFiles(target: ExecReport, changed: string[] | null): string[] {
-  const own = ownPaths(target);
-  const rest = (changed || []).filter((f) => !own.has(f));
+  const own = ownPaths({ ...target, changedPaths: undefined });
+  const rest = (target.changedPaths || changed || []).filter((f) => !own.has(f));
   const said = `${target.task}\n${target.report}`;
   // 找「提到的檔案」是在主程序上同步做字串搜尋:成員一口氣產生十萬個檔案(例如 clone 一個 repo)
   // 又寫了長回報時,會把介面卡住好幾秒。超過工作量上限就不排序,照路徑順序列。

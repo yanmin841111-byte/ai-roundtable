@@ -28,7 +28,7 @@ async function run(dir: string, team: Member[], after?: (orc: any) => Promise<vo
         const reply = (text: string, extra: any = {}) => ({ text, ...(m.usage ? { usage: m.usage } : {}), ...extra });
         if (/【分工】/.test(ctx.prompt)) return reply(JSON.stringify(plan));
         if (/【執行】/.test(ctx.prompt)) {
-          for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(dir, f), c);
+          for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(ctx.cwd, f), c);
           return m.error ? { text: '', error: m.error } : reply('完成');
         }
         if (/【交叉審查】/.test(ctx.prompt)) return reply(m.review || '[NO_ISSUES]');
@@ -75,6 +75,7 @@ test('每位成員的結果和流程的走向一致;改了哪些檔案、用量�
   assert.deepStrictEqual(s.verification.gates, []);
   assert.deepStrictEqual(s.verification.checkedFiles.sort(), ['a.js', 'b.js']);
   assert.match(card.text, /任務結果/, '純文字版給匯出與歷史紀錄用');
+  assert.match(card.text, /僅語法檢查通過/);
   assert.match(card.text, /a\.js \+2 −0/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -130,11 +131,12 @@ test('最新任務可重驗但不呼叫模型、不自動回退,舊證據與審�
     assert.strictEqual(fs.readFileSync(path.join(dir, 'a.js'), 'utf8'), 'function broken( {');
     fs.writeFileSync(path.join(dir, 'a.js'), 'module.exports = 2;\n');
     assert.strictEqual((await orc.reverifyTask(card.id, '')).ok, true);
-    assert.strictEqual(card.taskSummary.verify, 'passed');
+    assert.strictEqual(card.taskSummary.verify, 'syntax-only', '沒有專案驗證指令,重驗通過也只是語法檢查');
     assert.strictEqual(card.taskSummary.reviewStale, true);
     assert.strictEqual(card.taskSummary.verificationHistory.length, 2);
     assert.strictEqual(prompts.length, count);
     const restored = O.restoreMessage(JSON.parse(JSON.stringify(card)));
+    assert.strictEqual(restored.taskSummary.verify, 'syntax-only');
     assert.strictEqual(restored.taskSummary.verification.freshness, 'unknown');
     assert.strictEqual(restored.taskSummary.verificationHistory.length, 2);
     orc.loadConversation({ messages: [card] });

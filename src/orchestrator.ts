@@ -27,6 +27,8 @@ import { TASK_SUMMARY_FILES, taskSummaryText } from './flow/task-summary';
 import { toAuditEntries, mentionLabel, restoreMessage } from './flow/messages';
 import { gitStatus, parsePorcelain, describeGitChanges } from './flow/git';
 import { extractJson, resolveAgent } from './flow/plan';
+import { discardMemberWorkspaces, mergeMemberWorkspaces, prepareMemberWorkspaces } from './worktrees';
+import type { PreparedWorkspaces } from './worktrees';
 
 const AGREED = 'AGREED';
 const ASK = 'ASK';
@@ -53,6 +55,7 @@ class Orchestrator extends EventEmitter {
   sessions: Record<string, string>;
   // 工作目錄不是 git repo 時,最近一次任務開始前的檔案內容。「檔案改動」拿它比對;只在記憶體,不寫檔
   taskBaseline: TaskBaseline | null;
+  // 平行執行有重疊時留下的隔離目錄。任務收尾才清,避免回退之後又被合併回來。
   lastSeen: Record<string, number>;
   procs: Set<Stoppable>;
   running: boolean;
@@ -388,7 +391,8 @@ class Orchestrator extends EventEmitter {
 
   private verificationSummary(result: VerifyResult): Pick<TaskSummary, 'verify' | 'verification'> {
     const verification: TaskVerification = { checked: result.checked, checkedFiles: result.checkedFiles, syntax: result.syntax, gates: result.gates || [], checkedAt: result.checkedAt, scopeKnown: result.scopeKnown, unchecked: result.unchecked || [], skippedCommands: result.skippedCommands || [], revision: result.revision, freshness: result.freshness };
-    return { verify: !result.ran ? 'none' : result.ok ? 'passed' : 'failed', verification };
+    const verify = !result.ran ? 'none' : !result.ok ? 'failed' : result.gates?.length ? 'passed' : 'syntax-only';
+    return { verify, verification };
   }
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
@@ -555,16 +559,16 @@ class Orchestrator extends EventEmitter {
           writtenTests = await this.testsPhase(agents, plan, snapBefore, cwd);
           if (this.stopped) return;
         }
-        const { reports, failed } = await this.executePhase(agents, plan, writtenTests);
+        const { reports, failed, conflicts: laneConflicts, unmerged = [] } = await this.executePhase(agents, plan, writtenTests);
         if (this.stopped) return;
         const gitAfter = await gitStatus(cwd);
         const gitChanges = describeGitChanges(gitBefore, gitAfter, this.locale);
         const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
         if (this.stopped) return;
-        // 平行改到同一個檔案:照實說,並讓審查者知道
-        const conflicts = this.parallelConflicts([...reports, ...failed]);
+        // 隔離合併後仍重疊的檔案沒有寫回工作目錄。沒有隔離時才用工具紀錄事後指出。
+        const conflicts = laneConflicts || this.parallelConflicts([...reports, ...failed]);
         if (conflicts.length) {
-          this.system(this.text('sys.parallelConflict', {
+          this.system(this.text(laneConflicts ? 'sys.parallelConflict' : 'sys.sharedConflict', {
             list: conflicts.map((c) => this.text('sys.parallelConflictItem', { file: c.file, names: joinNames(this.locale, c.names) })).join('\n'),
           }), { level: 'warn', tag: 'conflict' });
         }
@@ -586,10 +590,20 @@ class Orchestrator extends EventEmitter {
         if (this.stopped) return;
         await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding);
         if (this.stopped) return;
+        for (const report of [...reports, ...failed].filter((report) => unmerged.includes(report.agent.id))) {
+          if (!fix.unresolved.some((issue) => issue.agent.id === report.agent.id)) {
+            fix.unresolved.push({ agent: report.agent, task: report.task, notes: [this.text('sys.mergeUnresolved')] });
+          }
+        }
         const afterFix = fix.verify as VerifyResult | undefined;
-        const repairBroke = !!(verify && verify.ran && verify.ok && afterFix && afterFix.ran && !afterFix.ok);
-        const scope = afterFix && verify && changed !== null && !verify.syntax.length ? 'repair' : 'task';
-        const contained = await this.containUnloadable(cwd, afterFix || verify, scope);
+        const repairBroke = !!(verify && afterFix && afterFix.ran && (
+          verify.ran && verify.ok && !afterFix.ok
+          || verify.gates?.some((gate) => gate.ok && afterFix.gates?.some((after) => after.command === gate.command && !after.ok))
+        ));
+        const unloadable = !!(afterFix || verify)?.syntax.length;
+        // 執行階段就載不起來:整段撤回。執行階段語法是乾淨的、只是修復退步:只收回修復。
+        const scope = (repairBroke || unloadable) && verify && !verify.syntax.length && changed !== null ? 'repair' : 'task';
+        const contained = await this.containUnloadable(cwd, afterFix || verify, scope, repairBroke || unloadable);
         if (this.stopped) return;
         if (contained.rollback) {
           const affected = scope === 'task'
@@ -784,17 +798,39 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段三:各成員平行執行自己的工作
-  async executePhase(agents: AgentConfig[], plan: Plan, lockedPaths: string[] = []): Promise<{ reports: ExecReport[]; failed: ExecReport[] }> {
+  async executePhase(agents: AgentConfig[], plan: Plan, lockedPaths: string[] = []): Promise<{ reports: ExecReport[]; failed: ExecReport[]; conflicts?: Array<{ file: string; names: string[] }>; unmerged?: string[] }> {
     this.setPhase({ code: 'execute' });
     const cwd = this.taskCwd || this.config.settings.workDir;
     const group = crypto.randomUUID(); // 同一批平行發言,介面會並排顯示
-    const jobs: Array<Promise<ExecReport>> = [];
-    for (const agent of agents) {
+    const assigned = agents.filter((agent) => plan.assignments.some((item) => item._agentId === agent.id && item.task));
+    const writers = assigned.filter((agent) => effectiveCanEdit(agent));
+    let lanes: PreparedWorkspaces | null = null;
+    const snapBefore = writers.length > 1 ? await snapshotDir(cwd) : null;
+    if (writers.length > 1) {
+      try {
+        lanes = await prepareMemberWorkspaces(cwd, writers.map((agent) => agent.id), snapBefore);
+      } catch (error) {
+        lanes = { root: '', cwd, members: [], unavailable: String(error) };
+      }
+      if (lanes.unavailable) {
+        this.system(this.text('sys.lanesUnavailable', { error: lanes.unavailable }), { level: 'warn', tag: 'conflict' });
+        lanes = null;
+      } else this.system(this.text('sys.lanesReady'), { tag: 'conflict' });
+    }
+    if (this.stopped) {
+      if (lanes) await discardMemberWorkspaces(lanes);
+      return { reports: [], failed: [] };
+    }
+    const laneOf = (agentId: string) => lanes?.members.find((member) => member.agentId === agentId)?.dir;
+    const parallel = !!lanes || writers.length < 2;
+    const jobs: Array<() => Promise<ExecReport>> = [];
+    for (const agent of assigned) {
       const mine = plan.assignments.filter((a) => a._agentId === agent.id && a.task);
-      if (mine.length === 0) continue;
       const taskText = mine.map((a) => a.task).join('\n');
+      const lane = effectiveCanEdit(agent) ? laneOf(agent.id) : undefined;
       const prompt = [
-        this.text('prompt.execute', { cwd }),
+        this.text('prompt.execute', { cwd: lane || cwd }),
+        lane ? this.text('prompt.executeLane') : null,
         effectiveCanEdit(agent) ? this.text('prompt.executeCanEdit') : this.text('prompt.executeReadOnly'),
         // 測試先行:測試已經寫好而且鎖住了,實作要讓它們通過
         lockedPaths.length ? this.text('prompt.executeTestFirst', { list: lockedPaths.join('、') }) : null,
@@ -807,19 +843,48 @@ class Orchestrator extends EventEmitter {
       // 一樣能在審查階段擔任 reviewer,這與 pickReviewPairs 的行為一致。
       const fileToolsEnabled = effectiveCanEdit(agent) && hasQualifiedReviewer(agents, agent.id);
       jobs.push(
-        this.turn(agent, prompt, { phase: { code: 'execute' }, hideAgreed: true, group, fileToolsEnabled, lockedPaths })
+        () => this.turn(agent, prompt, { phase: { code: 'execute' }, hideAgreed: true, group: parallel ? group : null, fileToolsEnabled, lockedPaths, ...(lane ? { cwd: lane, freshContext: true } : {}) })
           .then(({ text, error, toolEvents }) => ({ agent, task: taskText, report: text, error, toolEvents })),
       );
     }
     if (jobs.length === 0) { this.system(this.text('sys.nobodyAssigned'), { level: 'warn' }); return { reports: [], failed: [] }; }
 
-    const all = await Promise.all(jobs);
+    const all: ExecReport[] = [];
+    try {
+      if (parallel) all.push(...await Promise.all(jobs.map((job) => job())));
+      else for (const job of jobs) {
+        if (this.stopped) break;
+        all.push(await job());
+      }
+    } catch (error) {
+      if (lanes) this.system(this.text('sys.lanesKept', { dir: lanes.root }), { level: 'warn', tag: 'conflict' });
+      throw error;
+    }
+    let conflicts: Array<{ file: string; names: string[] }> | undefined;
+    let unmerged: string[] = [];
+    if (lanes && !lanes.unavailable) {
+      if (!this.stopped) {
+        for (const member of lanes.members) {
+          const report = all.find((report) => report.agent.id === member.agentId);
+          const changed = diffSnapshots(member.baseline, await snapshotDir(member.dir));
+          if (report && changed) report.changedPaths = changed;
+        }
+        const merged = await mergeMemberWorkspaces(cwd, lanes, snapBefore, new Map(writers.map((agent) => [agent.id, agent.name])))
+          .catch(() => ({ adopted: [], overlaps: [], failed: ['.'] }));
+        conflicts = merged.overlaps;
+        if (merged.overlaps.length || merged.failed.length) {
+          unmerged = writers.filter((agent) => merged.failed.length || merged.overlaps.some((overlap) => overlap.names.includes(agent.name))).map((agent) => agent.id);
+          if (merged.failed.length) this.system(this.text('sys.mergeFailed', { list: merged.failed.join(', ') }), { level: 'error', tag: 'conflict' });
+          this.system(this.text('sys.lanesKept', { dir: lanes.root }), { level: 'warn', tag: 'conflict' });
+        } else await discardMemberWorkspaces(lanes);
+      } else await discardMemberWorkspaces(lanes);
+    }
     // 稽核紀錄緊接在執行結果之後寫進 transcript,審查者才能拿實際改動去對照成員的報告。
     // 用 system 訊息而不是偽裝成使用者發言:它是流程產生的事實,不是任何人說的話。
     for (const r of all) this.writeToolAudit(r.agent, r.toolEvents || []);
     const reports = all.filter((r) => !r.error && (r.report || '').trim());
     const failed = all.filter((r) => r.error || !(r.report || '').trim());
-    return { reports, failed };
+    return { reports, failed, unmerged, ...(conflicts ? { conflicts } : {}) };
   }
 
   // 執行回合中途失敗的成員:已經動過檔案的照樣送審。
@@ -836,7 +901,7 @@ class Orchestrator extends EventEmitter {
     const unexplained = (changed || []).filter((f) => !explained.has(f));
     const salvaged = failed
       .filter((f) => effectiveCanEdit(f.agent)
-        && (tracked(f) ? ownPaths(f).size > 0 : cliWriters.length === 1 && unexplained.length > 0))
+        && (tracked(f) || f.changedPaths ? ownPaths(f).size > 0 : cliWriters.length === 1 && unexplained.length > 0))
       .map((f) => ({ ...f, report: f.report || '', failedWith: f.error || this.text('sys.noReport') }));
     const item = (f: ExecReport) => this.text('prompt.failedItem', { name: f.agent.name, error: f.error || this.text('sys.noReport') });
     const dropped = failed.filter((f) => !salvaged.some((s) => s.agent.id === f.agent.id));
@@ -861,8 +926,8 @@ class Orchestrator extends EventEmitter {
     return result;
   }
 
-  async containUnloadable(cwd: string, verify: VerifyResult | undefined, scope: 'task' | 'repair'): Promise<{ verify: VerifyResult | undefined; rollback?: TaskSummary['rollback'] }> {
-    if (!verify || !verify.syntax.length || this.stopped) return { verify };
+  async containUnloadable(cwd: string, verify: VerifyResult | undefined, scope: 'task' | 'repair', shouldRollback = !!verify?.syntax.length): Promise<{ verify: VerifyResult | undefined; rollback?: TaskSummary['rollback'] }> {
+    if (!verify || !shouldRollback || this.stopped) return { verify };
     const baseline = scope === 'repair' ? this.fixBaseline : this.taskBaseline;
     if (!baseline || baseline.cwd !== cwd) {
       this.system(this.text('sys.autoRevertUnavailable'), { level: 'error', tag: 'revert' });
@@ -890,8 +955,7 @@ class Orchestrator extends EventEmitter {
   // 這時候測試「應該是紅的」——還沒有實作——所以不跑自動驗證,免得把預期中的失敗當成問題。
   async testsPhase(agents: AgentConfig[], plan: Plan, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, cwd: string): Promise<string[]> {
     this.setPhase({ code: 'tests' });
-    const group = crypto.randomUUID();
-    const jobs: Array<Promise<{ agent: AgentConfig; toolEvents?: ToolAuditEntry[] }>> = [];
+    const jobs: Array<() => Promise<{ agent: AgentConfig; toolEvents?: ToolAuditEntry[] }>> = [];
     for (const agent of agents) {
       const mine = plan.assignments.filter((a) => a._agentId === agent.id && a.task);
       if (mine.length === 0 || !effectiveCanEdit(agent)) continue;
@@ -901,11 +965,15 @@ class Orchestrator extends EventEmitter {
         '',
         this.text('prompt.reviewTask', { task: mine.map((a) => a.task).join('\n') }),
       ].join('\n');
-      jobs.push(this.turn(agent, prompt, { phase: { code: 'tests' }, hideAgreed: true, group, fileToolsEnabled: true })
+      jobs.push(() => this.turn(agent, prompt, { phase: { code: 'tests' }, hideAgreed: true, fileToolsEnabled: true })
         .then(({ toolEvents }) => ({ agent, toolEvents })));
     }
     if (!jobs.length) return [];
-    const done = await Promise.all(jobs);
+    const done = [];
+    for (const job of jobs) {
+      if (this.stopped) break;
+      done.push(await job());
+    }
     for (const r of done) this.writeToolAudit(r.agent, r.toolEvents || []);
     // 實際寫出來的測試檔(以快照差異為準,不是以成員說的為準)
     const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
@@ -916,9 +984,6 @@ class Orchestrator extends EventEmitter {
     return tests;
   }
 
-  // 平行執行時兩位成員改到同一個檔案:後寫的會蓋掉先寫的,而且誰也不知道。
-  // 真正的隔離要各自的 worktree 再合併,那會動到使用者的版控狀態,風險比收益高;
-  // 這裡不擋,但一定要說出來,並讓審查者知道那幾個檔案可能被互相覆蓋。
   parallelConflicts(reports: ExecReport[]): Array<{ file: string; names: string[] }> {
     const byFile = new Map<string, Set<string>>();
     for (const r of reports) {
@@ -1158,13 +1223,20 @@ class Orchestrator extends EventEmitter {
     }
     // 修復回合鎖住的檔案:這次動到的既有測試檔,加上工作目錄裡本來就有的測試檔
     this.lockedForFix = touchedTests;
-    const jobs: Array<Promise<FixFailure & { text: string }>> = [];
-    const group = crypto.randomUUID();
+    const jobs: Array<() => Promise<FixFailure & { text: string }>> = [];
     for (const it of issues.values()) {
       if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
+      const reviewer = reviews.find((review) => review.target.agent.id === it.agent.id
+        && reviewVerdict(review.text, review.error) === 'issues'
+        && effectiveCanEdit(review.reviewer)
+        && !reviewed.some((report) => report.agent.id === review.reviewer.id))?.reviewer;
+      const rechecker = reviewer && this.agents.find((agent) => agent.id !== it.agent.id && agent.id !== reviewer.id);
+      const repairer = reviewer && rechecker ? reviewer : it.agent;
+      if (repairer !== it.agent) this.system(this.text('sys.repairHandoff', { author: it.agent.name, repairer: repairer.name, reviewer: rechecker!.name }), { tag: 'repair' });
       const prompt = [
         this.text('prompt.fix'),
         this.text('prompt.fixLast'),
+        repairer !== it.agent ? this.text('prompt.repairHandoff', { name: it.agent.name }) : null,
         // 既有的測試檔在修復回合鎖起來:要讓測試通過請改實作。API 成員由檔案工具直接擋下,
         // CLI 成員擋不到,所以提示裡講明,真的改了也會在複查與結果卡上標出來
         this.lockedForFix.length ? this.text('prompt.fixTestLock', { list: this.lockedForFix.join('、') }) : null,
@@ -1177,9 +1249,9 @@ class Orchestrator extends EventEmitter {
       // 少了這一行的後果實測過:API 成員在修復回合只能「說」怎麼修——模型正確診斷出
       // 註解裡的 */ 提前關閉了註解,把修好的整份程式貼在回覆裡,檔案卻一個字都沒變,
       // 複查當然照樣不過。對 API 成員來說,修復回合等於從來沒有修過任何東西。
-      const fixTools = effectiveCanEdit(it.agent) && hasQualifiedReviewer(this.agents, it.agent.id);
-      jobs.push(this.turn(it.agent, prompt, { phase: { code: 'repair' }, hideAgreed: true, group, fileToolsEnabled: fixTools, lockedPaths: this.lockedForFix })
-        .then(({ error, text, toolEvents }) => ({ item: it, error, text, toolEvents })));
+      const fixTools = effectiveCanEdit(repairer) && hasQualifiedReviewer(this.agents, repairer.id);
+      jobs.push(() => this.turn(repairer, prompt, { phase: { code: 'repair' }, hideAgreed: true, fileToolsEnabled: fixTools, lockedPaths: this.lockedForFix, freshContext: repairer !== it.agent })
+        .then(({ error, text, toolEvents }) => ({ item: it, error, text, toolEvents, repairer, rechecker: repairer !== it.agent ? rechecker : undefined })));
     }
 
     if (unresolved.length) {
@@ -1193,12 +1265,16 @@ class Orchestrator extends EventEmitter {
     let repaired: FixOutcome['repaired'] = [];
     if (jobs.length) {
       this.setPhase({ code: 'repair' });
-      const results = await Promise.all(jobs);
+      const results = [];
+      for (const job of jobs) {
+        if (this.stopped) break;
+        results.push(await job());
+      }
       // 修復也會動檔案(包括被測試鎖擋下的嘗試):寫進稽核,複查者與使用者才看得到實際做了什麼
-      for (const r of results) this.writeToolAudit(r.item.agent, r.toolEvents || []);
+      for (const r of results) this.writeToolAudit(r.repairer || r.item.agent, r.toolEvents || []);
       // 修復本身也可能失敗(逾時、崩潰),那些問題等於沒修掉
-      fixFailed = results.filter((r) => r.error).map(({ item, error }) => ({ item, error }));
-      repaired = results.filter((r) => !r.error).map(({ item, text }) => ({ item, report: text }));
+      fixFailed = results.filter((result) => result.error);
+      repaired = results.filter((result) => !result.error).map(({ item, text, repairer, rechecker, toolEvents }) => ({ item, report: text, repairer, rechecker, toolEvents }));
       if (fixFailed.length) {
         this.system(
           this.text('sys.fixFailed', { list: fixFailed.map((r) => this.text('prompt.fixFailedItem', { name: r.item.agent.name, error: r.error || '' })).join('\n') }),
@@ -1227,12 +1303,17 @@ class Orchestrator extends EventEmitter {
     if (newly.length) this.system(this.text('sys.testsLockedFixed', { list: newly.map((f) => `- \`${f}\``).join('\n') }), { level: 'warn', tag: 'test-lock' });
     if (this.stopped) return;
     const pairs: ReviewPair[] = [];
-    for (const { item, report } of fix.repaired || []) {
+    for (const { item, report, repairer, rechecker, toolEvents } of fix.repaired || []) {
       // 原本提出問題的審查者優先;只有自動驗證找出問題(審查者說通過)時,沿用審過它的那一位
       const first = reviews.find((rv) => rv.target.agent.id === item.agent.id && reviewVerdict(rv.text, rv.error) === 'issues')
         || reviews.find((rv) => rv.target.agent.id === item.agent.id);
       if (!first) continue;
-      pairs.push({ reviewer: first.reviewer, target: { ...first.target, report, failedWith: undefined, previousNotes: item.notes } });
+      pairs.push({ reviewer: rechecker || first.reviewer, target: {
+        ...first.target, report, failedWith: undefined,
+        changedPaths: undefined,
+        toolEvents: [...(first.target.toolEvents || []), ...(toolEvents || [])],
+        previousNotes: [...item.notes, ...(repairer && repairer.id !== item.agent.id ? [this.text('prompt.repairedBy', { name: repairer.name })] : [])],
+      } });
     }
     if (!pairs.length) return;
     const rereviews = await this.reviewPhase(agents, pairs.map((p) => p.target), changed, [], pairs, verify, afterTests);
@@ -1314,10 +1395,10 @@ class Orchestrator extends EventEmitter {
   }
 
   // 這位成員這回合實際拿得到的附件(沙箱 CLI 用工作目錄副本,其餘用 userData 權威路徑)
-  attachmentsFor(adapter: Adapter | null): RunAttachment[] {
+  attachmentsFor(adapter: Adapter | null, staged = this.staged): RunAttachment[] {
     if (!this.attachments.length) return [];
     const { needCwd } = attachmentCapabilities(adapter);
-    const byId = new Map(this.staged.map((s) => [s.id, s]));
+    const byId = new Map(staged.map((s) => [s.id, s]));
     return this.attachments.map((m) => ({
       ...m,
       path: needCwd ? (byId.get(m.id)?.cwdPath || null) : absolutePath(this.userDataDir, m),
@@ -1326,13 +1407,13 @@ class Orchestrator extends EventEmitter {
 
   // 可續接的成員只在第一次發言時收到完整附件區塊(含內嵌文字),之後靠 session 記憶;
   // 不可續接的成員每回合都要重送,否則下一輪就完全不知道有附件這回事。
-  attachmentPrompt(agent: AgentConfig, adapter: Adapter | null, resumable: boolean) {
+  attachmentPrompt(agent: AgentConfig, adapter: Adapter | null, resumable: boolean, staged = this.staged) {
     if (!this.attachments.length) return '';
     const seen = this.attachmentsSeen.has(agent.id);
     if (seen && resumable) return '';
     this.attachmentsSeen.add(agent.id);
     const { needCwd } = attachmentCapabilities(adapter);
-    return buildAttachmentPrompt(this.userDataDir, this.attachments, adapter, { staged: needCwd ? this.staged : [], locale: this.locale });
+    return buildAttachmentPrompt(this.userDataDir, this.attachments, adapter, { staged: needCwd ? staged : [], locale: this.locale });
   }
 
   // 收集該成員尚未看到的訊息,組成「[名稱]: 內容」的紀錄
@@ -1370,7 +1451,7 @@ class Orchestrator extends EventEmitter {
 
   // ---------- 執行一次發言 ----------
   // 回傳 { text, error };錯誤不再被吞掉,由上層決定是否影響流程
-  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false, readOnlyFileTools = false, ephemeral, review, lockedPaths, freshContext = false }: TurnOptions = {}): Promise<TurnOutcome> {
+  async turn(agent: AgentConfig, instruction: string, { phase, hideAgreed = false, group = null, fileToolsEnabled = false, readOnlyFileTools = false, ephemeral, review, lockedPaths, freshContext = false, cwd }: TurnOptions = {}): Promise<TurnOutcome> {
     const startIdx = this.messages.length;
     const msg = this.pushMessage({ kind: 'agent', agentId: agent.id, agentName: agent.name, color: agent.color, cli: agent.cli, model: agent.model, phase, status: 'running', ...(group ? { group } : {}), ...(review ? { review } : {}) });
     // 乾淨 context:不給對話紀錄,也不續接自己的 session(續接等於把之前的脈絡帶回來)
@@ -1379,7 +1460,11 @@ class Orchestrator extends EventEmitter {
     const resumable = !freshContext && !!(adapter?.supportsResume && this.sessions[agent.id]);
     // 已知這位成員的模型不能看圖:附件照「不收圖片」的成員處理,區塊裡照實說它看不到,圖片也不送
     const noImages = knownCapability(agent)?.images === false;
-    const attachmentBlock = this.attachmentPrompt(agent, noImages ? withoutImages(adapter) : adapter, resumable);
+    const isolatedAttachments = cwd && cwd !== (this.taskCwd || this.config.settings.workDir) && attachmentCapabilities(adapter).needCwd && this.attachments.length
+      ? stageToCwd(this.userDataDir, this.conversationId, cwd, this.attachments) : null;
+    if (isolatedAttachments?.error) this.system(this.text('sys.stageFailed', { error: isolatedAttachments.error }), { level: 'warn' });
+    const staged = isolatedAttachments?.staged || this.staged;
+    const attachmentBlock = this.attachmentPrompt(agent, noImages ? withoutImages(adapter) : adapter, resumable, staged);
     const prompt = [
       transcript ? (resumable ? this.text('transcript.new') : this.text('transcript.sofar')) + '\n' + transcript : '',
       attachmentBlock,
@@ -1391,14 +1476,14 @@ class Orchestrator extends EventEmitter {
       prompt,
       systemPrompt: this.systemPrompt(agent, { showAgreed: !hideAgreed }),
       sessionId: freshContext ? null : this.sessions[agent.id] || null,
-      cwd: this.taskCwd || this.config.settings.workDir,
+      cwd: cwd || this.taskCwd || this.config.settings.workDir,
       locale: this.locale,
       fileToolsEnabled,
       ...(lockedPaths && lockedPaths.length ? { lockedPaths } : {}),
       readOnlyFileTools,
       ephemeral,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
-      attachments: attachmentBlock ? this.attachmentsFor(adapter).filter((a) => !(noImages && a.kind === 'image')) : [],
+      attachments: attachmentBlock ? this.attachmentsFor(adapter, staged).filter((a) => !(noImages && a.kind === 'image')) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },
       // 乾淨 context 的回合另開 session,不能覆寫成員原本的:它之後還要接回自己的脈絡
       onSession: (id) => { if (!freshContext) this.sessions[agent.id] = id; },
@@ -1409,6 +1494,8 @@ class Orchestrator extends EventEmitter {
         if (existing) Object.assign(existing, a); else msg.activities.push({ ...a });
         this.emitMessage(msg);
       },
+    }).finally(() => {
+      if (isolatedAttachments && cwd) clearRuntime(cwd, this.conversationId);
     });
     // 乾淨 context 的回合另開 session:不能覆寫成員原本的,它之後還要接回自己的脈絡
     if (result.sessionId && !freshContext) this.sessions[agent.id] = result.sessionId;

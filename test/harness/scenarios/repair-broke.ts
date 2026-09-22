@@ -37,7 +37,7 @@ async function main() {
       g.check(card.taskSummary.repairBroke === true, `結果卡知道是修復把事情弄糟的(${JSON.stringify(card.taskSummary.verify)})`);
       g.check(/修復回合反而把東西改壞/.test(card.text), `說成人話,不是只說「驗證沒過」(${card.text.slice(0, 160)})`);
       g.check(card.taskSummary.rollback?.scope === 'repair' && card.taskSummary.rollback?.status === 'complete', '已自動收回修復回合');
-      g.check(card.taskSummary.verify === 'passed', '回退後重新驗證通過');
+      g.check(card.taskSummary.verify === 'syntax-only', '回退後重新驗證,但沒有專案驗證指令,只是語法檢查');
       g.check(card.taskSummary.members[0].outcome === 'unresolved', '回退不是完成任務');
       g.check(msgs.some((m: any) => m.tag === 'revert'), '自動回退寫入紀錄');
       const notice = await g.waitFor(() => document.querySelector('.ts-rollback'), 8000, '結果卡的自動回退狀態');

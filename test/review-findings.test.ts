@@ -448,7 +448,7 @@ async function runTeam(dir: string, team: TeamMember[]): Promise<Record<string, 
     run: async (_a: any, ctx: any) => {
       if (/【分工】/.test(ctx.prompt)) return { text: JSON.stringify(plan) };
       if (/【執行】/.test(ctx.prompt)) {
-        for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(dir, f), c);
+        for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(ctx.cwd, f), c);
         if (m.error) return { text: '', error: m.error };
         return { text: m.report || '完成', toolEvents: (m.events || []).map((f, i) => ({ toolCallId: `c${i}`, name: 'write_file', path: f, ok: true, summary: 'ok', result: { path: f } })) };
       }
@@ -464,12 +464,23 @@ async function runTeam(dir: string, team: TeamMember[]): Promise<Record<string, 
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', 'divide');
   await done;
+  for (const message of orc.messages.filter((message: any) => message.tag === 'conflict')) {
+    const root = /`([^`]*ai-roundtable-lanes-[^`]*)`/.exec(message.text)?.[1];
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  }
   return prompts;
 }
 
 // 兩位 CLI 成員同時執行:工作目錄的差異是兩個人的改動,分不出誰改了哪個。
 // 以前 Bob 審 Alice 時,附上的六個檔案全是 Bob 自己的,Alice 的檔案只有名字、沒有內容。
-test('16. 多位 CLI 成員:被審者回報提到的檔案排前面並附上內容,清單標明是所有人的改動;沒有改檔權限的只審回報', async () => {
+test('隔離檔案清單仍優先排列任務與回報提到的檔案', () => {
+  const { reviewFiles } = require('../src/flow/review');
+  assert.deepStrictEqual(reviewFiles({
+    task: 'write a.js', report: 'completed a.js', changedPaths: ['README.md', 'a.js', 'docs/README.md'],
+  }, ['README.md', 'a.js', 'b.js', 'docs/README.md']), ['a.js', 'README.md', 'docs/README.md']);
+});
+
+test('16. 多位 CLI 成員:隔離後只附上各自的實際改動;沒有改檔權限的只審回報', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-multi-'));
   const bob: Record<string, string> = {};
   for (let i = 1; i <= 9; i++) bob[`b${i}.ts`] = `export const b${i} = ${i};\n`;
@@ -480,7 +491,8 @@ test('16. 多位 CLI 成員:被審者回報提到的檔案排前面並附上內�
   ]);
   assert.ok(p.Alice, '要有人審 Alice');
   assert.ok(p.Alice.includes('Alice 的內容'), 'Alice 回報提到的檔案要排前面、附上內容(z_a.ts 按字母排在第 10 個)');
-  assert.match(p.Alice, /不一定都是「Alice」改的/, '清單要標明是所有人的改動');
+  assert.doesNotMatch(p.Alice, /不一定都是「Alice」改的/, '隔離後已能精確歸屬');
+  assert.doesNotMatch(p.Alice, /^- b1\.ts$/m, '不附上別人的檔案');
   assert.match(p.Carol, /沒有修改檔案的權限/);
   assert.doesNotMatch(p.Carol, /^- b1\.ts$/m, '沒有改檔權限的成員,不列別人的改動');
   assert.doesNotMatch(p.Carol, /你看不到實際的改動/);
@@ -519,14 +531,16 @@ test('19. API 成員沒有用工具改任何檔案:依工具紀錄照實說,不�
 
 // 執行失敗的成員可能改到一半。以前只看成功的回報,Bob 改壞的 legacy.ts 被當成 Alice 的改動,
 // 清單也沒標明「不一定是 Alice 改的」。
-test('20. 執行失敗的成員也算動過工作目錄:清單標明是所有人的改動', async () => {
+test('20. 執行失敗的成員:依隔離目錄歸屬改動並送審', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-failed-'));
   const p = await runTeam(dir, [
     { id: 'alice', name: 'Alice', kind: 'cli', canEdit: true, task: '寫 a.ts', writes: { 'a.ts': 'ok\n' }, report: '完成 a.ts' },
     { id: 'bob', name: 'Bob', kind: 'cli', canEdit: true, task: '改 legacy.ts', writes: { 'legacy.ts': 'HALF-DONE BROKEN\n' }, error: '逾時' },
   ]);
   assert.ok(p.Alice, '要有人審 Alice');
-  assert.match(p.Alice, /不一定都是「Alice」改的/);
+  assert.doesNotMatch(p.Alice, /不一定都是「Alice」改的/);
+  assert.doesNotMatch(p.Alice, /HALF-DONE BROKEN/);
+  assert.match(p.Bob, /HALF-DONE BROKEN/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

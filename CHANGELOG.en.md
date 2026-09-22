@@ -4,6 +4,15 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A repair round that breaks any previously passing verification gate is rolled back automatically and reverified, not only when syntax breaks. The work remains incomplete.
+- Two or more members who can edit files now execute in separate directories. Only non-overlapping changes are merged back. Unmerged versions are retained and marked incomplete; unavailable isolation falls back to sequential execution. Interrupted CLI work is reviewed using per-member change evidence.
+- A dedicated reviewer who identified issues can take over repairs with existing edit permission and an independent third-party re-check. Test-writing and repair turns run sequentially to avoid concurrent overwrites in the shared directory.
+- A built-in syntax check without a project verify command is labeled "syntax check only" instead of looking like a completed verification.
+
 ## [0.2.1] - 2026-09-22
 
 ### Fixed

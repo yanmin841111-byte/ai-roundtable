@@ -93,7 +93,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     members,
     files,
     moreFiles: num(raw.moreFiles),
-    ...(raw.verify === 'passed' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
+    ...(raw.verify === 'passed' || raw.verify === 'syntax-only' || raw.verify === 'failed' || raw.verify === 'none' ? { verify: raw.verify } : {}),
     ...(verification ? { verification } : {}),
     ...(Array.isArray(raw.verificationHistory) ? { verificationHistory: raw.verificationHistory.map(restoreVerification).filter((item: TaskSummary['verification']) => !!item) } : {}),
     ...(raw.reviewStale === true ? { reviewStale: true } : {}),

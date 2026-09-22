@@ -34,8 +34,9 @@ async function once(locale: 'zh-Hant' | 'en') {
       const card = document.querySelector('#timeline .task-summary') as HTMLElement | null;
       g.check(!!card && card.offsetHeight > 0, '任務結束出現結果卡');
       const head = (card!.querySelector('.ts-head') as HTMLElement).textContent || '';
-      g.check(new RegExp(H.zh ? '任務結果.*待人工驗收.*秒' : 'Task result.*Awaiting human acceptance.*s').test(head), `標題、整體狀態與用時(${head})`);
-      g.check(card!.classList.contains('tone-info'), '模型放行仍然需要人工驗收');
+      g.check(new RegExp(H.zh ? '任務結果.*驗收證據不足.*僅語法檢查通過.*秒' : 'Task result.*Incomplete evidence.*Syntax check only.*s').test(head), `標題、整體狀態與用時(${head})`);
+      g.check(card!.classList.contains('tone-warn'), '只有語法檢查時不能看起來像可驗收');
+      g.check(!!card!.querySelector('.ts-verify.syntax-only') && !card!.querySelector('.ts-verify.passed'), '語法限定徽章不是綠色通過');
       const evidence = card!.querySelector('.ts-evidence')!;
       g.check(new RegExp(H.zh ? '已檢查 2 個.*語法' : 'Syntax checked for 2').test(evidence.textContent || ''), '可直接查看檢查範圍');
       g.check(new RegExp(H.zh ? '未執行專案驗證指令' : 'No project verification commands ran').test(evidence.textContent || ''), '未執行的專案驗證明列');
@@ -72,7 +73,7 @@ async function once(locale: 'zh-Hant' | 'en') {
       g.check((timing.querySelector('[data-action="accept"]') as HTMLButtonElement).disabled, '已驗收版本不能重複提交');
       g.check(Array.from(card!.querySelectorAll<HTMLButtonElement>('button.icon-only')).every((control) => !!control.title && !!control.getAttribute('aria-label') && !!control.querySelector('svg')), '圖示工具都有提示與可存取名稱');
       g.check(accepted.outcome === 'accepted' && accepted.reviewMs === paused.reviewMs && accepted.decidedAt >= accepted.deliveredAt, '人工驗收與累計時間持久保存');
-      g.check(card!.classList.contains('tone-info') && accepted.startedAt > 0, '人工判定不覆寫自動證據');
+      g.check(card!.classList.contains('tone-warn') && accepted.startedAt > 0, '人工判定不覆寫語法限定的警示');
       g.check(!new RegExp(H.zh ? '待人工驗收' : 'Awaiting human acceptance').test(card!.textContent || ''), '已驗收後不再顯示待驗收');
       const originalUrl = URL.createObjectURL;
       const originalClick = HTMLAnchorElement.prototype.click;

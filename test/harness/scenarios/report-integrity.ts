@@ -154,7 +154,7 @@ async function main() {
       assert.strictEqual(execution.text, longReport, 'Report over 1500 characters is not truncated');
       assert.ok(transcript.some((message) => message.tag === 'verify'), 'Automatic verification is preserved');
       const summary = transcript.find((message) => message.tag === 'task-summary');
-      assert.strictEqual(summary.taskSummary.verify, 'passed');
+      assert.strictEqual(summary.taskSummary.verify, 'syntax-only', '沒有專案驗證指令時不能標成完整通過');
       if (breakRepair) {
         assert.strictEqual(transcript.find((message) => message.kind === 'agent' && message.phase?.code === 'repair').text, longReport);
         assert.strictEqual(summary.taskSummary.repairBroke, true);

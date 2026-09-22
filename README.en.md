@@ -118,7 +118,11 @@ After you send a task, depending on the mode:
      once "Max discussion rounds" is reached.
   2. The lead outputs a JSON work plan, keeping each member on different files
      where possible.
-  3. All members execute their part **in parallel** in the working directory.
+  3. When two or more members can edit files, they execute **in parallel** in
+     separate directories. Only non-overlapping changes are merged back.
+    Overlapping or unsafe-to-merge versions remain at the reported paths and
+    the work is marked incomplete. If isolation cannot be prepared, members
+    run **sequentially** in the original directory and the app says so.
   4. **The app verifies the work itself** (only in "Writing code" mode): changed
      `.js` and `.json` files are syntax-checked so they can be loaded, and if a
      "verify command" is set (for example `npm test`) it runs in the working
@@ -130,18 +134,29 @@ After you send a task, depending on the mode:
      changes and the verification result — not the discussion or the execution,
      so the reviewer is not led by what the other member said. A member whose
      execution stopped partway but already changed files is reviewed too.
-  6. A member flagged by the review, or by a failed verification, repairs the
-     work once; the app verifies again and the original reviewer re-checks it.
-     Anything still wrong goes into the summary.
+    6. Review issues or failed verification trigger one repair round, followed by
+      verification and re-checking. A dedicated reviewer who identified issues
+      takes over repairs when allowed to edit and a third member can independently
+      re-check. Otherwise the original author repairs and the original reviewer
+      re-checks. Test-writing and repair turns run sequentially. Remaining issues
+      go into the summary.
   7. The lead summarizes.
 - **Discuss only, no execution**: after agreement or the round limit, the lead
   summarizes.
 
+Isolation prefers Git worktrees. Non-Git directories and repository subdirectories
+use bounded copies (256 KB per file, 20 MB total). An incomplete copy falls back to
+sequential execution instead of silently omitting files. Dependencies and caches
+are not copied, so isolated directories may need their own dependency installation.
+This separates working directories; it is not a security sandbox for CLI tools.
+
 In "Writing code" mode, divide and test-first runs attempt automatic rollback
-before the summary if built-in syntax checks still fail: only the repair round
-is undone when execution had no syntax errors; otherwise the task is restored to
-its starting point. A failed verify command alone does not trigger rollback. The
-result card shows post-rollback verification, and withdrawn work remains
+before the summary if built-in syntax checks still fail, or if the repair round
+turns any previously passing verification gate into a failure: only the repair round is
+undone when execution had no syntax errors; otherwise the task is restored to
+its starting point. A verify command that already failed after execution, and did
+not get worse, does not trigger rollback. A syntax-only pass is labeled as such
+and is not merge-ready. The result card shows post-rollback verification, and withdrawn work remains
 incomplete. Rollback uses bounded in-memory snapshots (256 KB per file, 20 MB
 total), not a complete backup. Missing baselines, incomplete restores, and a
 changed working-directory identity are reported; post-rollback verification is

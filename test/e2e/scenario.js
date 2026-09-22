@@ -57,14 +57,13 @@
     check(round.some((m) => m.kind === 'system' && m.tag === 'plan'), '有分工結果的系統訊息');
     check(round.some((m) => m.kind === 'system' && m.text.includes('全員達成共識')), '討論達成共識的系統訊息');
     const groups = new Set(agents.filter((m) => m.group).map((m) => m.group));
-    // 執行、審查、修復、複查各一組
-    check(groups.size === 4 && agents[3].group === agents[4].group && agents[5].group === agents[6].group, '執行與審查各自並排成一組');
+    check(groups.size === 3 && agents[3].group === agents[4].group && agents[5].group === agents[6].group && !agents[7].group, '執行與審查各自並排,修復依序呈現');
     check(agents[7].agentName === '乙' && agents[7].phase.code === 'repair', '只有被審查出問題的乙進入修復回合');
     check(agents[8].agentName === '甲' && agents[8].phase.code === 'review' && agents[8].review && agents[8].review.recheck && agents[8].review.target === '乙', '修復後由原本的審查者甲複查乙');
     check(agents[9].agentName === '甲' && agents[9].phase.code === 'summary', '主持人甲做總結');
     check((await api.attachments.list()).attachments.length === 0, '送出後待送附件清空');
     check(document.querySelectorAll('#timeline .msg').length === round.length, '時間軸畫出每一則訊息');
-    check(document.querySelectorAll('#timeline .msg-group').length === 4, '時間軸有四組並排(執行、審查、修復、複查)');
+    check(document.querySelectorAll('#timeline .msg-group').length === 3, '時間軸有三組並排(執行、審查、複查),修復不並排');
 
     // ---------- 歷史紀錄 ----------
     const list = await api.sessions.list();

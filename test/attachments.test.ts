@@ -288,6 +288,32 @@ t('describeGitChanges 排除 .roundtable-runtime,附件不會被誤報成成員�
   assert.strictEqual(describeGitChanges(null, parsePorcelain('?? .roundtable-runtime/conv/pic.png')), null);
 });
 
+t('隔離回合的附件放在自己的目錄,回合結束清除副本', async () => {
+  const userDataDir = tmp('att');
+  const work = tmp('work');
+  const lane = tmp('lane');
+  const meta = addOne(userDataDir, 'spec.md', '# spec').added[0];
+  const agent = { id: 'writer', name: 'Writer', cli: 'writer', canEdit: true, enabled: true };
+  let seen = false;
+  require('../src/adapters').setRegistry({ get: () => ({
+    id: 'writer', supportsEdit: true, capabilities: { attachments: ['filePath'], attachmentsNeedCwd: true },
+    run: async (_agent: any, ctx: any) => {
+      const attachment = ctx.attachments[0];
+      assert.ok(attachment.path.startsWith(lane + path.sep));
+      assert.strictEqual(fs.readFileSync(attachment.path, 'utf8'), '# spec');
+      assert.ok(ctx.prompt.includes(attachment.path));
+      seen = true;
+      return { text: 'done' };
+    },
+  }) });
+  const orchestrator = new Orchestrator({ userDataDir, get: () => ({ agents: [agent], settings: { workDir: work } }) });
+  orchestrator.attachments = [meta];
+  await orchestrator.turn(agent, 'write', { cwd: lane, freshContext: true });
+  assert.ok(seen);
+  assert.strictEqual(fs.existsSync(path.join(lane, A.RUNTIME_DIR)), false);
+  assert.ok(fs.existsSync(A.absolutePath(userDataDir, meta)));
+});
+
 // ---------- 能力宣告與提示詞 ----------
 t('adapter 沒宣告 capabilities 時依 supportsEdit 推斷', () => {
   assert.deepStrictEqual([...A.attachmentCapabilities({ supportsEdit: true }).modes], ['filePath', 'textInline']);

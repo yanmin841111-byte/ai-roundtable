@@ -188,9 +188,9 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: strin
     status.textContent = state.tone === 'bad' ? state.label : !current ? t('task.acceptance.incomplete')
       : state.tone === 'info' && humanOutcome !== 'pending' ? t(`task.review.${humanOutcome}`) : state.label;
     const badge = titleRow.querySelector('.ts-verify:not(.tests)');
-    if (badge && s.verify === 'passed') {
-      badge.className = `ts-verify ${current ? 'passed' : 'none'}`;
-      badge.textContent = current ? t('task.verify.passed') : t('task.freshness.historicalPass');
+    if (badge && (s.verify === 'passed' || s.verify === 'syntax-only')) {
+      badge.className = `ts-verify ${current ? s.verify : 'none'}`;
+      badge.textContent = current ? t(`task.verify.${s.verify}`) : t('task.freshness.historicalPass');
     }
   };
   const verification = renderTaskVerification(taskId, s, (value) => {

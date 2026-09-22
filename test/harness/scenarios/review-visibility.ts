@@ -57,7 +57,7 @@ async function once(locale: 'zh-Hant' | 'en') {
       const chips = Array.from(scope.querySelectorAll('.review-file')) as HTMLButtonElement[];
       const names = chips.map((c) => c.textContent);
       const chip = (name: string) => chips.find((c) => c.textContent === name)!;
-      g.check(names.indexOf('a.js') >= 0 && names.indexOf('a.js') < names.indexOf('b.js'), `列出檔案,Alice 回報提到的排在前面(${names.join(', ')})`);
+      g.check(names.includes('a.js') && names.includes('README.md') && !names.includes('b.js'), `隔離後只列 Alice 的實際改動(${names.join(', ')})`);
       await g.shot(`review-${H.zh ? 'zh' : 'en'}`);
 
       // 點檔名 → 檔案改動視窗打開,並展開、標示那個檔案。README.md 不能跳到 docs/README.md
@@ -73,7 +73,10 @@ async function once(locale: 'zh-Hant' | 'en') {
       (document.querySelector('#diff-close') as HTMLButtonElement).click();
 
       // 被 .gitignore 忽略的 debug.log:審查清單有,檔案改動沒有 → 要說明,不能打開了什麼都沒標
-      chip('debug.log').click();
+      const bobChips = Array.from(ofBob!.querySelectorAll<HTMLButtonElement>('.review-file'));
+      const debugChip = bobChips.find((item) => item.textContent === 'debug.log');
+      g.check(!!debugChip && !names.includes('debug.log'), 'debug.log 歸屬 Bob 的審查清單');
+      debugChip!.click();
       await g.w(1500);
       const missing = document.querySelector('#diff-body .diff-focus-missing') as HTMLElement | null;
       g.check(!!missing && missing.offsetHeight > 0 && /debug\.log/.test(missing.textContent || ''), `點不在清單裡的檔案要有說明(${missing && missing.textContent})`);

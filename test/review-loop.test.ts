@@ -13,13 +13,14 @@ const O = require('../src/orchestrator');
 const adapters = require('../src/adapters');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
-const test = (name: string, fn: () => unknown) => { if (process.env.ONLY && !name.includes(process.env.ONLY)) return; tests.push({ name, fn }); };
+const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 
 // review:當審查者時依序的回覆(第一次審查、複查);api:用 OpenAI 相容型(看工具紀錄)
 type Member = { id: string; name: string; task?: string; writes?: Record<string, string>; fixWrites?: Record<string, string>; execError?: string; fixError?: string; review?: string[]; api?: boolean; canEdit?: boolean; verifyCommand?: string; workStyle?: 'general' | 'code'; mode?: string;
   /** 寫測試回合要寫的檔案 */ testWrites?: Record<string, string>;
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
-  /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string> };
+  /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
+  expectFiles?: Record<string, string>; execBarrier?: () => Promise<void> };
 async function run(team: Member[]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
@@ -42,7 +43,9 @@ async function run(team: Member[]) {
           return { text: '測試寫好了', toolEvents: Object.keys(m.testWrites || {}).map((f) => ({ name: 'write_file', ok: true, path: f, result: {} })) };
         }
         if (/【執行】/.test(ctx.prompt)) {
-          for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(dir, f), c);
+          for (const [file, content] of Object.entries(m.expectFiles || {})) assert.strictEqual(fs.readFileSync(path.join(ctx.cwd, file), 'utf8'), content);
+          if (m.execBarrier) await m.execBarrier();
+          for (const [f, c] of Object.entries(m.writes || {})) fs.writeFileSync(path.join(ctx.cwd, f), c);
           const toolEvents = Object.keys(m.writes || {}).map((f) => ({ name: 'write_file', ok: true, path: f, result: {} }));
           return m.execError ? { text: '', error: m.execError, toolEvents } : { text: '完成', toolEvents };
         }
@@ -78,6 +81,16 @@ async function run(team: Member[]) {
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', team.find((m) => m.mode)?.mode || 'divide');
   await done;
+  const retained: string[] = [];
+  for (const message of orc.messages.filter((message: any) => message.tag === 'conflict')) {
+    const root = /`([^`]*ai-roundtable-lanes-[^`]*)`/.exec(message.text)?.[1];
+    if (!root || !fs.existsSync(root)) continue;
+    for (const name of fs.readdirSync(root)) {
+      const file = path.join(root, name, 'shared.js');
+      if (fs.existsSync(file)) retained.push(fs.readFileSync(file, 'utf8'));
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
   // 先把工作目錄拍下來再清:停損有沒有真的回退,只能看磁碟,不能看訊息。
   const files = new Map<string, string>();
   const walk = (rel = '') => {
@@ -94,7 +107,7 @@ async function run(team: Member[]) {
   const outcome = Object.fromEntries(card.members.map((m: any) => [m.name, m.outcome]));
   const reviews = orc.messages.filter((m: any) => m.review);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
-  return { outcome, card, reviews, prompts, summaryPrompt, turns, orc, read };
+  return { outcome, card, reviews, prompts, summaryPrompt, turns, orc, read, retained };
 }
 
 test('修好之後複查通過:才算審查通過;複查看得到上一輪的意見', async () => {
@@ -187,7 +200,7 @@ test('自動驗證沒過:審查說通過也要修,修好了才算通過', async 
   assert.ok(fixPrompt, '驗證沒過就要進修復回合,即使審查說通過');
   assert.match(fixPrompt, /自動語法檢查沒過/);
   assert.match(fixPrompt, /a\.js/);
-  assert.strictEqual(r.card.verify, 'passed', '修復後重驗通過');
+  assert.strictEqual(r.card.verify, 'syntax-only', '修復後重驗通過,但沒有專案驗證指令');
   assert.strictEqual(r.outcome.Alice, 'approved');
 });
 
@@ -218,7 +231,7 @@ test('修復把通過的檔案改到載不起來:只收回修復,執行階段的
   ]);
   assert.strictEqual(r.read('a.js'), 'module.exports = { ok: true };\n', '回到修復前,不是整個任務重來');
   assert.strictEqual(r.card.repairBroke, true, '結果卡仍要說修復把事情弄糟,退路也還在');
-  assert.strictEqual(r.card.verify, 'passed', '收回修復後重驗,執行階段的檔案載得起來');
+  assert.strictEqual(r.card.verify, 'syntax-only', '收回修復後重驗,執行階段的檔案載得起來,但仍只是語法檢查');
   assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
   assert.strictEqual(r.outcome.Alice, 'unresolved');
   assert.ok(r.orc.messages.some((m: any) => m.tag === 'revert' && /已先收回修復回合/.test(m.text)));
@@ -243,7 +256,7 @@ test('修復報錯仍重驗並回退;即使審查放行也不能算交付', asyn
   ]);
   assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
   assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
-  assert.strictEqual(r.card.verify, 'passed');
+  assert.strictEqual(r.card.verify, 'syntax-only');
   assert.strictEqual(r.outcome.Alice, 'unresolved');
   assert.match(r.summaryPrompt, /工具連續失敗/);
 });
@@ -267,7 +280,7 @@ test('整個任務回退後重新檢查還原的檔案,所有被撤回的寫入�
   ]);
   assert.strictEqual(r.read('a.js'), 'module.exports = 0;\n');
   assert.strictEqual(r.read('b.txt'), null);
-  assert.strictEqual(r.card.verify, 'passed');
+  assert.strictEqual(r.card.verify, 'syntax-only');
   assert.deepStrictEqual(r.card.rollback, { scope: 'task', status: 'complete' });
   assert.deepStrictEqual(r.outcome, { Alice: 'unresolved', Bob: 'unresolved' });
   assert.deepStrictEqual(r.card.files, []);
@@ -279,10 +292,22 @@ test('驗證指令沒過不自動回退:那可能是沒做完,不是檔案壞了
     { id: 'lead', name: '主持人', review: ['測試沒過', '還是沒過'], canEdit: false, verifyCommand: 'exit 7' },
     { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 2;\n' } },
   ]);
-  assert.strictEqual(r.read('a.js'), 'module.exports = 2;\n', '指令失敗不是零爭議的壞檔,不該擅自回退');
+  assert.strictEqual(r.read('a.js'), 'module.exports = 2;\n', '執行階段就失敗、修復沒有讓它變得更差,不該擅自回退');
   assert.strictEqual(r.orc.messages.some((m: any) => m.tag === 'revert'), false);
   assert.notStrictEqual(r.card.repairBroke, true, '執行後指令就失敗,不是修復造成退步');
   assert.strictEqual(r.card.verify, 'failed');
+});
+
+test('修復把原本通過的驗證指令改成失敗:只收回修復', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', review: ['還要再改', '還是不行'], canEdit: false, verifyCommand: 'node -e "process.exit(require(\'./a.js\')===1?0:3)"' },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 2;\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n', '驗證從通過變成失敗,要回到修復前');
+  assert.strictEqual(r.card.repairBroke, true);
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
+  assert.strictEqual(r.card.verify, 'passed', '收回後專案驗證指令再次通過');
+  assert.strictEqual(r.outcome.Alice, 'unresolved');
 });
 
 test('驗證指令失敗也要修;沒有東西可驗時照實說', async () => {
@@ -301,6 +326,39 @@ test('驗證指令失敗也要修;沒有東西可驗時照實說', async () => {
   assert.strictEqual(none.outcome.Alice, 'approved');
 });
 
+test('已有失敗的驗證指令,修復仍不得弄壞前面通過的關卡', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, verifyCommand: 'node -e "process.exit(require(\'./a.js\')===1?0:3)"\nexit 7' },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 2;\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
+  assert.strictEqual(r.card.repairBroke, true);
+  assert.deepStrictEqual(r.card.rollback, { scope: 'repair', status: 'complete' });
+  assert.strictEqual(r.card.verify, 'failed');
+});
+
+test('有改檔權限的專職審查者直接修復,由第三位成員獨立複查', async () => {
+  const r = await run([
+    { id: 'lead', name: 'Reviewer', review: ['a.js 邊界情況錯誤'], fixWrites: { 'a.js': 'module.exports = 2;\n' } },
+    { id: 'alice', name: 'Alice', api: true, task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 3;\n' } },
+    { id: 'checker', name: 'Checker', canEdit: false },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 2;\n');
+  assert.deepStrictEqual(r.turns.filter((turn) => turn.phase === 'repair').map((turn) => turn.who), ['Reviewer']);
+  assert.strictEqual(r.reviews.find((message: any) => message.review.recheck).agentName, 'Checker');
+  assert.strictEqual(r.outcome.Alice, 'approved');
+  assert.ok(r.orc.messages.some((message: any) => message.tag === 'repair' && /Reviewer.*Checker/.test(message.text)));
+});
+
+test('沒有第三位獨立複查者時不把修復交給原審查者自審', async () => {
+  const r = await run([
+    { id: 'lead', name: 'Reviewer', review: ['a.js 要修'], fixWrites: { 'a.js': 'module.exports = 2;\n' } },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, fixWrites: { 'a.js': 'module.exports = 3;\n' } },
+  ]);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 3;\n');
+  assert.deepStrictEqual(r.turns.filter((turn) => turn.phase === 'repair').map((turn) => turn.who), ['Alice']);
+});
+
 test('審查者看得到自動驗證的結果', async () => {
   const r = await run([
     { id: 'lead', name: '主持人', canEdit: false },
@@ -308,7 +366,7 @@ test('審查者看得到自動驗證的結果', async () => {
   ]);
   const prompt = r.prompts['主持人'].find((p: string) => /【交叉審查】/.test(p)) || '';
   assert.match(prompt, /通過 app 的自動驗證/);
-  assert.strictEqual(r.card.verify, 'passed');
+  assert.strictEqual(r.card.verify, 'syntax-only', '沒有專案驗證指令時不能標成完整通過');
 });
 
 test('測試鎖:修復回合不能改既有的測試檔,審查者也被告知', async () => {
@@ -383,13 +441,19 @@ test('測試先行流程:先寫測試,實作回合鎖住它們,並要求讓測�
   assert.match(testPrompt, /只寫測試,不要實作/);
 });
 
-test('平行改到同一個檔案:照實說,並提醒審查者', async () => {
+test('平行改到同一個檔案:不合併重疊,各自的其他改動仍寫回', async () => {
   const r = await run([
     { id: 'lead', name: '主持人', canEdit: false },
-    { id: 'alice', name: 'Alice', task: '改 shared.js', writes: { 'shared.js': 'a\n' }, api: true },
-    { id: 'bob', name: 'Bob', task: '也改 shared.js', writes: { 'shared.js': 'b\n' }, api: true },
+    { id: 'alice', name: 'Alice', task: '改 shared.js', writes: { 'shared.js': 'a\n', 'only-a.txt': 'alice\n' }, api: true },
+    { id: 'bob', name: 'Bob', task: '也改 shared.js', writes: { 'shared.js': 'b\n', 'only-b.txt': 'bob\n' }, api: true },
   ]);
+  assert.strictEqual(r.read('shared.js'), null, '重疊檔案不該被後寫的蓋進工作目錄');
+  assert.strictEqual(r.read('only-a.txt'), 'alice\n');
+  assert.strictEqual(r.read('only-b.txt'), 'bob\n');
+  assert.deepStrictEqual(r.retained.sort(), ['a\n', 'b\n'], '任務結束後衝突版本仍在');
+  assert.deepStrictEqual(r.outcome, { Alice: 'unresolved', Bob: 'unresolved' });
   assert.ok(r.orc.messages.some((m: any) => m.tag === 'conflict' && /shared\.js/.test(m.text)), '要說出哪個檔案被同時改到');
+  assert.ok(r.orc.messages.some((m: any) => /隔離目錄/.test(m.text)), '要說明使用了隔離目錄');
   const reviewPrompt = r.prompts['主持人'].concat(r.prompts['Alice'] || [], r.prompts['Bob'] || []).find((p: string) => /【交叉審查】/.test(p) && /被多位成員同時改到/.test(p));
   assert.ok(reviewPrompt, '審查者要被提醒');
 });
@@ -407,6 +471,48 @@ test('審查用乾淨 context:看不到討論與執行過程,但看得到實際�
   assert.match(reviewPrompt, /write_file a\.js/);
   const review = r.turns.find((t: any) => t.phase === 'review')!;
   assert.strictEqual(review.sessionId, null, '審查回合不續接自己的 session');
+});
+
+test('多位 CLI 中途失敗,各自的實際隔離改動仍送審', async () => {
+  const r = await run([
+    { id: 'lead', name: 'Reviewer', canEdit: false },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, execError: '中途失敗' },
+    { id: 'bob', name: 'Bob', task: '寫 b.js', writes: { 'b.js': 'module.exports = 2;\n' }, execError: '中途失敗' },
+  ]);
+  assert.deepStrictEqual(r.reviews.map((message: any) => message.review.target).sort(), ['Alice', 'Bob']);
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
+  assert.strictEqual(r.read('b.js'), 'module.exports = 2;\n');
+});
+
+test('測試先行的隔離目錄包含剛寫出的測試檔', async () => {
+  const expected = { 'new.test.js': 'require("assert").ok(true);\n' };
+  const r = await run([
+    { id: 'lead', name: 'Reviewer', canEdit: false, mode: 'tdd' },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', testWrites: expected, expectFiles: expected, writes: { 'a.js': 'module.exports = 1;\n' } },
+    { id: 'bob', name: 'Bob', task: '寫 b.js', expectFiles: expected, writes: { 'b.js': 'module.exports = 2;\n' } },
+  ]);
+  assert.strictEqual(r.read('new.test.js'), expected['new.test.js']);
+  assert.deepStrictEqual(r.outcome, { Alice: 'approved', Bob: 'approved' });
+});
+
+test('隔離超過複製上限時依序執行,不再平行寫原目錄', async () => {
+  let active = 0;
+  let maximum = 0;
+  const barrier = async () => {
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    active--;
+  };
+  const r = await run([
+    { id: 'lead', name: 'Reviewer', canEdit: false, before: { 'large.txt': 'x'.repeat(256 * 1024 + 1) } },
+    { id: 'alice', name: 'Alice', task: '寫 a.js', writes: { 'a.js': 'module.exports = 1;\n' }, execBarrier: barrier },
+    { id: 'bob', name: 'Bob', task: '寫 b.js', writes: { 'b.js': 'module.exports = 2;\n' }, execBarrier: barrier },
+  ]);
+  assert.strictEqual(maximum, 1);
+  assert.ok(r.orc.messages.some((message: any) => /無法準備隔離目錄.*依序執行/.test(message.text)));
+  assert.strictEqual(r.read('a.js'), 'module.exports = 1;\n');
+  assert.strictEqual(r.read('b.js'), 'module.exports = 2;\n');
 });
 
 test('審查回合不覆寫成員原本的 session', async () => {
