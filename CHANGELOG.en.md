@@ -4,6 +4,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-09-22
+
+### Fixed
+
+- Use the existing blue concentric-ring logo as a multi-resolution macOS app icon in Finder, the Dock and installers instead of Electron's default icon. The sidebar and development mode use the same PNG; regenerate the assets with `npm run icons`.
+
 ## [0.2.0] - 2026-09-22
 
 This release adds the built-in terminal, test-first flow, automatic verification, environment repair, rollback, lineups and an acceptance workspace, with UI and UX refinements.

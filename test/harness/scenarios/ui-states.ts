@@ -39,6 +39,12 @@ async function main() {
     scenario: async () => {
       await (globalThis as any).ready();
       const g: any = globalThis;
+      for (const [selector, size] of [['.side-title .logo', 40], ['.empty-icon', 84]] as const) {
+        const logo = document.querySelector<HTMLImageElement>(selector)!;
+        await g.waitFor(() => logo.complete && logo.naturalWidth === 1024, 5000, `${selector} loaded`);
+        const logoBounds = logo.getBoundingClientRect();
+        g.check(logoBounds.width === size && logoBounds.height === size, `${selector} renders at its fixed size`);
+      }
 
       // --- 成員卡要說出「這位不能用」---
       // 只讀徽章元素,不讀整張卡的文字:persona 裡剛好出現同樣的字會造成假通過。

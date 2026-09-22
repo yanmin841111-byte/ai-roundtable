@@ -388,7 +388,7 @@ function clearTimeline() {
 function emptyEl() {
   const d = document.createElement('div');
   d.id = 'empty'; d.className = 'empty';
-  d.innerHTML = `<div class="empty-icon">◎</div><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
+  d.innerHTML = `<img class="empty-icon" src="icon.png" width="84" height="84" alt="" aria-hidden="true" /><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
   return d;
 }
 

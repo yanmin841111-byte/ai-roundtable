@@ -1,7 +1,7 @@
 {
   "name": "ai-roundtable",
   "productName": "AI Roundtable",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "讓多個 AI CLI(Claude Code、Codex 等)互相討論、分工、交叉審查的桌面應用",
   "author": "yanmin841111-byte",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -26,10 +26,11 @@
   },
   "main": "dist/main.js",
   "scripts": {
+    "icons": "swift scripts/generate-icon.swift",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:node": "tsc -p tsconfig.build.json",
     "build:renderer": "esbuild renderer/app.ts --bundle --format=iife --platform=browser --outfile=dist/renderer/app.js --sourcemap",
-    "build:static": "node -e \"const f=require('fs');f.mkdirSync('dist/renderer',{recursive:true});f.copyFileSync('renderer/index.html','dist/renderer/index.html');f.copyFileSync('renderer/style.css','dist/renderer/style.css');f.cpSync('adapters/templates','dist/adapters/templates',{recursive:true});f.copyFileSync('src/pty.exp','dist/src/pty.exp')\"",
+    "build:static": "node -e \"const f=require('fs');f.mkdirSync('dist/renderer',{recursive:true});f.copyFileSync('renderer/index.html','dist/renderer/index.html');f.copyFileSync('renderer/style.css','dist/renderer/style.css');f.copyFileSync('build/icon.png','dist/renderer/icon.png');f.cpSync('adapters/templates','dist/adapters/templates',{recursive:true});f.copyFileSync('src/pty.exp','dist/src/pty.exp')\"",
     "build": "npm run clean && npm run build:node && npm run build:renderer && npm run build:static",
     "smoke:dist": "node -e \"const s=require('./dist/src/shared');const r=require('./dist/src/model-rules');require('./dist/src/orchestrator');if(!s.hasMarker||!r.resolveModelId)throw new Error('dist CommonJS exports incomplete');console.log('dist smoke passed')\"",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p renderer/tsconfig.json",
@@ -52,6 +53,7 @@
       "dist/**"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         {
           "target": "dmg",

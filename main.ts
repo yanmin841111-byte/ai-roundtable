@@ -90,6 +90,7 @@ function persistTask() {
 }
 
 function createWindow() {
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(path.join(__dirname, 'renderer/icon.png'));
   const win = new BrowserWindow({
     width: 1320,
     height: 860,

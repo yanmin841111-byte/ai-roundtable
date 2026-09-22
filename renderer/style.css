@@ -126,7 +126,7 @@ textarea { resize: vertical; }
 #app { display: flex; height: 100vh; }
 #sidebar { width: 264px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .side-title { display: flex; align-items: center; gap: 10px; padding: 0 18px 14px; }
-.logo { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; color: var(--on-accent); background: var(--accent-grad); box-shadow: var(--glow), inset 0 1px 0 rgba(255, 255, 255, .25); }
+.logo { width: 40px; height: 40px; flex: 0 0 40px; display: block; object-fit: contain; }
 .app-name { font-weight: 700; font-size: 15px; letter-spacing: 0; }
 .app-sub { font-size: 12px; color: var(--muted); }
 .side-scroll { flex: 1; overflow-y: auto; min-height: 0; }
@@ -208,7 +208,7 @@ textarea { resize: vertical; }
 .tl-round::before { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border)); }
 .tl-round::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
 .empty { margin: auto; text-align: center; color: var(--muted); max-width: 520px; }
-.empty-icon { width: 68px; height: 68px; margin: 0 auto; border-radius: 20px; display: grid; place-items: center; font-size: 36px; color: var(--on-accent); background: var(--accent-grad); box-shadow: var(--glow), inset 0 1px 0 rgba(255, 255, 255, .25); }
+.empty-icon { width: 84px; height: 84px; margin: 0 auto; display: block; object-fit: contain; }
 .empty-title { font-size: 20px; font-weight: 700; color: var(--text); margin: 16px 0 6px; letter-spacing: 0; }
 .empty-sub { font-size: 13px; line-height: 1.7; text-wrap: balance; }
 .empty-steps { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; flex-wrap: wrap; }

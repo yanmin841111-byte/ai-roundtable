@@ -4,6 +4,12 @@
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/),版本號遵循 [語意化版本](https://semver.org/lang/zh-TW/)。
 
+## [0.2.1] - 2026-09-22
+
+### 修正
+
+- 將既有藍色雙圓標誌製作為多尺寸 macOS app 圖示,套用到 Finder、Dock 與安裝包,取代 Electron 預設圖示。側欄與開發模式使用同一份 PNG;可用 `npm run icons` 重新產生圖示資源。
+
 ## [0.2.0] - 2026-09-22
 
 本版新增內建終端、測試先行、自動驗證、環境修復、停損、陣容與驗收工作區,並調整 UI / UX。
