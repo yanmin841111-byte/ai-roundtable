@@ -23,11 +23,42 @@ npm run harness:ui  # drives the real Electron app through UI scenarios, saves s
 plain node and cannot see that `process.execPath` is Electron inside the app. The first
 48 runs of eval experiment 5 were discarded over exactly that class of difference.
 
+## 2026-09-23 Handoff: local calibration stopped
+
+The user requested stopping tests until a more capable computer is available. Engineering
+work was pushed at `0c8c771dee44cfaf2dcb568eae93406d69ef20ba`. The formal six-condition
+comparison has not run, and there are no effectiveness conclusions.
+
+- Environment: Apple M2, 8 GB RAM, Ollama 0.30.8, `qwen3:4b`, 16K context, one inference
+  at a time. Model digest: `359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7`.
+  The runtime identified Thinking 2507 / Q4_K_M; reasoning text appeared despite
+  requesting `reasoning_effort=none`.
+- Real file-edit admission passed with matching disk, git and audit evidence. The first
+  `forth-fix` solo calibration took 1414 seconds and hit the 10-minute execution-turn
+  timeout. An absolute-path `read_file` call was rejected; the final file was unchanged.
+  The score remained at the original 44/54 and usage was incomplete. The preregistered
+  stop rule was applied; the observation was retained, with no retry or setting changes.
+- Calibration planned one solo and one roundtable run for each of `forth-fix` and
+  `poker-fix`, four observations total. Only the failed observation above was saved;
+  no usable roundtable token budget was obtained.
+- The formal plan was two tasks, six conditions, three repetitions per condition,
+  two discussion rounds, two candidates per integration arm and at most four attempts
+  for `solo-budget`: 36 formal observations planned, zero run.
+- Local scripts, configuration, journal and raw evidence remain in ignored
+  `.eval-local/2026-09-22-qwen3-small/`. **They will not transfer through git clone.**
+  Transfer privately if the raw evidence is needed; do not publish transcripts automatically.
+
+On the new computer, reuse the [evaluation runner and guide](../eval/README.en.md#multiple-conditions-and-budgets).
+First verify tools, effective context and complete usage. Confirm the new model and timeout
+settings, register a clean commit, `--dry-run` protocol, public verification commands and
+stop rules in [EXPERIMENTS.md](../eval/EXPERIMENTS.md), then recalibrate budgets. Preserve
+the old batch as stopped and do not pool it with the new batch. Do not start tests now.
+
 ---
 
 ## 1. Experiment: independent answers first, then open critique (Sequential vs Independent-first)
 
-**Not started, and it needs the user's agreement first** (same rule as experiment 4).
+**The formal comparison has not started; new batch settings still need user agreement** (same rule as experiment 4).
 What follows is a pre-registration draft. Before it runs, the sample size and the exact
 commit have to be filled in, and **this section must not be edited after seeing results**.
 
