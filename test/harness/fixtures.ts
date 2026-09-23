@@ -32,6 +32,8 @@ export function scriptedMember(opts: {
   fixWrites?: Record<string, string>;
   /** 修復階段的回報文字 */
   fixReport?: string;
+  /** 每回合回覆前先等這麼久:要讓兩件任務的執行時間重疊時用 */
+  delayMs?: number;
 }): HarnessMember {
   const payload = Buffer.from(JSON.stringify({
     plan: opts.plan || null,
@@ -42,6 +44,7 @@ export function scriptedMember(opts: {
     report: opts.report || null,
     fixWrites: opts.fixWrites || null,
     fixReport: opts.fixReport || null,
+    delayMs: opts.delayMs || 0,
   }), 'utf8').toString('base64');
   return {
     id: opts.id || 'scripted',

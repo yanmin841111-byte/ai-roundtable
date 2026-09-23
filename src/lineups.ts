@@ -7,7 +7,7 @@ import { normalizeDiscussionMode } from './ipc-types';
 
 export const LINEUPS_MAX = 30;
 export const LINEUP_NAME_MAX = 40;
-const MODES = new Set(['divide', 'tdd', 'discuss']);
+const MODES = new Set(['divide', 'relay', 'tdd', 'discuss']);
 const ROUNDS_MIN = 1;
 const ROUNDS_MAX = 10; // 與設定視窗「最大討論回合」的上限一致
 

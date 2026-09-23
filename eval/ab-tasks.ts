@@ -9,10 +9,12 @@
 
 export interface AbTask {
   id: string;
-  // basic:第一批題目,對 27B 本機模型偏容易(單人約八成全對);hard:用來拉開差距的難題
-  set: 'basic' | 'hard';
+  // basic:第一批題目,對 27B 本機模型偏容易(單人約八成全對);hard:用來拉開差距的難題;split:可拆成兩個模組
+  set: 'basic' | 'hard' | 'split';
   asks: string;
   task: string;
+  // 平行分工 / 接力時,兩位成員各自拿到 task 加上這一段
+  parts?: [string, string];
   // 任務開始前就在工作目錄裡的檔案
   files?: Record<string, string>;
   // 要測的模組(相對工作目錄)
@@ -540,5 +542,7 @@ module.exports = { LRU };
   },
 ];
 
-// 自己出的題目 + 從 Exercism 官方標準測資轉進來的題目(見 ab-tasks-exercism.ts)
-export const AB_TASKS: AbTask[] = [...OWN_TASKS, ...EXERCISM_TASKS];
+import { SPLIT_TASKS } from './ab-tasks-split';
+
+// 自己出的題目 + 從 Exercism 官方標準測資轉進來的題目(見 ab-tasks-exercism.ts)+ 可拆成兩個模組的題目
+export const AB_TASKS: AbTask[] = [...OWN_TASKS, ...EXERCISM_TASKS, ...SPLIT_TASKS];

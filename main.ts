@@ -2,18 +2,22 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, net } from 'el
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { Store } from './src/store';
 import { Orchestrator } from './src/orchestrator';
-import { Registry, setRegistry } from './src/adapters';
+import { Registry, setRegistry, getAdapter } from './src/adapters';
 import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } from './src/session-log';
 import * as attachments from './src/attachments';
 import { SecretStore } from './src/secrets';
-import type { AttachmentInput, AttachmentMeta, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn } from './src/ipc-types';
+import type { AgentConfig, AppConfig, AttachmentInput, AttachmentMeta, ChatSnapshot, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn, JobBlocker, JobStatus, JobSummary, JobsState, RevertOutcome } from './src/ipc-types';
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 import { CapabilityStore, setCapabilityStore } from './src/capabilities';
 import { workdirChanges } from './src/task-changes';
 import { TerminalManager, MAX_SESSIONS as TERMINAL_MAX } from './src/terminal';
+import { findMentions } from './src/shared';
+import { JobScheduler, RunLedger, localEndpointKey, workdirKey } from './src/jobs';
+import type { JobResources } from './src/jobs';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
 // 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
@@ -40,17 +44,35 @@ function importShellEnv() {
 
 let mainWindow: BrowserWindow | null = null;
 let store: Store;
-let orchestrator: Orchestrator;
 let registry: Registry;
 let secrets: SecretStore;
 let terminals: TerminalManager;
-let activeTaskStart: number | null = null;
-let wasRunning = false;
-// 目前對話寫入的紀錄檔;同一段對話每次任務結束都覆寫這一份,新對話時清空
-let sessionFileId: string | null = null;
-// 已經落地、但還沒隨訊息送出的附件(對應介面上的 chip)。
-// 上限由這裡把關,不信任 renderer 傳來的數字。
-let pending: AttachmentMeta[] = [];
+
+// 一件任務 = 一段獨立的對話:自己的 Orchestrator(成員 session、執行程序、提問、基準點)、附件與紀錄檔。
+interface Job {
+  id: string;
+  orchestrator: Orchestrator;
+  // 第一次送出時凍結;之後每次開跑前重讀設定,但工作目錄不變。null 表示還沒送出過,照設定走
+  config: AppConfig | null;
+  createdAt: number;
+  // 已經落地、但還沒隨訊息送出的附件(對應介面上的 chip)。上限由這裡把關,不信任 renderer 傳來的數字。
+  pending: AttachmentMeta[];
+  // 這段對話寫入的紀錄檔;同一段對話每次任務結束都覆寫這一份
+  sessionFileId: string | null;
+  activeTaskStart: number | null;
+  queued: { text: string; mode: string; attachments: AttachmentMeta[]; previousConfig: AppConfig | null } | null;
+  resources: JobResources | null;
+  staleBaseline: Orchestrator['taskBaseline'];
+  outcome: 'done' | 'stopped' | 'error' | null;
+  unread: boolean;
+  // 還原 / 重新驗證佔著目錄時為 true:這時候的閒置事件不是「任務跑完了」
+  maintenance: boolean;
+}
+
+const jobs = new Map<string, Job>();
+let selectedJobId = '';
+const ledger = new RunLedger();
+const scheduler = new JobScheduler(() => maxParallel(), (id) => startJob(id));
 
 const userData = () => app.getPath('userData');
 // 主程序產生的少數使用者可見文字跟著介面語言
@@ -61,7 +83,7 @@ const showOpenDialog = (options: Electron.OpenDialogOptions) =>
   mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options);
 const showSaveDialog = (options: Electron.SaveDialogOptions) =>
   mainWindow ? dialog.showSaveDialog(mainWindow, options) : dialog.showSaveDialog(options);
-const pendingBytes = () => pending.reduce((n, a) => n + (a.size || 0), 0);
+const pendingBytes = (job: Job) => job.pending.reduce((n, a) => n + (a.size || 0), 0);
 
 // 依 src/ipc-types.ts 的契約註冊 handler:參數與回傳值都要符合 renderer 看到的型別。
 function handle<C extends InvokeChannel>(channel: C, fn: (...args: IpcArgs<C>) => IpcReturn<C> | Promise<IpcReturn<C>>) {
@@ -72,21 +94,147 @@ function dropPending(list: AttachmentMeta[]) {
   for (const meta of list) attachments.removeAttachment(userData(), meta);
 }
 
-function resetPending() {
-  dropPending(pending);
-  pending = [];
+function resetPending(job: Job) {
+  dropPending(job.pending);
+  job.pending = [];
 }
 
-function persistTask() {
-  // runTask 的 rejection handler 可能會在 idle 事件後補上一則錯誤訊息。
-  setImmediate(() => {
-    const snap = orchestrator.snapshot();
-    if (!snap.messages.length) return;
-    // conversationId 要寫進紀錄,刪這份對話時才知道要清哪個附件目錄
-    const result = writeSession(userData(), snap.messages, { conversationId: snap.conversationId, id: sessionFileId });
-    if (result.ok) sessionFileId = result.id;
-    send('session:saved', { id: sessionFileId });
+function persistTask(job: Job) {
+  const snap = job.orchestrator.snapshot();
+  if (!snap.messages.length) return;
+  const result = writeSession(userData(), snap.messages, { conversationId: snap.conversationId, id: job.sessionFileId });
+  if (result.ok) job.sessionFileId = result.id;
+  send('session:saved', { jobId: job.id, id: job.sessionFileId });
+}
+
+// ---------- 多件任務 ----------
+const maxParallel = () => Math.min(6, Math.max(1, Math.round(Number(store?.get().settings.maxParallelJobs) || 2)));
+const jobConfig = (job: Job) => job.config || store.get();
+const jobWorkDir = (job: Job) => jobConfig(job).settings.workDir;
+const busy = (job: Job) => !!job.queued || scheduler.isHeld(job.id) || job.orchestrator.running;
+const blockedText = (blocker: JobBlocker | 'busy') => text(`main.jobBlocked.${blocker}`);
+
+function jobOf(jobId: string): Job {
+  const job = jobs.get(jobId);
+  if (!job) throw new Error(text('main.jobMissing'));
+  return job;
+}
+
+function createJob(): Job {
+  const job: Job = {
+    id: crypto.randomUUID(), orchestrator: null as unknown as Orchestrator, config: null, createdAt: Date.now(),
+    pending: [], sessionFileId: null, activeTaskStart: null, queued: null, resources: null, staleBaseline: null, outcome: null,
+    unread: false, maintenance: false,
+  };
+  const orchestrator = new Orchestrator({ get: () => jobConfig(job), userDataDir: store.userDataDir });
+  job.orchestrator = orchestrator;
+  orchestrator.on('message', (message: IpcEvents['chat:message']['message']) => {
+    send('chat:message', { jobId: job.id, message });
+    if (job.id !== selectedJobId && !job.unread) { job.unread = true; emitJobs(); }
   });
+  orchestrator.on('state', (state: IpcEvents['chat:state']['state']) => {
+    send('chat:state', { jobId: job.id, state });
+    if (!state.running && scheduler.isHeld(job.id) && !job.maintenance) finishRun(job);
+    else emitJobs();
+  });
+  orchestrator.on('reset', () => {
+    job.activeTaskStart = null;
+    job.sessionFileId = null;
+    job.outcome = null;
+    resetPending(job);
+    send('chat:reset', { jobId: job.id });
+    emitJobs();
+  });
+  jobs.set(job.id, job);
+  return job;
+}
+
+function jobSummary(job: Job): JobSummary {
+  const snap = job.orchestrator.snapshot();
+  const first = snap.messages.find((m) => m.kind === 'user')?.text || job.queued?.text || '';
+  const status: JobStatus = job.queued ? 'queued' : snap.question ? 'waiting' : snap.running ? 'running' : job.outcome || 'idle';
+  return {
+    id: job.id,
+    title: first.trim().split('\n')[0].slice(0, 80),
+    status,
+    workDir: job.config ? job.config.settings.workDir : null,
+    waitingFor: job.queued ? scheduler.blockerOf(job.id) : null,
+    phase: snap.phase,
+    unread: job.unread,
+    createdAt: job.createdAt,
+  };
+}
+
+const jobsState = (): JobsState => ({ jobs: [...jobs.values()].map(jobSummary), selectedId: selectedJobId, maxParallel: maxParallel() });
+const emitJobs = () => send('jobs:changed', jobsState());
+const jobSnapshot = (job: Job): ChatSnapshot => ({ ...job.orchestrator.snapshot(), sessionId: job.sessionFileId });
+
+async function jobResources(job: Job, agents: AgentConfig[]): Promise<JobResources> {
+  const endpoints = [...new Set(agents.map((a) => localEndpointKey(getAdapter(a.cli)?.endpoint)).filter((key): key is string => !!key))];
+  return { dir: await workdirKey(jobWorkDir(job)), endpoints };
+}
+
+// 有 @ 指定就只算被指定的成員;否則整張圓桌都會發言
+function speakers(job: Job, body: string): AgentConfig[] {
+  const enabled = jobConfig(job).agents.filter((a) => a.enabled !== false);
+  const mentioned = findMentions(body, enabled);
+  return mentioned.length ? mentioned : enabled;
+}
+
+function releaseJob(job: Job) {
+  scheduler.release(job.id);
+  emitJobs();
+}
+
+function finishRun(job: Job) {
+  if (!scheduler.isHeld(job.id)) return;
+  const o = job.orchestrator;
+  const recent = o.messages.slice(job.activeTaskStart ?? o.messages.length);
+  job.outcome = o.stopped ? 'stopped' : recent.some((m) => m.level === 'error' || (m.kind === 'agent' && m.error)) ? 'error' : 'done';
+  if (job.activeTaskStart != null) {
+    job.activeTaskStart = null;
+    persistTask(job);
+  }
+  releaseJob(job);
+}
+
+function recordRun(job: Job, resources: JobResources) {
+  if (ledger.supersededBy(job.id) && job.orchestrator.taskBaseline) job.staleBaseline = job.orchestrator.taskBaseline;
+  ledger.record(job.id, resources.dir);
+}
+
+// 排程器輪到這件任務時呼叫。userMessage 會同步進入 running,之後由閒置事件收尾。
+function startJob(id: string) {
+  const job = jobs.get(id);
+  if (!job || !job.queued) { setImmediate(() => { if (job) releaseJob(job); else scheduler.release(id); }); return; }
+  const { text: body, mode, attachments: list } = job.queued;
+  job.queued = null;
+  job.outcome = null;
+  job.activeTaskStart = job.orchestrator.messages.length;
+  if (job.resources) recordRun(job, job.resources);
+  job.orchestrator.userMessage(body, mode, list)
+    .catch((error: unknown) => {
+      job.pending = [...list, ...job.pending];
+      job.orchestrator.system(job.orchestrator.text('sys.error', { message: error instanceof Error ? error.message : String(error) }), { level: 'error' });
+      job.outcome = 'error';
+      persistTask(job);
+    })
+    .finally(() => {
+      // 沒有可用成員、工作目錄無法建立等前置失敗不會進入 running 狀態。
+      if (!job.orchestrator.running) finishRun(job);
+      else emitJobs();
+    });
+}
+
+// 還原、重新驗證:使用者當下的操作,不排隊。要先拿到這個目錄,拿不到就照實說原因。
+async function withDirectory<T>(job: Job, run: () => Promise<T>, blocked: (blocker: JobBlocker | 'busy') => T): Promise<T> {
+  if (busy(job)) return blocked('busy');
+  const resources = await jobResources(job, []);
+  if (busy(job) || !jobs.has(job.id)) return blocked('busy');
+  const blocker = scheduler.tryHold(job.id, resources, false);
+  if (blocker) return blocked(blocker);
+  job.maintenance = true;
+  try { return await run(); } finally { job.maintenance = false; releaseJob(job); }
 }
 
 function createWindow() {
@@ -146,7 +294,10 @@ function createWindow() {
 function send<C extends EventChannel>(channel: C, ...payload: IpcEvents[C] extends void ? [] : [IpcEvents[C]]) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...payload);
 }
-function stopOrchestrator() { if (orchestrator) orchestrator.stop(); }
+function stopOrchestrator() {
+  scheduler.shutdown();
+  for (const job of jobs.values()) { job.queued = null; job.orchestrator.stop(); }
+}
 // app 結束時終端裡的 shell 也要一起收掉,不留在背景跑
 function stopTerminals() { if (terminals) terminals.closeAll(); }
 
@@ -175,17 +326,7 @@ app.whenReady().then(async () => {
   setRegistry(registry);
   // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
   for (const { refreshModels } of registry.list()) if (refreshModels) Promise.resolve().then(refreshModels).catch(() => {});
-  orchestrator = new Orchestrator(store);
-  orchestrator.on('message', (m: IpcEvents['chat:message']) => send('chat:message', m));
-  orchestrator.on('state', (s: IpcEvents['chat:state']) => {
-    send('chat:state', s);
-    if (wasRunning && !s.running && activeTaskStart != null) {
-      activeTaskStart = null;
-      persistTask();
-    }
-    wasRunning = !!s.running;
-  });
-  orchestrator.on('reset', () => { activeTaskStart = null; sessionFileId = null; resetPending(); send('chat:reset'); });
+  selectedJobId = createJob().id;
 
   // 終端分頁:使用者自己動手的地方。輸出直接往 renderer 送,主程序不解讀也不記錄。
   terminals = new TerminalManager();
@@ -199,12 +340,18 @@ app.whenReady().then(async () => {
     attachments.clearRuntime(store.get().settings.workDir);
     attachments.cleanupOrphans(userData(), {
       keepIds: listConversationIds(userData()),
-      activeId: orchestrator.conversationId,
+      activeId: jobs.get(selectedJobId)?.orchestrator.conversationId,
     });
   } catch {}
 
   handle('config:get', () => store.get());
-  handle('config:save', (cfg) => store.save(cfg));
+  handle('config:save', (cfg) => {
+    const saved = store.save(cfg);
+    // 上限調高了,排隊中的任務可能現在就能開始
+    scheduler.pump();
+    emitJobs();
+    return saved;
+  });
   handle('cli:types', () => registry.catalog());
   handle('cli:check', (opts) => registry.checkAll(opts || {}));
   handle('model:capability', (payload) => registry.modelCapability(String(payload?.adapterId || ''), String(payload?.model || ''), payload?.live === true));
@@ -245,68 +392,121 @@ app.whenReady().then(async () => {
     return adapter.testConnection();
   });
   handle('shell:openPath', (p) => shell.openPath(p));
-  handle('chat:snapshot', () => ({ ...orchestrator.snapshot(), sessionId: sessionFileId }));
+  handle('chat:snapshot', (jobId) => jobSnapshot(jobOf(jobId)));
+  handle('jobs:list', () => jobsState());
+  // 目前這件還是空的就直接用它,不要留下一串空白任務
+  handle('jobs:create', () => {
+    const current = jobs.get(selectedJobId);
+    const blank = current && !current.orchestrator.messages.length && !busy(current) && !current.pending.length;
+    const job = blank ? current : createJob();
+    selectedJobId = job.id;
+    job.unread = false;
+    emitJobs();
+    return { state: jobsState(), snapshot: jobSnapshot(job) };
+  });
+  handle('jobs:select', (jobId) => {
+    const job = jobOf(jobId);
+    selectedJobId = job.id;
+    job.unread = false;
+    emitJobs();
+    return { state: jobsState(), snapshot: jobSnapshot(job) };
+  });
+  handle('jobs:close', (jobId) => {
+    const job = jobOf(jobId);
+    if (jobs.size <= 1 || busy(job)) throw new Error(text('main.jobCloseBusy'));
+    resetPending(job);
+    job.orchestrator.removeAllListeners();
+    job.orchestrator.stop();
+    jobs.delete(job.id);
+    if (selectedJobId === job.id) selectedJobId = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt)[0].id;
+    emitJobs();
+    return jobsState();
+  });
   // ---------- 附件 ----------
   // 權威儲存在 userData/attachments/<conversationId>/,不寫進使用者的工作目錄。
-  const addFiles = (items: AttachmentInput[]) => {
-    const result = attachments.addAttachments(userData(), orchestrator.conversationId, items, {
-      existingCount: pending.length,
-      existingBytes: pendingBytes(),
+  const addFiles = (job: Job, items: AttachmentInput[]) => {
+    const result = attachments.addAttachments(userData(), job.orchestrator.conversationId, items, {
+      existingCount: job.pending.length,
+      existingBytes: pendingBytes(job),
       // 拒絕原因會直接顯示在輸入框,跟著介面語言
       locale: uiLocale(),
     });
-    pending = [...pending, ...result.added];
+    job.pending = [...job.pending, ...result.added];
     // added = 這批新加的;attachments = 目前完整的 pending 清單。兩個都給,renderer 不必猜。
-    return { added: result.added, attachments: pending, errors: result.errors, limits: attachments.LIMITS };
+    return { added: result.added, attachments: job.pending, errors: result.errors, limits: attachments.LIMITS };
   };
 
-  handle('attachments:list', () => ({ attachments: pending, limits: attachments.LIMITS }));
-  handle('attachments:add', (payload) => addFiles(Array.isArray(payload?.items) ? payload.items : []));
-  handle('attachments:pick', async () => {
+  handle('attachments:list', (jobId) => ({ attachments: jobOf(jobId).pending, limits: attachments.LIMITS }));
+  handle('attachments:add', (jobId, payload) => addFiles(jobOf(jobId), Array.isArray(payload?.items) ? payload.items : []));
+  handle('attachments:pick', async (jobId) => {
+    const job = jobOf(jobId);
     const r = await showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
         { name: text('main.attachFilter'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'txt', 'md', 'json', 'csv', 'log'] },
       ],
     });
-    if (r.canceled || !r.filePaths.length) return { attachments: pending, errors: [], canceled: true, limits: attachments.LIMITS };
-    return addFiles(r.filePaths.map((file) => ({ name: path.basename(file), path: file })));
+    if (r.canceled || !r.filePaths.length) return { attachments: job.pending, errors: [], canceled: true, limits: attachments.LIMITS };
+    return addFiles(job, r.filePaths.map((file) => ({ name: path.basename(file), path: file })));
   });
-  handle('attachments:remove', (payload) => {
+  handle('attachments:remove', (jobId, payload) => {
+    const job = jobOf(jobId);
     const id = payload?.id;
-    const meta = pending.find((a) => a.id === id);
+    const meta = job.pending.find((a) => a.id === id);
     if (meta) {
       attachments.removeAttachment(userData(), meta);
-      pending = pending.filter((a) => a.id !== id);
+      job.pending = job.pending.filter((a) => a.id !== id);
     }
-    return { attachments: pending };
+    return { attachments: job.pending };
   });
   // 縮圖走 data URL(CSP 維持 img-src 'self' data:,不放寬成 file:)
   handle('attachments:thumb', (meta) => attachments.thumbDataUrl(userData(), meta));
 
-  handle('chat:send', async ({ text, mode, attachments: wanted }) => {
-    const snap = orchestrator.snapshot();
-    if (!snap.running) activeTaskStart = snap.messages.length;
+  handle('chat:send', async (jobId, { text: body, mode, attachments: wanted }) => {
+    const job = jobOf(jobId);
+    const o = job.orchestrator;
+    if (!o.running && (job.queued || scheduler.isHeld(job.id))) throw new Error(text('main.jobBusy'));
     // renderer 決定「這次要送哪些 chip」,main 仍是唯一驗證與儲存的一方
-    let sending = pending;
+    let sending = job.pending;
     if (Array.isArray(wanted)) {
       const keep = new Set(wanted.map((a: any) => (a && a.id) || a));
-      sending = pending.filter((a: any) => keep.has(a.id));
-      dropPending(pending.filter((a: any) => !keep.has(a.id)));
+      sending = job.pending.filter((a: any) => keep.has(a.id));
+      dropPending(job.pending.filter((a: any) => !keep.has(a.id)));
     }
-    const message = await orchestrator.userMessage(text, mode, sending);
-    // 成功交給 orchestrator 之後才清 pending:中途丟例外時 renderer 會復原 chip,
-    // 後端若先清空就會變成「畫面上還有附件,送出卻是空的」
-    pending = [];
-    // 沒有可用成員、工作目錄無法建立等前置失敗不會進入 running 狀態。
-    if (!orchestrator.snapshot().running && activeTaskStart != null) {
-      activeTaskStart = null;
-      persistTask();
+    // 進行中:是這件任務的插話,不是新任務
+    if (o.running) {
+      const message = await o.userMessage(body, mode, sending);
+      // 成功交給 orchestrator 之後才清 pending:中途丟例外時 renderer 會復原 chip
+      job.pending = [];
+      return message;
     }
-    return message;
+    const previousConfig = job.config;
+    const current = structuredClone(store.get());
+    if (previousConfig) current.settings.workDir = previousConfig.settings.workDir;
+    job.config = current;
+    job.pending = [];
+    const queued = { text: body, mode, attachments: sending, previousConfig };
+    job.queued = queued;
+    emitJobs();
+    try {
+      const resources = await jobResources(job, speakers(job, body));
+      if (job.queued !== queued) return undefined;
+      job.resources = resources;
+      scheduler.submit(job.id, resources);
+    } catch (error) {
+      if (job.queued === queued) {
+        job.queued = null;
+        job.config = previousConfig;
+        job.pending = [...sending, ...job.pending];
+        emitJobs();
+      }
+      throw error;
+    }
+    emitJobs();
+    return undefined;
   });
-  handle('chat:export', async () => {
-    const messages = orchestrator.snapshot().messages;
+  handle('chat:export', async (jobId) => {
+    const messages = jobOf(jobId).orchestrator.snapshot().messages;
     if (!messages.length) return { ok: false, error: text('main.nothingToExport') };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const result = await showSaveDialog({
@@ -331,31 +531,69 @@ app.whenReady().then(async () => {
   handle('session:read', (id) => readSession(app.getPath('userData'), id, uiLocale()));
   handle('session:delete', (id) => {
     const result = deleteSession(app.getPath('userData'), id, uiLocale());
-    if (result.ok && id === sessionFileId) sessionFileId = null;
+    if (result.ok) for (const job of jobs.values()) if (job.sessionFileId === id) job.sessionFileId = null;
     return result;
   });
   // 載入歷史對話繼續討論:之後的任務會寫回同一份紀錄
-  handle('chat:resume', (id) => {
-    if (orchestrator.snapshot().running) return { ok: false, error: text('main.stillRunning') };
+  handle('chat:resume', (jobId, id) => {
+    const job = jobOf(jobId);
+    if (busy(job)) return { ok: false, error: text('main.stillRunning') };
+    // 兩件任務寫同一份紀錄檔會互相覆蓋
+    if ([...jobs.values()].some((other) => other !== job && other.sessionFileId === id)) return { ok: false, error: text('main.sessionOpenElsewhere') };
     const result = readSession(userData(), id, uiLocale());
     if (!result.ok) return result;
-    activeTaskStart = null;
-    resetPending(); // 未送出的附件屬於舊對話的目錄,不能帶過去
-    const snapshot = orchestrator.loadConversation(result.session);
-    sessionFileId = id;
+    job.activeTaskStart = null;
+    resetPending(job); // 未送出的附件屬於舊對話的目錄,不能帶過去
+    const snapshot = job.orchestrator.loadConversation(result.session);
+    // 舊紀錄沒有記下工作目錄:下次送出照目前的設定走
+    job.config = null;
+    job.outcome = null;
+    job.sessionFileId = id;
+    emitJobs();
     return { ok: true, id, snapshot };
   });
   // 只轉交;id 驗證與 first-answer-wins 都在 orchestrator,IPC 層不保留任何狀態
-  handle('chat:answer', (answer) => orchestrator.answerQuestion(answer));
-  handle('chat:retry', (messageId) => orchestrator.retry(messageId));
+  handle('chat:answer', (jobId, answer) => jobOf(jobId).orchestrator.answerQuestion(answer));
+  handle('chat:retry', async (jobId, messageId) => {
+    const job = jobOf(jobId);
+    const o = job.orchestrator;
+    if (busy(job)) return { ok: false, error: o.text('sys.retryBusy') };
+    const msg = o.messages.find((m) => m.id === messageId);
+    const res = await jobResources(job, jobConfig(job).agents.filter((a) => a.id === msg?.agentId));
+    if (busy(job) || !jobs.has(job.id)) return { ok: false, error: o.text('sys.retryBusy') };
+    const blocker = scheduler.tryHold(job.id, res, true);
+    if (blocker) return { ok: false, error: blockedText(blocker) };
+    job.resources = res;
+    job.activeTaskStart = o.messages.length;
+    job.outcome = null;
+    const result = await o.retry(messageId);
+    if (result.ok && o.running) recordRun(job, res);
+    if (!o.running) { job.activeTaskStart = null; releaseJob(job); }
+    emitJobs();
+    return result;
+  });
   // 工作目錄目前的檔案改動。唯讀:不碰使用者的版本控制狀態,全程非同步(同步跑會凍結整個視窗)。
   // 是 git repo 就相對上一次 commit;不是的話,相對最近一次任務開始前記下的內容
-  handle('diff:changes', () => workdirChanges(store.get().settings.workDir, orchestrator.taskBaseline));
+  handle('diff:changes', (jobId) => {
+    const job = jobOf(jobId);
+    return workdirChanges(jobWorkDir(job), job.orchestrator.taskBaseline);
+  });
   // 還原這次任務的改動:回到任務開始前的樣子。破壞性操作,介面一定要先問過使用者。
-  // 任務進行中不給還原——成員還在寫檔,還原只會做出一個誰都沒看過的中間狀態。
-  handle('task:revert', (scope) => orchestrator.revertTask(scope));
-  handle('task:verification', (messageId) => orchestrator.taskVerificationStatus(messageId));
-  handle('task:reverify', (messageId, confirmedCommand) => orchestrator.reverifyTask(messageId, confirmedCommand));
+  // 之後有別的任務在同一個目錄跑過就拒絕:基準點會把那件任務的成果一起蓋掉。
+  handle('task:revert', (jobId, scope) => {
+    const job = jobOf(jobId);
+    const refused = (reason: RevertOutcome['reason']): RevertOutcome => ({ ok: false, reason, restored: 0, deleted: 0, skipped: [], failed: [] });
+    if (busy(job)) return refused('running');
+    return withDirectory(job, async () => {
+      if (ledger.supersededBy(job.id) || (job.staleBaseline && job.staleBaseline === job.orchestrator.taskBaseline)) return refused('stale');
+      return job.orchestrator.revertTask(scope);
+    }, () => refused('busy'));
+  });
+  handle('task:verification', (jobId, messageId) => jobOf(jobId).orchestrator.taskVerificationStatus(messageId));
+  handle('task:reverify', (jobId, messageId, confirmedCommand) => {
+    const job = jobOf(jobId);
+    return withDirectory(job, () => job.orchestrator.reverifyTask(messageId, confirmedCommand), (blocker) => ({ ok: false, error: blockedText(blocker) }));
+  });
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
   handle('ollama:quickSetup', async (payload) => {
@@ -384,8 +622,45 @@ app.whenReady().then(async () => {
   handle('terminal:close', ({ id }) => terminals.close(String(id)));
   handle('terminal:list', () => terminals.list());
 
-  handle('chat:stop', () => orchestrator.stop());
-  handle('chat:reset', () => orchestrator.reset());
+  handle('chat:stop', (jobId) => {
+    const job = jobOf(jobId);
+    // 還在排隊:取消排隊,內容交還給輸入框
+    if (job.queued) {
+      const queued = job.queued;
+      job.queued = null;
+      scheduler.cancel(job.id);
+      job.config = queued.previousConfig;
+      job.pending = [...queued.attachments, ...job.pending];
+      emitJobs();
+      return { canceledText: queued.text };
+    }
+    job.orchestrator.stop();
+    return {};
+  });
+  handle('chat:reset', async (jobId) => {
+    const job = jobOf(jobId);
+    if (job.maintenance) throw new Error(text('main.stillRunning'));
+    if (job.orchestrator.running) {
+      await new Promise<void>((resolve) => {
+        const onState = (state: { running: boolean }) => {
+          if (state.running) return;
+          job.orchestrator.removeListener('state', onState);
+          resolve();
+        };
+        job.orchestrator.on('state', onState);
+        job.orchestrator.stop();
+      });
+    }
+    if (job.queued) {
+      dropPending(job.queued.attachments);
+      job.queued = null;
+      scheduler.cancel(job.id);
+    }
+    job.orchestrator.reset();
+    job.config = null;
+    job.staleBaseline = null;
+    emitJobs();
+  });
 
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -6,9 +6,8 @@ import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapte
 import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
-import type { AgentConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, RevertOutcome, TaskOutcome, TaskSummary, TaskVerification, TaskVerificationStatus, ToolAuditEntry } from './ipc-types';
+import type { AgentConfig, AppConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, RevertOutcome, TaskOutcome, TaskSummary, TaskVerification, TaskVerificationStatus, ToolAuditEntry } from './ipc-types';
 import type { Adapter, RunAttachment, Stoppable } from './adapters/types';
-import type { Store } from './store';
 import { tx, resolveTextLocale, joinNames, quoteName } from './text';
 import type { TextLocale } from './text';
 import { RUNTIME_DIR, newConversationId, attachmentCapabilities, buildAttachmentPrompt, stageToCwd, clearRuntime, absolutePath } from './attachments';
@@ -42,6 +41,13 @@ const ASK_TIMEOUT_MS = 5 * 60 * 1000; // 提問等多久算使用者不回答(�
 const ASK_MAX_PER_SESSION = 3;  // 整個對話最多打斷使用者幾次;被節流掉的問題不計入
 const ASK_MAX_ANSWER_CHARS = 2000; // 自由輸入的回答上限
 const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/; // 與 attachments 的目錄名規則一致
+const RELAY_HANDOFF_CHARS = 3000; // 每一棒交接帶給後面的回報長度;細節讓下一棒自己讀檔
+
+// Store 本身就符合;多件任務時每件拿到自己凍結的設定,後來改設定不會動到進行中的任務
+export interface ConfigSource {
+  get(): AppConfig;
+  userDataDir: string;
+}
 
 class Orchestrator extends EventEmitter {
   private verificationTarget: { message: LiveMessage; baseline: TaskBaseline } | null = null;
@@ -50,7 +56,7 @@ class Orchestrator extends EventEmitter {
   lockedForFix: string[] = [];
   // 修復回合開始前的快照:修復把事情弄糟時,可以只收回修復那一段
   fixBaseline: TaskBaseline | null = null;
-  store: Store;
+  store: ConfigSource;
   conversationId: string;
   attachments: AttachmentMeta[];
   staged: StagedAttachment[];
@@ -79,7 +85,7 @@ class Orchestrator extends EventEmitter {
   askRoundUsed: number | null;             // 本任務中已經觸發過提問的討論回合
   askLastRound: Record<string, number>;    // agentId -> 上次觸發提問的回合,用來擋連續兩回合
 
-  constructor(store: Store) {
+  constructor(store: ConfigSource) {
     super();
     this.store = store;
     // 附件要在「送出當下」就有歸屬,不能等任務結束寫 session 時才有 id
@@ -549,9 +555,10 @@ class Orchestrator extends EventEmitter {
     return this.runExclusive(async (agents, cwd) => {
       const agreed = await this.discussPhase(agents, task);
       if (this.stopped) return;
-      if (mode === 'divide' || mode === 'tdd') {
+      if (mode === 'divide' || mode === 'tdd' || mode === 'relay') {
         if (!agreed) this.system(this.text('sys.maxRoundsDivide', { max: this.config.settings.maxRounds }));
-        const plan = await this.assignPhase(agents, task);
+        const relay = mode === 'relay';
+        const plan = await this.assignPhase(agents, task, relay);
         if (this.stopped) return;
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
@@ -581,14 +588,17 @@ class Orchestrator extends EventEmitter {
           writtenTests = await this.testsPhase(agents, plan, snapBefore, cwd);
           if (this.stopped) return;
         }
-        const { reports, failed, conflicts: laneConflicts, unmerged = [] } = await this.executePhase(agents, plan, writtenTests);
+        const execution: Awaited<ReturnType<Orchestrator['executePhase']>> & { pending?: Issue[] } = relay
+          ? await this.relayPhase(agents, plan)
+          : await this.executePhase(agents, plan, writtenTests);
+        const { reports, failed, conflicts: laneConflicts, unmerged = [] } = execution;
         if (this.stopped) return;
         const gitAfter = await gitStatus(cwd);
         const gitChanges = describeGitChanges(gitBefore, gitAfter, this.locale);
         const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
         if (this.stopped) return;
         // 隔離合併後仍重疊的檔案沒有寫回工作目錄。沒有隔離時才用工具紀錄事後指出。
-        const conflicts = laneConflicts || this.parallelConflicts([...reports, ...failed]);
+        const conflicts = relay ? [] : laneConflicts || this.parallelConflicts([...reports, ...failed]);
         if (conflicts.length) {
           this.system(this.text(laneConflicts ? 'sys.parallelConflict' : 'sys.sharedConflict', {
             list: conflicts.map((c) => this.text('sys.parallelConflictItem', { file: c.file, names: joinNames(this.locale, c.names) })).join('\n'),
@@ -613,6 +623,7 @@ class Orchestrator extends EventEmitter {
         if (this.stopped) return;
         await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding, counterexamples);
         if (this.stopped) return;
+        fix.unresolved.push(...(execution.pending || []));
         for (const report of [...reports, ...failed].filter((report) => unmerged.includes(report.agent.id))) {
           if (!fix.unresolved.some((issue) => issue.agent.id === report.agent.id)) {
             fix.unresolved.push({ agent: report.agent, task: report.task, notes: [this.text('sys.mergeUnresolved')] });
@@ -787,7 +798,7 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段二:主持人產生分工 JSON(用 A1/A2 短代號,避免模型抄錯 UUID 或名稱)
-  async assignPhase(agents: AgentConfig[], task: string): Promise<Plan | null> {
+  async assignPhase(agents: AgentConfig[], task: string, relay = false): Promise<Plan | null> {
     this.setPhase({ code: 'divide' });
     const lead = this.lead;
     const codes = new Map<string, AgentConfig>();
@@ -799,7 +810,7 @@ class Orchestrator extends EventEmitter {
       this.text('prompt.assign'),
       roster,
       '',
-      this.text('prompt.assignNoOverlap'),
+      this.text(relay ? 'prompt.assignRelay' : 'prompt.assignNoOverlap'),
       this.text('prompt.assignCodes', { codes: joinNames(this.locale, [...codes.keys()]) }),
       this.text('prompt.assignJson'),
       this.text('prompt.assignExample'),
@@ -828,9 +839,12 @@ class Orchestrator extends EventEmitter {
             this.text('sys.unmatched', { list: unmatched.map((a) => this.text('prompt.unmatchedItem', { agent: String(a.agent), task: a.task || '' })).join('\n') }),
             { level: 'warn' },
           );
+          if (relay) continue;
         }
         if (matched.length) {
-          const lines = matched.map((a) => this.text('prompt.planItem', { name: a._agentName || '', task: a.task || '' })).join('\n');
+          const lines = matched.map((a, i) => relay
+            ? this.text('prompt.relayPlanItem', { n: i + 1, name: a._agentName || '', task: a.task || '' })
+            : this.text('prompt.planItem', { name: a._agentName || '', task: a.task || '' })).join('\n');
           this.system(this.text('sys.plan', { summary: plan.summary || '', lines }), { tag: 'plan' });
           // 分工結果已經以卡片呈現,主持人那則原文(JSON)在介面上收起來
           const source = this.messages.find((m) => m.id === id);
@@ -934,6 +948,63 @@ class Orchestrator extends EventEmitter {
     const reports = all.filter((r) => !r.error && (r.report || '').trim());
     const failed = all.filter((r) => r.error || !(r.report || '').trim());
     return { reports, failed, unmerged, ...(conflicts ? { conflicts } : {}) };
+  }
+
+  async relayPhase(agents: AgentConfig[], plan: Plan): Promise<{ reports: ExecReport[]; failed: ExecReport[]; pending: Issue[]; conflicts?: Array<{ file: string; names: string[] }>; unmerged?: string[] }> {
+    const cwd = this.taskCwd || this.config.settings.workDir;
+    const steps = plan.assignments
+      .map((step) => ({ step, agent: agents.find((a) => a.id === step._agentId) }))
+      .filter((item): item is { step: Plan['assignments'][number]; agent: AgentConfig } => !!item.agent && !!item.step.task);
+    if (!steps.length) { this.system(this.text('sys.nobodyAssigned'), { level: 'warn' }); return { reports: [], failed: [], pending: [] }; }
+    const handoffs: string[] = [];
+    const byAgent = new Map<string, ExecReport>();
+    const pending: Issue[] = [];
+    for (const [i, { step, agent }] of steps.entries()) {
+      if (this.stopped) break;
+      const phase: PhaseInfo = { code: 'execute', round: i + 1, maxRounds: steps.length };
+      this.setPhase(phase);
+      const prompt = [
+        this.text('prompt.execute', { cwd }),
+        this.text('prompt.relayStep', { n: i + 1, total: steps.length }),
+        effectiveCanEdit(agent) ? this.text('prompt.executeCanEdit') : this.text('prompt.executeReadOnly'),
+        ...(handoffs.length ? ['', this.text('prompt.relayHandoff'), ...handoffs] : []),
+        '',
+        this.text(i + 1 < steps.length ? 'prompt.relayReport' : 'prompt.executeReport'),
+        '',
+        step.task || '',
+      ].join('\n');
+      const fileToolsEnabled = effectiveCanEdit(agent) && hasQualifiedReviewer(agents, agent.id);
+      const before = effectiveCanEdit(agent) ? await snapshotDir(cwd) : null;
+      if (this.stopped) break;
+      const { text, error, toolEvents } = await this.turn(agent, prompt, { phase, hideAgreed: true, fileToolsEnabled });
+      const changedPaths = before ? diffSnapshots(before, await snapshotDir(cwd)) : null;
+      this.writeToolAudit(agent, toolEvents || []);
+      const previous = byAgent.get(agent.id);
+      const failure = error || (!text.trim() ? this.text('sys.noReport') : null);
+      const report: ExecReport = previous
+        ? { ...previous, task: `${previous.task}\n${step.task}`, report: [previous.report, text].filter(Boolean).join('\n\n'), error: failure || previous.error, toolEvents: [...(previous.toolEvents || []), ...(toolEvents || [])] }
+        : { agent, task: step.task || '', report: text, error: failure, toolEvents };
+      if (changedPaths) report.changedPaths = [...new Set([...(previous?.changedPaths || []), ...changedPaths])];
+      byAgent.set(agent.id, report);
+      if (failure) {
+        const rest = steps.slice(i + 1);
+        for (const next of rest) {
+          const note = this.text('sys.relayPending', { task: next.step.task || '' });
+          pending.push({ agent: next.agent, task: next.step.task || '', notes: [note] });
+          if (!byAgent.has(next.agent.id)) byAgent.set(next.agent.id, { agent: next.agent, task: next.step.task || '', report: '', error: note, changedPaths: [] });
+        }
+        if (rest.length && !this.stopped) {
+          this.system(this.text('sys.relayStopped', {
+            name: agent.name,
+            list: rest.map((item, k) => this.text('prompt.relayPlanItem', { n: i + 2 + k, name: item.agent.name, task: item.step.task || '' })).join('\n'),
+          }), { level: 'warn' });
+        }
+        break;
+      }
+      handoffs.push(this.text('prompt.relayHandoffItem', { n: i + 1, name: agent.name, task: step.task || '', report: text.slice(0, RELAY_HANDOFF_CHARS) }));
+    }
+    const all = [...byAgent.values()];
+    return { reports: all.filter((r) => !r.error && (r.report || '').trim()), failed: all.filter((r) => r.error || !(r.report || '').trim()), pending };
   }
 
   // 執行回合中途失敗的成員:已經動過檔案的照樣送審。

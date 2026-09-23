@@ -52,7 +52,70 @@ async function writable() {
   assert.ok(ok && written, r.error || '對照組失敗');
 }
 
+async function copilotMember(locale: 'zh-Hant' | 'en') {
+  const result = await runApp({
+    members: [scriptedMember({ id: 's1', name: 'Member' })],
+    settings: { uiLocale: locale },
+    constants: { locale },
+    timeoutMs: 2 * 60 * 1000,
+    scenario: async (options) => {
+      const harness: any = globalThis;
+      await harness.ready();
+      harness.$('#add-agent').click();
+      await harness.waitFor(() => !harness.$('#modal').classList.contains('hidden'), 10000, 'member editor opened');
+      const cli = harness.$('#f-cli') as HTMLSelectElement;
+      const option = cli.querySelector('option[value="copilot"]');
+      harness.check(option?.textContent === 'GitHub Copilot CLI', 'Copilot is available in the member CLI menu');
+      cli.value = 'copilot';
+      cli.dispatchEvent(new Event('change'));
+      const model = harness.$('#f-model-select') as HTMLSelectElement;
+      const effort = harness.$('#f-effort') as HTMLSelectElement;
+      const canEdit = harness.$('#f-canEdit') as HTMLInputElement;
+      harness.check(model.value === 'auto', 'Copilot defaults to Auto');
+      harness.check(!/cache|快取/.test(harness.text('#f-model-desc')), 'Static Auto does not claim a missing model cache');
+      harness.check(effort.disabled, 'Auto leaves reasoning effort to the CLI');
+      harness.check(!canEdit.disabled, 'Copilot supports editing permission controls');
+      harness.$('#f-name').value = 'Copilot';
+      model.value = '__custom__';
+      model.dispatchEvent(new Event('change'));
+      harness.$('#f-model').value = 'gpt-5.4-mini';
+      harness.$('#f-model').dispatchEvent(new Event('input'));
+      harness.check(!effort.disabled, 'Manual models offer reasoning effort');
+      effort.value = 'high';
+      canEdit.checked = false;
+      harness.$('#modal-save').click();
+      const saved = await harness.waitFor(async () => {
+        const config = await (window as any).api.getConfig();
+        return config.agents.find((member: any) => member.cli === 'copilot');
+      }, 10000, 'Copilot member saved');
+      harness.check(saved.model === 'gpt-5.4-mini' && saved.effort === 'high' && !saved.canEdit, 'Model, effort and read-only permission survive IPC save');
+      harness.$(`[data-agent-id="${saved.id}"]`).click();
+      await harness.waitFor(() => !harness.$('#modal').classList.contains('hidden'), 10000, 'saved member reopened');
+      harness.check(cli.value === 'copilot' && model.value === '__custom__', 'Reopened editor retains Copilot and the manual model');
+      harness.check(harness.$('#f-model').value === saved.model && effort.value === 'high' && !canEdit.checked, 'Reopened editor retains all Copilot settings');
+      harness.check(harness.hiddenLeaks().length === 0, 'Hidden fields do not occupy space');
+      for (const animation of document.getAnimations()) {
+        if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish();
+      }
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      await harness.shot(`copilot-${options.locale}`);
+      return { id: saved.id };
+    },
+  });
+  const ok = report(`Copilot member settings (${locale})`, result);
+  const saved = JSON.parse(fs.readFileSync(path.join(result.userData, 'config.json'), 'utf8'));
+  const member = saved.agents.find((entry: any) => entry.cli === 'copilot');
+  result.cleanup();
+  assert.ok(ok, result.error);
+  assert.ok(member);
+  assert.equal(member.model, 'gpt-5.4-mini');
+  assert.equal(member.effort, 'high');
+  assert.equal(member.canEdit, false);
+}
+
 async function main() {
+  await copilotMember('zh-Hant');
+  await copilotMember('en');
   // root 對唯讀檔照樣寫得進去,這個情境就測不到東西了——照實說跳過,不要假裝通過
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     console.log('(以 root 執行,唯讀檔擋不住寫入,跳過這個情境)');

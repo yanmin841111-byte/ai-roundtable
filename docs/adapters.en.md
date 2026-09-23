@@ -2,7 +2,7 @@
 
 # Adding CLIs and APIs
 
-AI Roundtable ships with Claude Code, Codex CLI and Cursor CLI. Other AIs can be connected through extensions without touching the source:
+AI Roundtable ships with Claude Code, Codex CLI, Cursor CLI and GitHub Copilot CLI. Other AIs can be connected through extensions without touching the source:
 
 | Type | Suited to | Can edit files | File |
 | --- | --- | --- | --- |

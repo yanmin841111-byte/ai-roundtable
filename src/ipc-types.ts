@@ -104,6 +104,8 @@ export interface AppSettings {
   workStyle?: 'general' | 'code';
   // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度
   terminalWidth?: number;
+  // 同時進行的獨立任務件數上限;同一個專案目錄、同一台本機模型的任務另外排隊
+  maxParallelJobs?: number;
 }
 
 // 陣容:一組「誰上場、各自的角色、誰主持、什麼流程、討論幾輪」(見 src/lineups.ts)
@@ -387,7 +389,8 @@ export interface TaskSummary {
 export interface RevertOutcome {
   ok: boolean;
   // 沒有基準點(還沒跑過任務、或工作目錄太大沒記下內容)、或任務進行中
-  reason?: 'no-baseline' | 'running' | 'failed';
+  // busy:另一件任務正在用同一個目錄;stale:之後別的任務在同一個目錄跑過,還原會蓋掉它的成果
+  reason?: 'no-baseline' | 'running' | 'failed' | 'busy' | 'stale';
   restored: number;
   deleted: number;
   // 基準點當時太大沒留內容,還原不了的檔案
@@ -649,6 +652,36 @@ export type SessionReadResult = { ok: true; session: SessionDetail } | { ok: fal
 
 export type ChatSnapshot = ChatState & { messages: ChatMessage[]; conversationId?: string };
 
+// ---------- 多件獨立任務 ----------
+// 每件任務各自有對話、附件、工作目錄與成員 session;排程只決定誰可以開始。
+export type JobBlocker = 'slot' | 'workdir' | 'endpoint';
+// done / stopped / error 是最近一次執行怎麼結束的,不代表成果已經驗證過;那要看結果卡
+export type JobStatus = 'idle' | 'queued' | 'running' | 'waiting' | 'done' | 'stopped' | 'error';
+
+export interface JobSummary {
+  id: string;
+  title: string;
+  status: JobStatus;
+  // 第一次送出時固定下來的工作目錄;還沒送出過時是 null(會用設定裡的工作目錄)
+  workDir: string | null;
+  waitingFor: JobBlocker | null;
+  phase?: PhaseValue;
+  // 沒在看的時候有新訊息
+  unread: boolean;
+  createdAt: number;
+}
+
+export interface JobsState {
+  jobs: JobSummary[];
+  selectedId: string;
+  maxParallel: number;
+}
+
+export interface JobSelectResult {
+  state: JobsState;
+  snapshot: ChatSnapshot;
+}
+
 export interface IpcContract {
   'config:get': { args: []; result: AppConfig };
   'config:save': { args: [cfg: SaveConfigPayload<AppConfig>]; result: AppConfig };
@@ -657,26 +690,31 @@ export interface IpcContract {
   'dialog:pickDir': { args: []; result: string | null };
   'dialog:pickExecutable': { args: []; result: string | null };
   'shell:openPath': { args: [p: string]; result: string };
-  'chat:snapshot': { args: []; result: ChatSnapshot };
-  'chat:send': { args: [payload: SendChatPayload<AttachmentMeta>]; result: ChatMessage | undefined };
-  'chat:export': { args: []; result: ExportResult };
+  'jobs:list': { args: []; result: JobsState };
+  'jobs:create': { args: []; result: JobSelectResult };
+  'jobs:select': { args: [jobId: string]; result: JobSelectResult };
+  'jobs:close': { args: [jobId: string]; result: JobsState };
+  'chat:snapshot': { args: [jobId: string]; result: ChatSnapshot };
+  'chat:send': { args: [jobId: string, payload: SendChatPayload<AttachmentMeta>]; result: ChatMessage | undefined };
+  'chat:export': { args: [jobId: string]; result: ExportResult };
   'chat:openSessions': { args: []; result: string };
-  'chat:stop': { args: []; result: void };
-  'chat:reset': { args: []; result: void };
-  'chat:resume': { args: [sessionId: string]; result: ResumeResult };
-  'chat:answer': { args: [answer: QuestionAnswer]; result: void };
-  'chat:retry': { args: [messageId: string]; result: { ok: boolean; error?: string } };
-  'diff:changes': { args: []; result: DiffResult };
-  'task:revert': { args: [scope?: 'task' | 'repair']; result: RevertOutcome };
-  'task:verification': { args: [messageId: string]; result: TaskVerificationStatus };
-  'task:reverify': { args: [messageId: string, confirmedCommand: string]; result: { ok: boolean; error?: string } };
+  // 排隊中的任務按停止是取消排隊:送出的文字交回來,附件回到待送清單
+  'chat:stop': { args: [jobId: string]; result: { canceledText?: string } };
+  'chat:reset': { args: [jobId: string]; result: void };
+  'chat:resume': { args: [jobId: string, sessionId: string]; result: ResumeResult };
+  'chat:answer': { args: [jobId: string, answer: QuestionAnswer]; result: void };
+  'chat:retry': { args: [jobId: string, messageId: string]; result: { ok: boolean; error?: string } };
+  'diff:changes': { args: [jobId: string]; result: DiffResult };
+  'task:revert': { args: [jobId: string, scope?: 'task' | 'repair']; result: RevertOutcome };
+  'task:verification': { args: [jobId: string, messageId: string]; result: TaskVerificationStatus };
+  'task:reverify': { args: [jobId: string, messageId: string, confirmedCommand: string]; result: { ok: boolean; error?: string } };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
   'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
-  'attachments:list': { args: []; result: AttachmentsResult };
-  'attachments:pick': { args: []; result: AttachmentsResult };
-  'attachments:add': { args: [payload: { items: AttachmentInput[] }]; result: AttachmentsResult };
-  'attachments:remove': { args: [payload: { id: string }]; result: AttachmentsResult };
+  'attachments:list': { args: [jobId: string]; result: AttachmentsResult };
+  'attachments:pick': { args: [jobId: string]; result: AttachmentsResult };
+  'attachments:add': { args: [jobId: string, payload: { items: AttachmentInput[] }]; result: AttachmentsResult };
+  'attachments:remove': { args: [jobId: string, payload: { id: string }]; result: AttachmentsResult };
   'attachments:thumb': { args: [meta: AttachmentMeta]; result: string | null };
   'session:list': { args: []; result: { sessions: SessionSummary[]; error?: string } };
   'session:read': { args: [id: string]; result: SessionReadResult };
@@ -705,11 +743,13 @@ export type IpcArgs<C extends InvokeChannel> = IpcContract[C]['args'];
 export type IpcReturn<C extends InvokeChannel> = IpcContract[C]['result'];
 
 // 主程序主動推給 renderer 的事件。
+// 對話事件都帶 jobId;preload 只把目前選中任務的事件交給介面
 export interface IpcEvents {
-  'chat:message': ChatMessage;
-  'chat:state': ChatState;
-  'chat:reset': void;
-  'session:saved': { id: string | null };
+  'chat:message': { jobId: string; message: ChatMessage };
+  'chat:state': { jobId: string; state: ChatState };
+  'chat:reset': { jobId: string };
+  'session:saved': { jobId: string; id: string | null };
+  'jobs:changed': JobsState;
   // pty 的原始輸出。不在主程序解碼成字串:多位元組字元會被切在兩個 chunk 之間,
   // 交給終端自己處理才不會出現半個字。
   'terminal:data': { id: string; data: Uint8Array };
@@ -728,11 +768,20 @@ export interface RendererApi {
   pickDir(): Promise<string | null>;
   pickExecutable(): Promise<string | null>;
   openPath(p: string): Promise<string>;
+  // 下面這些對話操作都作用在目前選中的任務(見 jobs.select)
+  jobs: {
+    list(): Promise<JobsState>;
+    create(): Promise<JobSelectResult>;
+    select(jobId: string): Promise<JobSelectResult>;
+    close(jobId: string): Promise<JobsState>;
+    current(): string | null;
+    onChange(fn: (state: JobsState) => void): void;
+  };
   snapshot(): Promise<ChatSnapshot>;
   send(text: string, mode: string, attachments: AttachmentMeta[]): Promise<ChatMessage | undefined>;
   exportChat(): Promise<ExportResult>;
   openSessions(): Promise<string>;
-  stop(): Promise<void>;
+  stop(): Promise<{ canceledText?: string }>;
   reset(): Promise<void>;
   resume(sessionId: string): Promise<ResumeResult>;
   // 回答成員的提問。id 驗證與 first-answer-wins 都在 orchestrator,這裡只負責轉交。
@@ -788,5 +837,5 @@ export interface RendererApi {
   onMessage(fn: (m: ChatMessage) => void): void;
   onState(fn: (s: ChatState) => void): void;
   onReset(fn: () => void): void;
-  onSessionSaved(fn: (info: IpcEvents['session:saved']) => void): void;
+  onSessionSaved(fn: (info: { id: string | null }) => void): void;
 }

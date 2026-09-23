@@ -18,7 +18,7 @@ import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth,
   ExtEntry, ExtSummary, ExtTemplate, ChatMessage, ChatState, ExtSpec, AttachmentMeta, ReviewInfo, ModelCapability,
-  AttachmentsResult, RendererApi,
+  AttachmentsResult, RendererApi, JobsState, JobSelectResult, JobSummary,
   PendingAttachment, PendingQuestion, QuestionAnswer, SessionSummary, SessionDetail, UsageInfo, Activity, EnvFix,
 } from './api';
 
@@ -67,6 +67,12 @@ let historySessions: SessionSummary[] = [];
 let openHistoryId: string | null = null;
 let activeSessionId: string | null = null; // 目前對話寫入的歷史紀錄檔
 let currentQuestion: PendingQuestion | null = null;
+let jobsState: JobsState | null = null;
+// 時間軸目前畫的是哪件任務;jobs:changed 會比切換的回應先到,不能拿 selectedId 判斷要不要重畫
+let shownJobId: string | null = null;
+let switchingJobs = false;
+// 切到別的任務時,輸入框裡還沒送出的字留給原本那件
+const drafts = new Map<string, string>();
 let answeredQuestionId: string | null = null;
 let questionTimer: ReturnType<typeof setInterval> | undefined;
 const historyErrors = new Map<string, string>();
@@ -95,23 +101,29 @@ async function init() {
   });
   renderSidebar();
   renderExtensions();
+  jobsState = await window.api.jobs.list();
+  shownJobId = window.api.jobs.current();
   const snap = await window.api.snapshot();
   activeSessionId = snap.sessionId || null;
   snap.messages.forEach((m) => renderMessage(m, { animate: false }));
   setState(snap);
+  renderJobs();
+  renderWorkdirChip();
   checkClis();
   setupComposerAttachments();
   // 修復卡片上的「打開設定」由這裡提供:env-fix 只負責畫面,不認得設定畫面
   setEnvFixHandlers({ openSettings: (tab) => openSettings(tab) });
   // 終端面板:平常收著。成員在工作目錄動手,使用者也該能在同一個目錄自己下指令。
   setupTerminal({
-    workDir: () => config.settings.workDir,
+    workDir: () => selectedJob()?.workDir || config.settings.workDir,
     width: () => Number(config.settings.terminalWidth) || 0,
     saveWidth: (value) => { config.settings.terminalWidth = value; void saveConfig(); },
   });
 
   window.api.onMessage((m) => renderMessage(m, { animate: true }));
   window.api.onState((state) => { setState(state); if (!state.running) refreshTaskVerifications(); });
+  window.api.jobs.onChange(onJobsChanged);
+  $<HTMLButtonElement>('#job-new').onclick = () => { void createJob(); };
   window.api.onReset(() => {
     clearTimeline();
     clearPendingAttachments();
@@ -133,8 +145,10 @@ async function init() {
   $<HTMLTextAreaElement>('#input').addEventListener('click', updateMentionMenu);
   $<HTMLTextAreaElement>('#input').addEventListener('blur', closeMentionMenu);
   $<HTMLButtonElement>('#history-resume').onclick = resumeHistory;
-  $<HTMLButtonElement>('#stop-btn').onclick = () => window.api.stop();
-  $<HTMLButtonElement>('#reset-btn').onclick = () => { if (!running || confirm(t('confirm.reset'))) window.api.reset(); };
+  $<HTMLButtonElement>('#stop-btn').onclick = () => { void stopSelected(); };
+  $<HTMLButtonElement>('#reset-btn').onclick = () => {
+    if (!switchingJobs && (!running || confirm(t('confirm.reset')))) void window.api.reset().catch((error) => alert(cleanIpcError(error)));
+  };
   $<HTMLButtonElement>('#export-btn').onclick = exportConversation;
   $<HTMLButtonElement>('#sessions-btn').onclick = () => void openFolder(() => window.api.openSessions());
   $<HTMLButtonElement>('#settings-btn').onclick = () => openSettings();
@@ -169,7 +183,7 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
-  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
   $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
@@ -369,6 +383,8 @@ function relocalize(): void {
   }
   if (historyLoaded) renderHistoryList();
   if (openHistoryId) updateResumeButton();
+  renderJobs();
+  refreshQueueControls();
   showSettingsTab(document.querySelector<HTMLElement>('.settings-tab.active')?.dataset.tab || 'general');
 }
 
@@ -1123,10 +1139,9 @@ function renderSidebar() {
   $<HTMLInputElement>('#language').value = config.settings.language || '繁體中文';
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
+  $<HTMLInputElement>('#max-parallel').value = String(config.settings.maxParallelJobs || 2);
   $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
-  const workDir = config.settings.workDir || '';
-  $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
-  $<HTMLButtonElement>('#workdir-chip').title = t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
+  renderWorkdirChip();
   const sel = $<HTMLSelectElement>('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
   updateSpeakingHighlight();
@@ -1143,6 +1158,7 @@ function saveSettings() {
   config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
+  config.settings.maxParallelJobs = Math.min(6, Math.max(1, Math.round(Number($<HTMLInputElement>('#max-parallel').value) || 2)));
   $<HTMLSelectElement>('#mode').value = config.settings.mode;
   // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
   void saveConfig({ saved: true });
@@ -1440,6 +1456,8 @@ const pendingAttachments: PendingAttachment[] = [];
 const attachLimits: AttachLimits = { maxFiles: 10, maxFileBytes: 20 * 1024 * 1024, maxTotalBytes: 50 * 1024 * 1024 };
 
 async function sendMessage() {
+  if (switchingJobs) return;
+  const owner = shownJobId;
   closeMentionMenu();
   const text = $<HTMLTextAreaElement>('#input').value.trim();
   if (!text && !pendingAttachments.length) return;
@@ -1462,8 +1480,14 @@ async function sendMessage() {
     await window.api.send(text, $<HTMLSelectElement>('#mode').value, attachments);
     revokeThumbUrls(toClear);
   } catch (error) {
+    if (owner !== shownJobId || owner !== window.api.jobs.current()) {
+      if (owner) drafts.set(owner, text);
+      revokeThumbUrls(toClear);
+      return;
+    }
     pendingAttachments.unshift(...toClear);
     renderAttachChips();
+    if (!$<HTMLTextAreaElement>('#input').value) { $<HTMLTextAreaElement>('#input').value = text; updateComposerHint(); }
     showAttachError(cleanIpcError(error) || t('composer.sendFailed'));
   }
 }
@@ -1473,7 +1497,7 @@ function setState(s: ChatState): void {
   const pill = $<HTMLDivElement>('#phase-pill');
   pill.textContent = running ? phaseText(s.phase) : t('phase.idle');
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
-  $<HTMLButtonElement>('#stop-btn').disabled = !running;
+  refreshQueueControls();
   updateComposerHint();
   if (openHistoryId) updateResumeButton();
   updateSpeakingHighlight();
@@ -1804,6 +1828,160 @@ const STAGE_OF_CODE: Record<string, string> = {
   review: 'review', repair: 'review', summary: 'review',
 };
 
+// ---------- 多件任務 ----------
+function selectedJob(): JobSummary | null {
+  return jobsState ? jobsState.jobs.find((job) => job.id === jobsState!.selectedId) || null : null;
+}
+
+function jobStatusText(job: JobSummary): string {
+  if (job.status === 'queued') {
+    return job.waitingFor ? t(`jobs.waiting.${job.waitingFor}`, { n: jobsState ? jobsState.maxParallel : 0 }) : t('jobs.status.queued');
+  }
+  if (job.status === 'running') return phaseText(job.phase) || t('jobs.status.running');
+  return t(`jobs.status.${job.status}`);
+}
+
+function renderJobs(): void {
+  const list = $<HTMLDivElement>('#job-list');
+  list.innerHTML = '';
+  if (!jobsState) return;
+  const closable = jobsState.jobs.length > 1;
+  for (const job of [...jobsState.jobs].sort((a, b) => b.createdAt - a.createdAt)) {
+    const active = job.id === jobsState.selectedId;
+    const item = document.createElement('div');
+    item.className = `job-item${active ? ' active' : ''}`;
+    item.dataset.jobId = job.id;
+    const open = document.createElement('button');
+    open.className = 'job-open';
+    if (active) open.setAttribute('aria-current', 'true');
+    const title = document.createElement('span');
+    title.className = 'job-title';
+    title.innerHTML = `<i class="job-dot ${escapeHtml(job.status)}" aria-hidden="true"></i><span></span>${job.unread ? '<i class="job-unread" aria-hidden="true"></i>' : ''}`;
+    title.querySelector('span')!.textContent = job.title || t('jobs.untitled');
+    const meta = document.createElement('span');
+    meta.className = 'job-meta';
+    meta.textContent = [job.status === 'queued' ? t('jobs.status.queued') : '', jobStatusText(job), job.workDir ? shortPath(job.workDir) : ''].filter(Boolean).join(' · ');
+    open.append(title, meta);
+    open.onclick = () => { void selectJob(job.id); };
+    item.appendChild(open);
+    if (closable && !['running', 'queued', 'waiting'].includes(job.status)) {
+      const close = document.createElement('button');
+      close.className = 'job-close';
+      close.title = t('jobs.close');
+      close.textContent = '✕';
+      close.onclick = () => { void closeJob(job.id); };
+      item.appendChild(close);
+    }
+    list.appendChild(item);
+  }
+}
+
+function renderWorkdirChip(): void {
+  const pinned = selectedJob()?.workDir || '';
+  const workDir = pinned || config.settings.workDir || '';
+  $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
+  $<HTMLButtonElement>('#workdir-chip').title = pinned
+    ? t('jobs.workdirPinned', { dir: pinned })
+    : t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
+}
+
+// 排隊中的任務還沒有會議狀態,停止鈕與階段膠囊要靠任務清單來說
+function refreshQueueControls(): void {
+  const job = selectedJob();
+  const queued = job?.status === 'queued';
+  $<HTMLButtonElement>('#stop-btn').disabled = !running && !queued;
+  const note = $<HTMLDivElement>('#job-queue-note');
+  note.hidden = !queued;
+  note.textContent = queued && job ? t('jobs.queueNote', { reason: jobStatusText(job) }) : '';
+  if (queued && !running) {
+    const pill = $<HTMLDivElement>('#phase-pill');
+    pill.textContent = t('phase.queued');
+    pill.className = 'phase busy';
+  }
+}
+
+function onJobsChanged(state: JobsState): void {
+  const before = new Map((jobsState ? jobsState.jobs : []).map((job) => [job.id, job.status]));
+  jobsState = { ...state, selectedId: window.api.jobs.current() || state.selectedId };
+  renderJobs();
+  renderWorkdirChip();
+  const job = selectedJob();
+  if (job && job.status !== 'queued' && !running) setState({ running: false });
+  else refreshQueueControls();
+  const finished = state.jobs.some((j) => before.has(j.id) && before.get(j.id) !== j.status && ['done', 'stopped', 'error'].includes(j.status));
+  if (finished && historyLoaded) void loadHistory(true, { quiet: true });
+}
+
+function applyJobSwitch({ state, snapshot }: JobSelectResult): void {
+  if (state.selectedId !== window.api.jobs.current()) return;
+  const switched = shownJobId !== state.selectedId;
+  jobsState = state;
+  shownJobId = state.selectedId;
+  if (switched) {
+    $<HTMLDivElement>('#diff-modal').classList.add('hidden');
+    clearTimeline();
+    revokeThumbUrls(pendingAttachments.splice(0, pendingAttachments.length));
+    renderAttachChips();
+    clearAttachError();
+    activeSessionId = snapshot.sessionId || null;
+    snapshot.messages.forEach((m) => renderMessage(m, { animate: false }));
+    $<HTMLTextAreaElement>('#input').value = drafts.get(state.selectedId) || '';
+    void syncPendingAttachments();
+    if (historyLoaded) renderHistoryList();
+    $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
+  }
+  setState(snapshot);
+  renderJobs();
+  renderWorkdirChip();
+  $<HTMLTextAreaElement>('#input').focus();
+}
+
+async function selectJob(id: string): Promise<void> {
+  if (!jobsState || id === shownJobId || switchingJobs) return;
+  switchingJobs = true;
+  if (shownJobId) drafts.set(shownJobId, $<HTMLTextAreaElement>('#input').value);
+  try { applyJobSwitch(await window.api.jobs.select(id)); } catch (error) { alert(cleanIpcError(error)); }
+  finally { switchingJobs = false; }
+}
+
+async function createJob(): Promise<void> {
+  if (switchingJobs) return;
+  switchingJobs = true;
+  if (shownJobId) drafts.set(shownJobId, $<HTMLTextAreaElement>('#input').value);
+  try { applyJobSwitch(await window.api.jobs.create()); } catch (error) { alert(cleanIpcError(error)); }
+  finally { switchingJobs = false; }
+}
+
+async function closeJob(id: string): Promise<void> {
+  if (switchingJobs) return;
+  switchingJobs = true;
+  try {
+    const state = await window.api.jobs.close(id);
+    drafts.delete(id);
+    const current = window.api.jobs.current();
+    if (current && current !== shownJobId) applyJobSwitch(await window.api.jobs.select(current));
+    else { jobsState = { ...state, selectedId: current || state.selectedId }; renderJobs(); }
+  } catch (error) { alert(cleanIpcError(error)); }
+  finally { switchingJobs = false; }
+}
+
+// 排隊中按停止 = 取消排隊:送出的字與附件回到輸入框
+async function stopSelected(): Promise<void> {
+  if (switchingJobs) return;
+  const owner = shownJobId;
+  const result = await window.api.stop();
+  if (result && typeof result.canceledText === 'string') {
+    if (owner !== shownJobId || owner !== window.api.jobs.current()) {
+      if (owner && !drafts.get(owner)?.trim()) drafts.set(owner, result.canceledText);
+      return;
+    }
+    const input = $<HTMLTextAreaElement>('#input');
+    if (!input.value.trim()) input.value = result.canceledText;
+    await syncPendingAttachments();
+    updateComposerHint();
+  }
+}
+
 // 顯示文字一律在 renderer 這側依介面語言組出。
 const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'ask', 'divide', 'tests', 'execute', 'review', 'repair', 'summary']);
 
@@ -1815,6 +1993,7 @@ function phaseText(phase: PhaseValue | undefined | null): string {
     return phase.maxRounds ? t('phase.discussRound', { label, round: phase.round, max: phase.maxRounds }) : t('phase.discussR', { label, round: phase.round });
   }
   if (phase.code === 'direct' && phase.names && phase.names.length) return `${label} ${joinNames(phase.names)}`;
+  if (phase.code === 'execute' && phase.round && phase.maxRounds) return t('phase.relayStep', { label, round: phase.round, max: phase.maxRounds });
   return label;
 }
 
@@ -2460,20 +2639,25 @@ function isFileDrag(event: DragEvent): boolean {
 }
 
 async function syncPendingAttachments() {
+  const owner = shownJobId;
   const api = attachmentsApi();
   if (!api || typeof api.list !== 'function') return;
   try {
-    applyPendingFromResult(await api.list(), { keepError: true });
+    const result = await api.list();
+    if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result, { keepError: true });
   } catch {}
 }
 
 async function pickAttachments() {
+  if (switchingJobs) return;
+  const owner = shownJobId;
   const api = attachmentsApi();
   if (api && typeof api.pick === 'function') {
     try {
-      applyPendingFromResult(await api.pick());
+      const result = await api.pick();
+      if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result);
     } catch (error) {
-      showAttachError(formatAttachError('', cleanIpcError(error)));
+      if (owner === shownJobId && owner === window.api.jobs.current()) showAttachError(formatAttachError('', cleanIpcError(error)));
     }
     return;
   }
@@ -2500,6 +2684,8 @@ function applyPendingFromResult(result: AttachmentsResult | null | undefined, { 
 }
 
 async function addAttachmentFiles(fileList: FileList | null | undefined): Promise<void> {
+  if (switchingJobs) return;
+  const owner = shownJobId;
   const files = [...(fileList || [])].filter(Boolean);
   if (!files.length) return;
   const api = attachmentsApi();
@@ -2509,8 +2695,11 @@ async function addAttachmentFiles(fileList: FileList | null | undefined): Promis
       for (const file of files) {
         items.push(await fileToAddItem(file, api));
       }
-      applyPendingFromResult(await api.add(items));
+      if (owner !== shownJobId || owner !== window.api.jobs.current()) return;
+      const result = await api.add(items);
+      if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result);
     } catch (error) {
+      if (owner !== shownJobId || owner !== window.api.jobs.current()) return;
       const names = files.map((file) => file && file.name).filter(Boolean);
       showAttachError(formatAttachError(names[0] || '', cleanIpcError(error)));
     }

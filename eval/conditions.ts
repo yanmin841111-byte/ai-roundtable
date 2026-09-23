@@ -1,7 +1,7 @@
 import { compareGates, type GateState } from '../src/ratchet';
 import type { DiscussionMode } from '../src/ipc-types';
 
-export const CONDITIONS = ['solo', 'roundtable', 'independent-first', 'sequential-candidates', 'independent-candidates', 'solo-budget'] as const;
+export const CONDITIONS = ['solo', 'roundtable', 'independent-first', 'sequential-candidates', 'independent-candidates', 'solo-budget', 'team-solo', 'team-split', 'team-relay'] as const;
 export type Condition = typeof CONDITIONS[number];
 
 export function parseConditions(value: string): Condition[] {

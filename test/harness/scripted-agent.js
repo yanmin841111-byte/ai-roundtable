@@ -48,5 +48,5 @@ process.stdin.on('end', () => {
     summary: '總結:流程已跑完',
     discuss: config.discuss,
   }[key];
-  process.stdout.write(out + '\n');
+  setTimeout(() => process.stdout.write(out + '\n'), Number(config.delayMs) || 0);
 });

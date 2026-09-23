@@ -2,7 +2,7 @@
 
 # 擴充 CLI 與 API
 
-AI Roundtable 內建 Claude Code、Codex CLI 與 Cursor CLI。其他 AI 可以用擴充接進來,不需要改原始碼:
+AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI。其他 AI 可以用擴充接進來,不需要改原始碼:
 
 | 類型 | 適合 | 能修改檔案 | 檔案 |
 | --- | --- | --- | --- |

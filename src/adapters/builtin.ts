@@ -4,6 +4,7 @@
 import { runProcess, parseJson, truncate, checkCli, checkLogin } from './process';
 import { listModels, resolveRunOptions } from '../models';
 import { createCursorAdapter } from './cursor';
+import { createCopilotAdapter } from './copilot';
 import type { AgentConfig, CliStatus } from '../ipc-types';
 import type { Adapter, RunContext, RunResult } from './types';
 import { tx, type TextLocale } from '../text';
@@ -292,6 +293,7 @@ const builtinAdapters: Adapter[] = [
     run: runCodex,
   },
   createCursorAdapter(),
+  createCopilotAdapter(),
   {
     id: 'custom',
     label: '自訂指令',

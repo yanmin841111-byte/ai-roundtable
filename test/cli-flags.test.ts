@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const { claudeArgs, codexArgs } = require('../src/adapters/builtin');
 const { cursorArgs } = require('../src/adapters/cursor');
+const { copilotArgs } = require('../src/adapters/copilot');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
@@ -59,6 +60,8 @@ const CASES: Array<{ name: string; help: string; args: string[] }> = [
   { name: 'codex 續談', help: 'codex exec resume', args: codexArgs({ canEdit: true }, { cwd: '/tmp', sessionId: 'abc' }, { effort: 'high' }) },
   { name: 'cursor 唯讀', help: 'cursor-agent', args: cursorArgs({ canEdit: false }, { cwd: '/tmp', sessionId: 'abc' }, 'gpt-5') },
   { name: 'cursor 可改檔', help: 'cursor-agent', args: cursorArgs({ canEdit: true }, { cwd: '/tmp' }, '') },
+  { name: 'copilot read-only', help: 'copilot', args: copilotArgs({ canEdit: false, model: 'auto', effort: 'high' }, { cwd: '/tmp', sessionId: 'abc' }) },
+  { name: 'copilot editing', help: 'copilot', args: copilotArgs({ canEdit: true, model: '', effort: '' }, { newSessionId: '6c77123b-bc12-4476-bf69-7f7adb198e5c', attachments: [{ path: '/tmp/file.txt' }] }) },
 ];
 
 test('送出去的參數(含短旗標與固定選項的值),安裝的 CLI 都支援', () => {
@@ -89,6 +92,20 @@ test('claude:唯讀成員不會拿到可以改檔的旗標', () => {
   const canEdit = claudeArgs({ model: '', effort: '', canEdit: true }, {});
   assert.ok(canEdit.includes('--dangerously-skip-permissions'));
   assert.ok(!canEdit.includes('--permission-mode'));
+});
+
+test('copilot: read-only tools and explicit sessions', () => {
+  const readOnly = copilotArgs({ canEdit: false, model: '', effort: '' }, { sessionId: 'session-a' });
+  assert.ok(readOnly.includes('--available-tools=view,glob,grep'));
+  assert.ok(readOnly.includes('--deny-tool=write'));
+  assert.ok(readOnly.includes('--deny-tool=shell'));
+  assert.ok(!readOnly.includes('--allow-all-tools'));
+  assert.ok(!readOnly.includes('--allow-all-paths'));
+  assert.ok(!readOnly.includes('--continue'));
+  assert.equal(readOnly[readOnly.indexOf('--resume') + 1], 'session-a');
+  const editing = copilotArgs({ canEdit: true, model: '', effort: '' }, {});
+  assert.ok(editing.includes('--allow-all-tools'));
+  assert.ok(!editing.includes('--resume'));
 });
 
 (async () => {

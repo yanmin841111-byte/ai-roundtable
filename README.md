@@ -2,11 +2,11 @@
 
 # AI Roundtable
 
-讓多個 AI CLI(Claude Code、Codex CLI、Cursor
-CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
+讓多個 AI CLI(Claude Code、Codex CLI、Cursor CLI、GitHub Copilot CLI,
+或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
 
 > A desktop app that seats multiple AI coding CLIs and APIs (Claude Code, Codex
-> CLI, Cursor CLI, Grok, Kimi, DeepSeek, Gemini, Ollama, or anything you plug
+> CLI, Cursor CLI, GitHub Copilot CLI, Grok, Kimi, DeepSeek, Gemini, Ollama, or anything you plug
 > in) at one table: they debate a task, split the work, execute in parallel, and
 > review each other's output. You watch the whole conversation live and can jump
 > in at any time.
@@ -15,7 +15,7 @@ CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相
 
 ## 特色
 
-- **多個 AI 同桌**:內建 Claude Code、Codex CLI、Cursor
+- **多個 AI 同桌**:內建 Claude Code、Codex CLI、Cursor CLI、GitHub Copilot
   CLI;Grok、Kimi、DeepSeek、Gemini、OpenRouter、Ollama 等可從範本一鍵加入。
 - **可擴充**:用 JSON 描述任何 CLI 或 OpenAI 相容 API,也能寫 JS 外掛,在 app
   內直接編輯與重新載入。
@@ -74,8 +74,9 @@ CLI,或任何自訂指令)在同一張圓桌上討論、分工、執行、互相
 - Node.js 20.6.0 以上(開發與 CI 使用 Node.js 22)
 - 至少一個 AI 來源:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-    、[Codex CLI](https://github.com/openai/codex) 或
-    [Cursor CLI](https://cursor.com/cli)(`cursor-agent`),安裝並登入即可直接使用
+    、[Codex CLI](https://github.com/openai/codex)、
+    [Cursor CLI](https://cursor.com/cli)(`cursor-agent`) 或
+    [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli)(`copilot`),安裝並登入即可直接使用
   - 或其他 CLI / API,透過擴充接入
 
 ## 快速開始
@@ -88,6 +89,10 @@ npm start
 ```
 
 左下角會顯示偵測到的 CLI 與版本。找不到時請確認指令在登入 shell 的 `PATH` 裡。
+
+使用 GitHub Copilot CLI:依官方說明安裝後執行 `copilot login`,再於「新增成員 → AI CLI」
+選擇「GitHub Copilot CLI」。使用獨立的 `copilot` 指令,不是舊的 `gh copilot` 擴充。
+版本偵測只確認 CLI 已安裝;登入或額度問題會在送出任務時回報。
 
 打包成 .dmg:
 
@@ -143,11 +148,11 @@ MB),不是完整備份;缺基準點、還原不完整或工作目錄身分改變
 
 | 欄位         | 說明                                                                                                                                      |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| AI CLI       | 內建的 Claude Code、Codex CLI、Cursor CLI、自訂指令,或你加入的擴充                                                                        |
+| AI CLI       | 內建的 Claude Code、Codex CLI、Cursor CLI、GitHub Copilot CLI、自訂指令,或你加入的擴充                                                                        |
 | 模型 / 版本  | 自動讀取各 CLI 的本機模型快取,只列正式、未退役的模型;選「其他(手動輸入)」可填任意模型名稱                                                 |
 | 強度         | 選項依模型而定;模型不支援時會自動降到最接近的等級,或略過不送,並在對話中標示                                                               |
 | 角色與個性   | 會放進系統提示,決定成員的立場與說話方式                                                                                                   |
-| 允許修改檔案 | 開啟時 Claude 用 `--dangerously-skip-permissions`、Codex 用 `workspace-write`、Cursor 用 `--force`;關閉時只能讀取(Cursor 用 `--mode ask`) |
+| 允許修改檔案 | 開啟時 Claude 用 `--dangerously-skip-permissions`、Codex 用 `workspace-write`、Cursor 用 `--force`、Copilot 用 `--allow-all-tools`;關閉時只能讀取(Cursor 用 `--mode ask`,Copilot 只提供 `view/glob/grep`) |
 | 自訂指令     | 提示詞從 stdin 送入、stdout 當作回覆,可用 `{model}`、`{effort}` 佔位,例如 `gemini -m {model} -p -`                                        |
 
 主持人在「設定」區選擇,負責分工與總結。
@@ -193,6 +198,8 @@ CLI、模型或金鑰。套用後又改過設定時,按鈕會標出「已修改�
   `upgrade`(已退役)的模型。
 - Cursor CLI:執行 `cursor-agent --list-models`,每 10 分鐘更新一次。Cursor
   的強度寫在模型名稱裡(例如 `claude-opus-5-thinking-high`),所以不另外選強度。
+- GitHub Copilot CLI:提供 `Auto`,由 CLI 選擇模型;也可選「其他(手動輸入)」填入
+  Copilot 支援的模型 ID。不自動抓取模型清單;手動設定強度時須確認該模型支援。
 - 讀取結果依檔案修改時間快取,檔案沒變不重讀;每次打開成員編輯視窗都會重抓,CLI
   更新快取後不用重開 app。
 - 讀不到快取時使用內建清單,編輯視窗會標示。
@@ -206,7 +213,7 @@ MB,驗證在主程序進行(副檔名與檔案內容都會檢查)。
 附件存在 app 的資料夾,不會寫進工作目錄。依成員能力決定怎麼給:
 
 - 本機 CLI:給檔案路徑,由 CLI 自己讀。讀取範圍受限的 CLI(Claude Code、Gemini
-  CLI)會在工作目錄的 `.roundtable-runtime/` 放一份暫存副本,任務結束、停止或關閉
+  CLI、GitHub Copilot CLI)會在工作目錄的 `.roundtable-runtime/` 放一份暫存副本,任務結束、停止或關閉
   app 時刪除。
 - API:文字檔直接內嵌;宣告支援圖片的端點會附上圖片,被拒收時自動改用純文字重送。PDF
   只提供給能讀檔的 CLI,API 成員會被告知無法讀取。
@@ -214,7 +221,7 @@ MB,驗證在主程序進行(副檔名與檔案內容都會檢查)。
 ## 記憶方式
 
 Claude 以 `--resume <session_id>`、Codex 以
-`codex exec resume <thread_id>`、Cursor 以 `--resume <chatId>`
+`codex exec resume <thread_id>`、Cursor 以 `--resume <chatId>`、Copilot 以 `--resume <session_id>`
 續接,所以後續回合只送「新訊息」,省 token。OpenAI 相容 API 在 app
 記憶體中保留對話歷史。自訂指令沒有
 session,每次都會送完整對話紀錄,長度受「對話紀錄上限」限制。
@@ -228,8 +235,11 @@ CLI 的 session
 
 「允許修改檔案與執行指令」開啟時,Claude Code 會以
 `--dangerously-skip-permissions` 執行,Codex 會以 `workspace-write`
-沙箱且不詢問確認執行,Cursor CLI 會以 `--force` 自動核准指令。AI
+沙箱且不詢問確認執行,Cursor CLI 會以 `--force`、Copilot 會以 `--allow-all-tools` 自動核准工具。AI
 可以在工作目錄內建立、修改、刪除檔案並執行指令。
+
+Copilot 關閉改檔時只提供 `view/glob/grep`,拒絕寫入與 shell 工具,並停用內建 MCP。
+這是 CLI 工具權限控制,不是作業系統沙箱;開啟改檔後,指令仍可能影響工作目錄之外的檔案。
 
 - 工作目錄請使用獨立資料夾,不要指到重要專案或家目錄。
 - API key 在擴充編輯器填入時,以作業系統安全儲存(macOS 鑰匙圈)加密後存在
@@ -239,6 +249,8 @@ CLI 的 session
 - 只想看討論時,關閉該選項或使用「只討論,不執行」模式。
 
 ## 注意
+
+- Copilot 的原始用量會保留,目前 token 與費用統計標為未知;CLI 的 `cost` 是計費倍率,不是美元。
 
 - 各 CLI
   都用你現有的登入與訂閱額度,多回合討論會消耗較快。建議討論用較便宜的模型與較低強度,執行階段再用高強度;只需要某位成員處理時用

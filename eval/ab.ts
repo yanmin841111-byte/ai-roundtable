@@ -45,6 +45,9 @@ const REVIEWER_CLI = process.env.EVAL_REVIEWER_CLI || CLI;
 const REVIEWER_MODEL = process.env.EVAL_REVIEWER_MODEL ?? (process.env.EVAL_REVIEWER_CLI ? '' : MODEL);
 const REVIEWER_ADAPTER = process.env.EVAL_REVIEWER_ADAPTER ?? (process.env.EVAL_REVIEWER_CLI ? '' : ADAPTER);
 const EXECUTOR = '執行者';
+// team-* 條件的兩位成員(內建 CLI,用各自的預設模型);奇數次甲是第一個,偶數次對調
+const TEAM = (process.env.EVAL_TEAM || 'claude,codex').split(',').map((item) => item.trim()).filter(Boolean);
+const TEAM_NAMES = ['成員甲', '成員乙'];
 
 interface AbRun {
   failedTests?: string[];
@@ -54,6 +57,8 @@ interface AbRun {
   correlation?: ReturnType<typeof failureSimilarity>;
   budget?: { target: number | null; tokens: number | null; attempts: number; stop: string };
   evidenceId?: string;
+  // team-* 條件:這一次成員甲、乙各是哪個 CLI
+  team?: string[];
   pass: number;
   total: number;
   // 改錯題的起點分數:任務開始前那份程式本來就過了幾項。
@@ -81,6 +86,26 @@ interface RunOptions {
   verifyCommand?: string;
   evidenceCondition?: string;
   capture?: (workDir: string, run: AbRun) => Promise<void>;
+  team?: ReturnType<typeof teamSetup>;
+}
+
+export function teamSetup(task: AbTask, cond: Condition, n: number) {
+  if (!task.parts) throw new Error(`${task.id} has no parts to divide`);
+  if (TEAM.length !== 2) throw new Error('EVAL_TEAM must name exactly two CLIs');
+  const clis = n % 2 ? TEAM : [TEAM[1], TEAM[0]];
+  const persona = '務實的工程師。先讀懂需求與既有程式,再動手;審查時逐條對照需求,實際讀檔確認。';
+  const workers = clis.map((cli, i) => {
+    const files = cond === 'team-solo' ? task.reference : i === 0 ? { [task.entry]: task.reference[task.entry] } : Object.fromEntries(Object.entries(task.reference).filter(([file]) => file !== task.entry));
+    // scripted:不呼叫模型的煩霧測試,寫出參考解
+    if (cli === 'scripted') return { ...scriptedMember({ id: `w${i + 1}`, name: TEAM_NAMES[i], canEdit: true, writes: cond === 'team-solo' && i ? {} : files, report: '完成', delayMs: 1000 }), cli: 'custom' };
+    return { id: `w${i + 1}`, name: TEAM_NAMES[i], cli, model: '', persona, canEdit: true };
+  });
+  const assignments = cond === 'team-solo'
+    ? [{ agent: TEAM_NAMES[0], task: task.task }]
+    : task.parts.map((part, i) => ({ agent: TEAM_NAMES[i], task: `${task.task}\n\n${part}` }));
+  const lead = scriptedMember({ id: 'lead', name: '主持人', plan: { summary: task.asks, assignments }, review: '看過了,沒有問題。\n[NO_ISSUES]' });
+  // 主持人排最後:只有一份成果時,審查者會是另一位真的成員
+  return { members: [...workers, lead], mode: cond === 'team-relay' ? 'relay' : 'divide', workers: assignments.map((a) => a.agent), clis };
 }
 
 export async function runOnce(task: AbTask, cond: Condition, n: number, commit: string, launch: typeof runApp = runApp, options: RunOptions = {}): Promise<AbRun> {
@@ -93,27 +118,30 @@ export async function runOnce(task: AbTask, cond: Condition, n: number, commit: 
   const executor = { id: 'exec', name: EXECUTOR, cli: CLI, model: MODEL, effort: EFFORT, persona: '務實的工程師。先讀懂需求與既有程式,再動手。', canEdit: true };
   const reviewer = { id: 'rev', name: '審查者', cli: REVIEWER_CLI, model: REVIEWER_MODEL, persona: '仔細的審查者。逐條對照需求,實際讀檔確認。', canEdit: false };
   // 審查者由流程挑選:候選人依成員順序,真的審查者要排在主持人前面才會被選到
-  const members = cond === 'solo' ? [lead, executor] : [reviewer, lead, executor];
+  const members = options.team ? options.team.members : cond === 'solo' ? [lead, executor] : [reviewer, lead, executor];
   const r = await launch({
     members,
-    adapters: [...new Set([ADAPTER, cond !== 'solo' ? REVIEWER_ADAPTER : ''].filter(Boolean))].map((a) => `installed:${a}`),
+    adapters: options.team ? [] : [...new Set([ADAPTER, cond !== 'solo' ? REVIEWER_ADAPTER : ''].filter(Boolean))].map((a) => `installed:${a}`),
     files: task.files,
     git: true,
     settings: { leadAgentId: 'lead', maxRounds: options.rounds ?? (cond === 'independent-first' ? 2 : 1), discussionMode: cond === 'independent-first' ? 'independent-first' : 'sequential', verifyCommand: options.verifyCommand || '' },
-    constants: { task: task.task, executor: EXECUTOR, keepEvidence: !!process.env.EVAL_EVIDENCE_DIR },
+    constants: { task: task.task, workers: options.team ? options.team.workers : [EXECUTOR], mode: options.team ? options.team.mode : 'divide', keepEvidence: !!process.env.EVAL_EVIDENCE_DIR },
     timeoutMs: 40 * 60 * 1000,
     scenario: async (H: any) => {
       const g: any = globalThis;
       await g.ready();
-      const msgs = await g.send(H.task, 'divide');
+      const msgs = await g.send(H.task, H.mode);
       const turns = msgs.filter((m: any) => m.kind === 'agent' && m.usage);
       const measured = msgs.filter((m: any) => m.kind === 'agent' && m.cli !== 'custom');
       const sum = (k: string) => turns.reduce((s: number, m: any) => s + (Number(m.usage[k]) || 0), 0);
-      const exec = msgs.find((m: any) => m.kind === 'agent' && m.agentName === H.executor && m.phase && m.phase.code === 'execute');
+      const execFailed = H.workers.some((name: string) => {
+        const exec = msgs.find((m: any) => m.kind === 'agent' && m.agentName === name && m.phase && m.phase.code === 'execute');
+        return !exec || !!exec.error;
+      });
       return {
         evidenceTranscript: H.keepEvidence ? msgs : null,
         transcript: msgs.map((m: any) => ({ who: m.agentName || m.kind, phase: m.phase && m.phase.code, tag: m.tag, error: m.error || null, text: String(m.text || '').slice(0, 1500), activities: (m.activities || []).map((a: any) => a.title) })),
-        execError: !exec || !!exec.error,
+        execError: execFailed,
         repaired: msgs.some((m: any) => m.kind === 'agent' && m.phase && m.phase.code === 'repair'),
         inputTokens: sum('inputTokens'),
         outputTokens: sum('outputTokens'),
@@ -157,8 +185,8 @@ export async function runOnce(task: AbTask, cond: Condition, n: number, commit: 
       run.evidenceId = saveReportEvidence(process.env.EVAL_EVIDENCE_DIR, r.workDir, {
         task: task.id, condition: options.evidenceCondition || cond, commit, originalFiles: task.files || {},
         transcript: v.evidenceTranscript || null, run: { ...run, score },
-        model: { cli: CLI, model: MODEL, effort: EFFORT },
-        reviewer: { cli: REVIEWER_CLI, model: REVIEWER_MODEL },
+        model: options.team ? { cli: options.team.clis.join(','), model: '', effort: '' } : { cli: CLI, model: MODEL, effort: EFFORT },
+        reviewer: options.team ? { cli: 'team-cross-review', model: '' } : { cli: REVIEWER_CLI, model: REVIEWER_MODEL },
         ...(!r.ok ? { diagnostics: {
           error: r.error || null, exitCode: r.exitCode, exitSignal: r.exitSignal || null,
           timedOut: r.timedOut, stdout: r.stdout, stderr: r.stderr,
@@ -171,7 +199,7 @@ export async function runOnce(task: AbTask, cond: Condition, n: number, commit: 
   const tokens = run.inputTokens + run.outputTokens ? ` · token ${run.inputTokens}/${run.outputTokens}` : '';
   // 改錯題只看分數看不出是修好還是弄壞,所以把起點與變化量一起印出來
   const delta = run.base !== undefined && !error ? `(起點 ${run.base},${run.pass - run.base >= 0 ? '+' : ''}${run.pass - run.base})` : '';
-  console.log(`  ${task.id} ${cond === 'solo' ? '單人' : '圓桌'} #${n}:${error ? `沒跑完(${r.error})` : `${run.pass}/${run.total}${delta}`}`
+  console.log(`  ${task.id} ${cond === 'solo' ? '單人' : cond === 'roundtable' ? '圓桌' : cond}${options.team ? `(甲 ${options.team.clis[0]})` : ''} #${n}:${error ? `沒跑完(${r.error})` : `${run.pass}/${run.total}${delta}`}`
     + `${run.execFailed ? ' · 執行回合失敗' : ''}${cond === 'roundtable' ? ` · 修復:${run.repaired ? '是' : '否'}` : ''} · ${run.seconds}s${tokens}${score.error ? ` · 測試:${score.error}` : ''}${score.missing ? ` · 檔案不存在:${task.entry}` : ''}${score.loadError ? ` · 載入失敗:${score.loadError}` : ''}`);
   return run;
 }
@@ -224,6 +252,10 @@ export async function runCondition(task: AbTask, condition: Condition, repetitio
   const startedAt = Date.now();
   if (condition === 'solo' || condition === 'roundtable' || condition === 'independent-first') {
     return runOnce(task, condition, repetition, commit, launch, options);
+  }
+  if (condition.startsWith('team-')) {
+    const team = teamSetup(task, condition, repetition);
+    return { ...(await runOnce(task, condition, repetition, commit, launch, { ...options, team })), team: team.clis };
   }
   if (!process.env.EVAL_EVIDENCE_DIR) throw new Error('Candidate conditions require EVAL_EVIDENCE_DIR to retain every output');
   if (condition === 'solo-budget' && options.tokenBudget === undefined) throw new Error('solo-budget requires --token-budget');
@@ -310,7 +342,7 @@ function localDate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function currentCommit(): string {
+export function currentCommit(): string {
   try {
     const git = (...a: string[]) => execFileSync('git', a, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
     const commit = git('rev-parse', 'HEAD');
@@ -345,9 +377,10 @@ async function main() {
   // 預設跑難題組:基本題對 27B 本機模型太容易,兩邊都接近滿分,量不出差別
   const set = arg('set') || 'hard';
   const tasks = only.length ? AB_TASKS.filter((t) => only.includes(t.id)) : set === 'all' ? AB_TASKS : AB_TASKS.filter((t) => t.set === set);
-  if (!tasks.length) throw new Error(`沒有題目(--set 可用 hard、basic、all)`);
+  if (!tasks.length) throw new Error(`沒有題目(--set 可用 hard、basic、split、all)`);
   // --conditions solo:只跑單人,用來校準題目難度(正式實驗前先確認單人大約一半做得對)
   const conditions = parseConditions(arg('conditions') ?? 'solo,roundtable');
+  if (conditions.some((condition) => condition.startsWith('team-')) && tasks.some((task) => !task.parts)) throw new Error('team-* conditions need tasks with parts (--set split)');
   const options: ExperimentOptions = {
     candidates: positiveInteger(arg('candidates') ?? 4, 'candidates'),
     rounds: positiveInteger(arg('rounds') ?? 2, 'rounds'),
@@ -360,6 +393,7 @@ async function main() {
     version: 2, conditions, options, tasks: tasks.map((task) => task.id), runs,
     model: { cli: CLI, model: MODEL, adapter: ADAPTER, effort: EFFORT },
     reviewer: { cli: REVIEWER_CLI, model: REVIEWER_MODEL, adapter: REVIEWER_ADAPTER },
+    ...(conditions.some((condition) => condition.startsWith('team-')) ? { team: { clis: TEAM, rotation: 'odd repetitions first-listed CLI is 成員甲; even repetitions swapped' } } : {}),
     candidatePolicy: 'original-files; stable-public-gates; strict-improvement; earliest-tie; hidden-tests-not-used',
     correlation: 'mean pairwise failure-set Jaccard; both-empty excluded and counted; unavailable excluded and counted',
   };

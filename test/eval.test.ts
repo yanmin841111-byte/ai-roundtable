@@ -201,6 +201,23 @@ test('候選評測整合:隔離原始檔、公開後整合、預算只按公開�
   }
 });
 
+test('團隊條件:單人只派給成員甲、分工與接力各派一段;成員模型逐次對調;接力用 relay 模式', () => {
+  const { teamSetup } = require('../eval/ab');
+  const { AB_TASKS } = require('../eval/ab-tasks');
+  const task = AB_TASKS.find((t: any) => t.id === 'ledger');
+  const plan = (setup: any) => JSON.parse(Buffer.from(setup.members.find((m: any) => m.id === 'lead').customCommand.split(' ').pop(), 'base64').toString('utf8')).plan;
+  const solo = teamSetup(task, 'team-solo', 1);
+  assert.deepStrictEqual(solo.clis, ['claude', 'codex']);
+  assert.deepStrictEqual(plan(solo).assignments.map((a: any) => a.agent), ['成員甲']);
+  assert.strictEqual(solo.members[solo.members.length - 1].id, 'lead', '主持人排最後,單人時才會由另一位真成員審查');
+  const split = teamSetup(task, 'team-split', 2);
+  assert.deepStrictEqual(split.clis, ['codex', 'claude']);
+  assert.strictEqual(split.mode, 'divide');
+  assert.deepStrictEqual(plan(split).assignments.map((a: any, i: number) => [a.agent, a.task.endsWith(task.parts[i])]), [['成員甲', true], ['成員乙', true]]);
+  assert.strictEqual(teamSetup(task, 'team-relay', 1).mode, 'relay');
+  assert.throws(() => teamSetup({ ...task, parts: undefined }, 'team-split', 1), /parts/);
+});
+
 test('評測 CLI:預覽不啟動 app,未知參數、無效次數與未核准實驗拒絕', () => {
   const { spawnSync } = require('child_process');
   const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', path.resolve(__dirname, '../eval/ab.ts'), ...args], { encoding: 'utf8' });

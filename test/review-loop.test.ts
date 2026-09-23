@@ -540,6 +540,47 @@ test('測試先行:實作回合真的鎖住剛寫好的測試檔', async () => {
   assert.deepStrictEqual(exec.lockedPaths, ['add.test.js'], '實作回合要把測試檔傳進工具層鎖起來');
 });
 
+test('接力:照順序在同一個目錄一棒接一棒,後一棒看得到前一棒的檔案與交接', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, mode: 'relay' },
+    { id: 'alice', name: 'Alice', api: true, task: '寫規格 spec.txt', writes: { 'spec.txt': 'add(a,b)\n' } },
+    { id: 'bob', name: 'Bob', api: true, task: '照規格實作 add.js', expectFiles: { 'spec.txt': 'add(a,b)\n' }, writes: { 'add.js': 'exports.add = (a, b) => a + b;\n' } },
+  ]);
+  assert.deepStrictEqual(r.turns.filter((t) => t.phase === 'execute').map((t) => t.who), ['Alice', 'Bob']);
+  const bobPrompt = r.prompts['Bob'].find((p: string) => /【執行】/.test(p)) || '';
+  assert.match(bobPrompt, /接力的第 2\/2 棒/);
+  assert.match(bobPrompt, /第 1 棒:Alice[\s\S]*寫規格 spec\.txt[\s\S]*完成/, '交接要帶前一棒的工作與回報');
+  assert.doesNotMatch(r.prompts['Alice'].find((p: string) => /【執行】/.test(p)) || '', /前面各棒的交接/);
+  assert.ok(!r.orc.messages.some((m: any) => /隔離目錄/.test(m.text)), '接力不開隔離目錄');
+  assert.strictEqual(r.read('spec.txt'), 'add(a,b)\n');
+  assert.strictEqual(r.read('add.js'), 'exports.add = (a, b) => a + b;\n');
+  assert.deepStrictEqual(r.outcome, { Alice: 'approved', Bob: 'approved' });
+  assert.ok(r.orc.messages.some((m: any) => m.tag === 'plan' && /1\. \*\*Alice\*\*[\s\S]*2\. \*\*Bob\*\*/.test(m.text)), '分工卡照棒次編號');
+});
+
+test('接力:某一棒失敗就停,後面的不在壞掉的基礎上繼續', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, mode: 'relay' },
+    { id: 'alice', name: 'Alice', task: '寫規格', execError: 'CLI 沒有安裝' },
+    { id: 'bob', name: 'Bob', task: '照規格實作' },
+  ]);
+  assert.deepStrictEqual(r.turns.filter((t) => t.phase === 'execute').map((t) => t.who), ['Alice']);
+  assert.ok(r.orc.messages.some((m: any) => m.level === 'warn' && /接力停在 Alice[\s\S]*2\. \*\*Bob\*\*/.test(m.text)));
+  assert.deepStrictEqual(r.outcome, { Alice: 'failed', Bob: 'failed' });
+  assert.match(r.summaryPrompt, /此工作尚未執行:照規格實作/);
+});
+
+test('接力修改同一檔案不是平行衝突,CLI 中途失敗的改動仍送審', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, mode: 'relay' },
+    { id: 'alice', name: 'Alice', task: '建立規格', writes: { 'spec.txt': 'first\n' } },
+    { id: 'bob', name: 'Bob', task: '修改規格', expectFiles: { 'spec.txt': 'first\n' }, writes: { 'spec.txt': 'second\n' }, execError: 'interrupted after writing' },
+  ]);
+  assert.strictEqual(r.read('spec.txt'), 'second\n');
+  assert.ok(r.reviews.some((message: any) => message.review.target === 'Bob'));
+  assert.ok(!r.orc.messages.some((message: any) => message.tag === 'conflict'));
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

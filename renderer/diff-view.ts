@@ -12,6 +12,7 @@ import type { DiffFile } from './api';
 const diffExpanded = new Set<string>();
 // 從審查訊息點檔名打開時,要展開並捲到的那個檔案
 let diffFocus: string | null = null;
+let diffRequest = 0;
 
 export async function openDiff(focus?: string): Promise<void> {
   diffFocus = focus || null;
@@ -20,6 +21,8 @@ export async function openDiff(focus?: string): Promise<void> {
 }
 
 export async function loadDiff(): Promise<void> {
+  const request = ++diffRequest;
+  const owner = window.api.jobs.current();
   const body = $<HTMLDivElement>('#diff-body');
   const summary = $<HTMLDivElement>('#diff-summary');
   const refresh = $<HTMLButtonElement>('#diff-refresh');
@@ -28,6 +31,7 @@ export async function loadDiff(): Promise<void> {
   body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.loading'))}</div>`;
   try {
     const result = await window.api.getDiff();
+    if (request !== diffRequest || owner !== window.api.jobs.current()) return;
     if (!result.ok) {
       // git 本身不能用,和「這個資料夾不是 repo」是兩件事:叫使用者 git init 沒有用,
       // 要修的是 git。照實說一句,再給一行可以直接在內建終端執行的修復指令。
@@ -50,10 +54,13 @@ export async function loadDiff(): Promise<void> {
     }
     renderDiff(result.files, result.dir, result.totalFiles, result.prefix || '', result.source === 'task' ? result.since : undefined);
   } catch (error) {
+    if (request !== diffRequest || owner !== window.api.jobs.current()) return;
     body.innerHTML = `<div class="diff-empty">${escapeHtml(t('diff.failed') + '\n' + cleanIpcError(error))}</div>`;
   } finally {
-    refresh.disabled = false;
-    diffFocus = null; // 只作用一次;之後按 ↻ 不該又跳回那個檔案
+    if (request === diffRequest) {
+      refresh.disabled = false;
+      diffFocus = null;
+    }
   }
 }
 

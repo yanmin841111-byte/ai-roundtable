@@ -3,7 +3,7 @@
 # AI Roundtable
 
 A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI,
-Cursor CLI, or any custom command) at one table to discuss a task, divide the
+Cursor CLI, GitHub Copilot CLI, or any custom command) at one table to discuss a task, divide the
 work, execute it, and review each other.
 
 > Members debate a task, split the work, execute in parallel, and review each
@@ -14,7 +14,7 @@ work, execute it, and review each other.
 
 ## Features
 
-- **Several AIs at one table**: Claude Code, Codex CLI and Cursor CLI are built
+- **Several AIs at one table**: Claude Code, Codex CLI, Cursor CLI and GitHub Copilot CLI are built
   in; Grok, Kimi, DeepSeek, Gemini, OpenRouter, Ollama and more can be added
   from templates in one click.
 - **Extensible**: describe any CLI or OpenAI-compatible API in JSON, or write a
@@ -95,8 +95,9 @@ passing proves that particular check now passes, not that every requirement is m
 - Node.js 20.6.0 or newer (development and CI use Node.js 22)
 - At least one AI source:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
-    [Codex CLI](https://github.com/openai/codex) or
-    [Cursor CLI](https://cursor.com/cli) (`cursor-agent`), installed and logged
+    [Codex CLI](https://github.com/openai/codex),
+    [Cursor CLI](https://cursor.com/cli) (`cursor-agent`) or
+    [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) (`copilot`), installed and logged
     in
   - or any other CLI / API through an extension
 
@@ -206,15 +207,22 @@ Click a member card in the sidebar to edit it:
 
 | Field                | Description                                                                                                                                                     |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AI CLI               | Built-in Claude Code, Codex CLI, Cursor CLI, custom command, or an extension you added                                                                          |
+| AI CLI               | Built-in Claude Code, Codex CLI, Cursor CLI, GitHub Copilot CLI, custom command, or an extension you added                                                                          |
 | Model / version      | Read from each CLI's local model cache; only current, non-retired models are listed. Choose "Other" to type any model name                                      |
 | Effort               | Options depend on the model; unsupported levels are lowered to the nearest supported one or skipped, and noted in the conversation                              |
 | Role and personality | Goes into the system prompt and sets the member's stance and tone                                                                                               |
-| Allow editing files  | When on, Claude runs with `--dangerously-skip-permissions`, Codex with `workspace-write`, Cursor with `--force`; when off, read-only (Cursor uses `--mode ask`) |
+| Allow editing files  | When on, Claude runs with `--dangerously-skip-permissions`, Codex with `workspace-write`, Cursor with `--force`, Copilot with `--allow-all-tools`; when off, read-only (Cursor uses `--mode ask`, Copilot exposes only `view/glob/grep`) |
 | Custom command       | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -`                                         |
 
 The lead is chosen in Settings and is responsible for dividing the work and
 summarizing.
+
+For GitHub Copilot CLI, follow the official install guide, run `copilot login`, then
+choose "GitHub Copilot CLI" in "Add member → AI CLI". This uses the standalone
+`copilot` command, not the legacy `gh copilot` extension. Version detection only
+confirms installation; authentication or quota failures are reported when a task runs.
+Raw Copilot usage is retained, but token and cost totals are currently unknown:
+the CLI's `cost` field is a billing multiplier, not USD.
 
 **Project conventions**: `CLAUDE.md` or `AGENTS.md` in the working directory
 (the first one found) is added to every member's system prompt, so you do not
@@ -269,6 +277,9 @@ Model list logic lives in `src/models.ts`; aliases and effort rules in
 - Cursor CLI: runs `cursor-agent --list-models`, refreshed every 10 minutes.
   Cursor encodes effort in the model name (e.g. `claude-opus-5-thinking-high`),
   so there is no separate effort setting.
+- GitHub Copilot CLI: offers `Auto`, letting the CLI select a model, or "Other"
+  to enter a supported model ID. There is no automatic model discovery; manually
+  selected effort levels must be supported by that model.
 - Results are cached by file modification time and not re-read while the file is
   unchanged; the member editor re-fetches every time it opens, so an updated CLI
   cache is picked up without restarting.
@@ -285,7 +296,7 @@ Attachments are stored in the app's data folder, never in the working directory.
 How they reach a member depends on its capabilities:
 
 - Local CLIs get the file path and read it themselves. CLIs with a restricted
-  read scope (Claude Code, Gemini CLI) get a temporary copy under
+  read scope (Claude Code, Gemini CLI, GitHub Copilot CLI) get a temporary copy under
   `.roundtable-runtime/` in the working directory, removed when the task ends,
   is stopped, or the app quits.
 - APIs get text files inline; endpoints that declare image support get images
@@ -295,7 +306,8 @@ How they reach a member depends on its capabilities:
 ## Memory
 
 Claude resumes with `--resume <session_id>`, Codex with
-`codex exec resume <thread_id>`, Cursor with `--resume <chatId>`, so later turns
+`codex exec resume <thread_id>`, Cursor with `--resume <chatId>`, and Copilot with
+`--resume <session_id>`, so later turns
 send only the new messages and save tokens. OpenAI-compatible APIs keep the
 conversation history in app memory. Custom commands have no session, so they get
 the full transcript every turn, capped by "Transcript limit".
@@ -312,9 +324,13 @@ have full Node.js access. Only install extensions you trust.
 
 With "Allow editing files and running commands" on, Claude Code runs with
 `--dangerously-skip-permissions`, Codex runs in the `workspace-write` sandbox
-without confirmation prompts, and Cursor CLI auto-approves commands with
-`--force`. The AI can create, modify and delete files and run commands inside
+without confirmation prompts, Cursor CLI auto-approves commands with
+`--force`, and Copilot uses `--allow-all-tools`. The AI can create, modify and delete files and run commands inside
 the working directory.
+
+With editing off, Copilot exposes only `view/glob/grep`, denies write and shell
+tools, and disables built-in MCPs. This is CLI tool permission control, not an OS
+sandbox; with editing enabled, commands can still affect files outside the working directory.
 
 - Use a dedicated folder as the working directory; do not point it at an
   important project or your home directory.

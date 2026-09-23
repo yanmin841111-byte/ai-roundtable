@@ -15,6 +15,8 @@ export async function revertTask(button: HTMLButtonElement, scope: 'task' | 'rep
     const message = r.ok && !r.skipped.length
       ? t(scope === 'repair' ? 'task.revertFixDone' : 'task.revertDone', { restored: r.restored, deleted: r.deleted })
       : r.reason === 'running' ? t('task.revertRunning')
+        : r.reason === 'busy' ? t('task.revertBusy')
+        : r.reason === 'stale' ? t('task.revertStale')
         : r.reason === 'no-baseline' ? t('task.revertNoBaseline')
           : t('task.revertPartly', { restored: r.restored, deleted: r.deleted, list: [...r.skipped, ...r.failed.map((f) => f.file)].join('、') });
     alert(message);

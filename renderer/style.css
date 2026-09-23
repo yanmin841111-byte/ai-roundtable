@@ -504,6 +504,26 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .history-item:hover .history-delete, .history-delete:focus { opacity: 1; }
 .history-delete:hover { color: var(--danger); background: var(--danger-soft); }
 .history-item-error { grid-column: 1 / -1; padding: 5px 8px; }
+.job-list { display: flex; flex-direction: column; gap: 2px; }
+.job-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; border-radius: 8px; overflow: hidden; }
+.job-item:hover { background: var(--hover); }
+.job-item.active { background: var(--panel); box-shadow: var(--shadow-sm); }
+.job-item.active .job-title { font-weight: 600; }
+.job-open { min-width: 0; border: none; border-radius: 0; background: transparent; padding: 6px 8px; text-align: left; display: flex; flex-direction: column; gap: 1px; }
+.job-open:hover { background: transparent; }
+.job-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; color: var(--text); }
+.job-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.job-dot.running { background: var(--accent); }
+.job-dot.queued, .job-dot.waiting { background: var(--warn); }
+.job-dot.done { background: var(--ok); }
+.job-dot.error { background: var(--danger); }
+.job-unread { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; }
+.job-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--muted); }
+.job-close { align-self: stretch; border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 0; opacity: 0; }
+.job-item:hover .job-close, .job-close:focus { opacity: 1; }
+.job-close:hover { color: var(--danger); background: var(--danger-soft); }
+.job-queue-note { margin: 0 0 8px; padding: 7px 11px; font-size: 12px; color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-border); border-radius: 8px; }
 .history-modal-card { height: min(780px, 88vh); display: flex; flex-direction: column; }
 .history-modal-meta { padding: 8px 18px; color: var(--muted); font-size: 11.5px; border-bottom: 1px solid var(--border); }
 .history-preview { flex: 1; max-height: none; padding: 18px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }

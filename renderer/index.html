@@ -20,6 +20,11 @@
 
       <div class="side-scroll">
         <div class="side-section">
+          <div class="side-head"><span data-i18n="side.jobs">任務</span><button id="job-new" class="ghost small" data-i18n="jobs.new" data-i18n-title="jobs.newTitle" title="開一件新任務">+ 新任務</button></div>
+          <div id="job-list" class="job-list"></div>
+        </div>
+
+        <div class="side-section">
           <div class="side-head"><span data-i18n="side.members">成員</span><div class="row"><button id="lineup-btn" class="ghost small lineup-btn" aria-haspopup="true" aria-expanded="false" aria-controls="lineup-menu">陣容</button><button id="add-agent" class="ghost small" data-i18n="side.add">+ 新增</button></div></div>
           <div id="lineup-menu" class="lineup-menu" hidden></div>
           <div id="lineup-note" class="lineup-note" role="status" hidden></div>
@@ -73,12 +78,14 @@
       </section>
 
       <footer id="composer">
+        <div id="job-queue-note" class="job-queue-note" role="status" hidden></div>
         <div class="composer-box">
           <div id="mention-menu" class="mention-menu" role="listbox" data-i18n-aria-label="composer.mentionMenu" aria-label="指定成員" hidden></div>
           <textarea id="input" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="描述任務,或輸入 @ 指定成員處理…(Enter 送出,Shift+Enter 換行)" aria-autocomplete="list" aria-controls="mention-menu"></textarea>
           <div class="composer-bar">
             <select id="mode" data-i18n-aria-label="settings.defaultMode">
-              <option value="divide" data-i18n="composer.mode.divide">分工與審查</option>
+              <option value="divide" data-i18n="composer.mode.divide">平行分工</option>
+              <option value="relay" data-i18n="composer.mode.relay">接力</option>
               <option value="tdd" data-i18n="composer.mode.tdd">測試先行</option>
               <option value="discuss" data-i18n="composer.mode.discuss">只討論</option>
             </select>
@@ -166,7 +173,8 @@
               <div class="setting">
                 <div class="setting-label"><b data-i18n="settings.defaultMode">預設流程</b><span data-i18n="settings.defaultModeDesc">「分工執行」會實際建立與修改工作目錄裡的檔案,並互相審查;「只討論」不碰任何檔案。與輸入框旁的選單同步。</span></div>
                 <select id="default-mode">
-                  <option value="divide" data-i18n="mode.divide">討論 → 分工執行 → 交叉審查</option>
+                  <option value="divide" data-i18n="mode.divide">討論 → 平行分工 → 合併 → 交叉審查</option>
+                  <option value="relay" data-i18n="mode.relay">討論 → 接力(一棒接一棒) → 交叉審查</option>
                   <option value="tdd" data-i18n="mode.tdd">討論 → 寫測試 → 實作 → 交叉審查</option>
                   <option value="discuss" data-i18n="mode.discuss">只討論,不執行</option>
                 </select>
@@ -175,6 +183,10 @@
                 <div class="setting-label"><b data-i18n="settings.maxTranscript">對話紀錄上限(字元)</b><span data-i18n="settings.maxTranscriptDesc">不支援續接的成員每回合重送紀錄的長度上限</span></div>
                 <input id="max-transcript" type="number" min="0" step="10000" />
               </div>
+            </div>
+            <div class="setting">
+              <div class="setting-label"><b data-i18n="settings.maxParallel">同時進行的任務</b><span data-i18n="settings.maxParallelDesc">不同專案的任務會同時進行;同一個專案、或用同一台本機模型的任務會排隊</span></div>
+              <input id="max-parallel" type="number" min="1" max="6" />
             </div>
             <div class="setting">
               <div class="setting-label"><b data-i18n="settings.verifyCommand">驗證指令</b><span data-i18n="settings.verifyCommandDesc">執行與修復之後,app 會在工作目錄跑這個指令(例如 npm test),結果交給審查者,失敗就一定要修。留空只做內建的語法檢查。</span></div>
@@ -200,7 +212,7 @@
               </div>
             </div>
             <div class="page-actions">
-              <span class="hint" data-i18n="settings.clisHint">內建 Claude Code、Codex CLI、Cursor CLI;其他 AI 可用擴充接入。點擊擴充即可編輯。</span>
+              <span class="hint" data-i18n="settings.clisHint">內建 Claude Code、Codex CLI、Cursor CLI、GitHub Copilot CLI;其他 AI 可用擴充接入。點擊擴充即可編輯。</span>
               <div class="spacer"></div>
               <button id="ext-add" class="primary small" data-i18n="settings.extAdd" data-i18n-title="settings.extAddTitle" title="從範本新增 CLI 或 API">+ 新增</button>
               <button id="ext-reload" class="ghost small" data-i18n="settings.extReload" data-i18n-title="settings.extReloadTitle" title="重新載入擴充並重新檢查">↻ 重新載入</button>
