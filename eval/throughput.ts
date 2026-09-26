@@ -61,9 +61,10 @@ const toAgent = (member: HarnessMember, index: number) => ({
 });
 
 function members(task: AbTask, cli: string): HarnessMember[] {
+  const [name, model = ''] = cli.split(':');
   const executor: HarnessMember = cli === 'scripted'
     ? scriptedMember({ id: 'exec', name: '執行者', canEdit: true, writes: task.reference, report: '完成', delayMs: 3000 })
-    : { id: 'exec', name: '執行者', cli, model: '', persona: '務實的工程師。先讀懂需求與既有程式,再動手。', canEdit: true };
+    : { id: 'exec', name: '執行者', cli: name, model, persona: '務實的工程師。先讀懂需求與既有程式,再動手。', canEdit: true };
   return [
     scriptedMember({ id: 'lead', name: '主持人', plan: { summary: task.asks, assignments: [{ agent: '執行者', task: task.task }] }, review: '看過了,沒有問題。\n[NO_ISSUES]' }),
     executor,

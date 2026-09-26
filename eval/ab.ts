@@ -45,7 +45,7 @@ const REVIEWER_CLI = process.env.EVAL_REVIEWER_CLI || CLI;
 const REVIEWER_MODEL = process.env.EVAL_REVIEWER_MODEL ?? (process.env.EVAL_REVIEWER_CLI ? '' : MODEL);
 const REVIEWER_ADAPTER = process.env.EVAL_REVIEWER_ADAPTER ?? (process.env.EVAL_REVIEWER_CLI ? '' : ADAPTER);
 const EXECUTOR = '執行者';
-// team-* 條件的兩位成員(內建 CLI,用各自的預設模型);奇數次甲是第一個,偶數次對調
+// team-* 條件的兩位成員,寫成 cli 或 cli:模型;奇數次甲是第一個,偶數次對調
 const TEAM = (process.env.EVAL_TEAM || 'claude,codex').split(',').map((item) => item.trim()).filter(Boolean);
 const TEAM_NAMES = ['成員甲', '成員乙'];
 
@@ -98,7 +98,8 @@ export function teamSetup(task: AbTask, cond: Condition, n: number) {
     const files = cond === 'team-solo' ? task.reference : i === 0 ? { [task.entry]: task.reference[task.entry] } : Object.fromEntries(Object.entries(task.reference).filter(([file]) => file !== task.entry));
     // scripted:不呼叫模型的煩霧測試,寫出參考解
     if (cli === 'scripted') return { ...scriptedMember({ id: `w${i + 1}`, name: TEAM_NAMES[i], canEdit: true, writes: cond === 'team-solo' && i ? {} : files, report: '完成', delayMs: 1000 }), cli: 'custom' };
-    return { id: `w${i + 1}`, name: TEAM_NAMES[i], cli, model: '', persona, canEdit: true };
+    const [name, model = ''] = cli.split(':');
+    return { id: `w${i + 1}`, name: TEAM_NAMES[i], cli: name, model, persona, canEdit: true };
   });
   const assignments = cond === 'team-solo'
     ? [{ agent: TEAM_NAMES[0], task: task.task }]
