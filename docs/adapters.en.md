@@ -12,12 +12,12 @@ AI Roundtable ships with Claude Code, Codex CLI, Cursor CLI and GitHub Copilot C
 
 ## Quick start
 
-1. Bottom-left "⚙ Settings" → "CLIs & extensions" → "+ Add", then pick a template.
+1. Bottom-left "⚙ Settings" → "AI connections" → "+ Add", then pick a template.
 2. The template is copied into your extensions folder and the editor opens. Edit it and click "Save & load".
 3. When a definition is wrong, the editor and the settings page show the reason.
 4. Pick the new extension in the member editor's "AI CLI" menu.
 
-The extensions folder is `~/Library/Application Support/AI Roundtable/adapters/`, which you can open from "Settings → Data & logs". You can also add or edit files there directly and click ↻ Reload under "Settings → CLIs & extensions".
+The extensions folder is `~/Library/Application Support/AI Roundtable/adapters/`, which you can open from "Settings → Data & logs". You can also add or edit files there directly and click ↻ Reload under "Settings → AI connections".
 
 During development, the `AI_ROUNDTABLE_ADAPTERS_DIR` environment variable points the app at a different folder.
 
@@ -214,7 +214,7 @@ Every JSON event is run through all rules whose `match` applies, in order.
 | Field | Default | Description |
 | --- | --- | --- |
 | `baseUrl` | Required | API root URL |
-| `secretRef` | None | Reference written automatically after the API key is stored securely under "Settings → CLIs & extensions"; do not put the key itself here |
+| `secretRef` | None | Reference written automatically after the API key is stored securely under "Settings → AI connections"; do not put the key itself here |
 | `apiKeyEnv` | None | Environment variable holding the API key, used when nothing is stored securely |
 | `headers` | None | Extra HTTP headers |
 | `path` | `/chat/completions` | Chat endpoint |
@@ -247,7 +247,7 @@ ollama pull qwen3.8:27b-mlx
 ollama serve
 ```
 
-Then add the Ollama template under "Settings → CLIs & extensions" and select `qwen3.8:27b-mlx` in the member settings. The model list comes from `http://localhost:11434/v1/models`. If the app reports that the endpoint is unreachable, make sure `ollama serve` is running. The template sends png / jpeg / webp / gif images as OpenAI `image_url` data URIs; other attachments are handled as text.
+Then add the Ollama template under "Settings → AI connections" and select `qwen3.8:27b-mlx` in the member settings. The model list comes from `http://localhost:11434/v1/models`. If the app reports that the endpoint is unreachable, make sure `ollama serve` is running. The template sends png / jpeg / webp / gif images as OpenAI `image_url` data URIs; other attachments are handled as text.
 
 A simplified setup UI can use one backend method without exposing the endpoint or JSON. Call `registry.quickSetupOllama()` first to receive `{ models, recommendedModel }` and show only the model choice. Then call `registry.quickSetupOllama({ model })` to create or update the configuration. Its `adapterId` and `selectedModel` can be written directly into the member settings. Discovery uses the existing configuration's `baseUrl`. Updating preserves environment preferences such as endpoint, credentials, timeout, and history limit, while model capabilities, thinking behavior, and attachment support come from the latest template so stale settings cannot restore ineffective controls or disable images. A returned `name:latest` model also accepts the bare `name` as an alias; other tags are never guessed or substituted.
 
@@ -263,7 +263,7 @@ Remote API members take exactly the same path as local Ollama: the model only em
 
 ### Setting the API key
 
-Most users can enter it in the API key field under "Settings → CLIs & extensions"; the app encrypts it with the operating system's secure storage and never writes the plain text into the extension JSON. Alternatively, add to `~/.zshrc`:
+Most users can enter it in the API key field under "Settings → AI connections"; the app encrypts it with the operating system's secure storage and never writes the plain text into the extension JSON. Alternatively, add to `~/.zshrc`:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."

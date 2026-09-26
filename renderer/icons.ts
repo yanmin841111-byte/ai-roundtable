@@ -1,6 +1,6 @@
-import { createElement, ArrowUp, Check, Download, FileDiff, Folder, Pause, Play, RotateCcw, Settings, Square, SquarePen, Terminal, Paperclip, RefreshCw, ClipboardList, CircleHelp } from 'lucide';
+import { createElement, ArrowUp, Check, Cloud, Download, Ellipsis, Eye, EyeOff, FileDiff, Folder, FolderPlus, Pause, Play, RotateCcw, Settings, Square, SquarePen, Terminal, Paperclip, RefreshCw, ClipboardList, CircleHelp } from 'lucide';
 
-const icons = { send: ArrowUp, accept: Check, export: Download, diff: FileDiff, folder: Folder, pause: Pause, start: Play, revert: RotateCcw, settings: Settings, stop: Square, new: SquarePen, terminal: Terminal, attach: Paperclip, refresh: RefreshCw, result: ClipboardList, incomplete: CircleHelp };
+const icons = { send: ArrowUp, accept: Check, export: Download, diff: FileDiff, folder: Folder, folderPlus: FolderPlus, pause: Pause, start: Play, revert: RotateCcw, settings: Settings, stop: Square, new: SquarePen, terminal: Terminal, attach: Paperclip, refresh: RefreshCw, result: ClipboardList, incomplete: CircleHelp, more: Ellipsis, cloud: Cloud, show: Eye, hide: EyeOff };
 export type IconName = keyof typeof icons;
 
 export function icon(name: string): SVGElement {

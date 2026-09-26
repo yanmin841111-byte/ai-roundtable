@@ -54,7 +54,7 @@ async function main() {
       // 介面上選得到工作模式,而且切換會存起來
       const style = document.querySelector('#work-style') as HTMLSelectElement;
       g.check(!!style && style.value === 'code', `輸入框旁有工作模式選單(${style && style.value})`);
-      g.check(Array.from(style.options).map((o) => o.value).join(',') === 'code,general', '兩種工作模式都在選單裡');
+      g.check(Array.from(style.options).map((o) => o.value).sort().join(',') === 'code,general', '兩種工作模式都在選單裡');
       style.value = 'general';
       style.dispatchEvent(new Event('change'));
       await g.w(300);

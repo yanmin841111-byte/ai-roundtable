@@ -113,7 +113,192 @@ async function copilotMember(locale: 'zh-Hant' | 'en') {
   assert.equal(member.canEdit, false);
 }
 
+async function connections(locale: 'zh-Hant' | 'en') {
+  const result = await runApp({
+    members: [scriptedMember({ id: 's1', name: 'Member' })],
+    settings: { uiLocale: locale },
+    env: { DEEPSEEK_API_KEY: '' },
+    constants: { locale },
+    timeoutMs: 2 * 60 * 1000,
+    scenario: async (options) => {
+      const harness: any = globalThis;
+      await harness.ready();
+      const capture = async (name: string) => {
+        for (const animation of document.getAnimations()) {
+          if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish();
+        }
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        await harness.shot(`${name}-${options.locale}`);
+      };
+      const tools = harness.$('#task-tools') as HTMLElement;
+      harness.check(!tools.matches(':popover-open'), 'Secondary tools start closed');
+      harness.$('#tools-btn').click();
+      await harness.waitFor(() => tools.matches(':popover-open'), 3000, 'Tools open');
+      harness.check(tools.contains(harness.$('#terminal-btn')) && tools.contains(harness.$('#export-btn')), 'Terminal and export remain available');
+      const bounds = tools.getBoundingClientRect();
+      harness.check(bounds.left >= 0 && bounds.right <= window.innerWidth && bounds.top >= 0, 'Tools menu stays inside the window');
+      await capture('workspace-tools');
+      tools.hidePopover();
+      harness.check(harness.$('#composer').contains(harness.$('#stop-btn')), 'Stop is next to task input');
+      const style = harness.$('#work-style') as HTMLSelectElement;
+      style.value = 'general';
+      style.dispatchEvent(new Event('change', { bubbles: true }));
+      await harness.waitFor(async () => (await (window as any).api.getConfig()).settings.workStyle === 'general', 5000, 'General task mode saved');
+
+      harness.$('#settings-btn').click();
+      harness.$('.settings-tab[data-tab="clis"]').click();
+      harness.$('#ext-add').click();
+      harness.check(!harness.$('.ext-template-advanced').open, 'Custom connections are collapsed by default');
+      harness.check(!!harness.$('#ext-picker-local'), 'Local AI has a direct detection entry');
+      await capture('ai-picker');
+      harness.$('[data-template="deepseek-api.json"]').click();
+      await harness.waitFor(() => !harness.$('#ext-editor').classList.contains('hidden'), 15000, 'API editor opened');
+      harness.check(/DeepSeek/.test(harness.text('#ext-editor-title')), 'Editor title is the service name');
+      harness.check(!harness.$('#ext-connection-fields').open && !harness.$('#ext-extra-fields').open && !harness.$('#ext-file-settings').open, 'Existing connection defaults and technical settings start collapsed');
+      harness.check(harness.$('#ext-cli-fields').hidden && harness.$('#ext-cli-options').hidden, 'API does not show CLI fields');
+      harness.check(harness.$('#ext-type').closest('#ext-extra-fields'), 'Protocol selection stays in advanced settings');
+      harness.check(harness.$('#ext-get-key').dataset.url === 'https://platform.deepseek.com/api_keys', 'Known provider has an official key-management entry');
+      await capture('api-connection');
+      const key = harness.$('#ext-api-key') as HTMLInputElement;
+      key.value = 'dummy-ui-only';
+      harness.$('#ext-key-reveal').click();
+      harness.check(key.type === 'text' && harness.$('#ext-key-reveal').getAttribute('aria-pressed') === 'true', 'Reveal key updates accessible state');
+      harness.$('#ext-key-reveal').click();
+      harness.check(key.type === 'password', 'Key can be hidden again');
+      key.value = '';
+      const specNow = () => JSON.parse(harness.$('#ext-content').value);
+      const models = JSON.stringify(specNow().models);
+      harness.$('#ext-label').value = 'Research AI';
+      harness.$('#ext-label').dispatchEvent(new Event('input', { bubbles: true }));
+      harness.$('#ext-save').click();
+      await harness.waitFor(() => !harness.$('#ext-ok').hidden, 15000, 'API settings saved');
+      const file = harness.$('#ext-file').value;
+      const read = await (window as any).api.ext.read(file);
+      const saved = JSON.parse(typeof read === 'string' ? read : read.content);
+      harness.check(saved.label === 'Research AI' && JSON.stringify(saved.models) === models, 'Saving basic settings preserves detailed model metadata');
+      harness.$('#ext-cancel').click();
+      harness.$('#ext-add').click();
+      harness.$('.ext-template-advanced').open = true;
+      harness.$('[data-template="blank-cli.json"]').click();
+      await harness.waitFor(() => !harness.$('#ext-editor').classList.contains('hidden'), 15000, 'Custom CLI editor opened');
+      harness.check(harness.$('#ext-api-fields').hidden && !harness.$('#ext-cli-fields').hidden, 'CLI shows only its connection fields');
+      const originalArgs = JSON.stringify(specNow().args);
+      harness.$('#ext-extra-fields').open = true;
+      harness.check(harness.$('#ext-simple-args').hidden && !harness.$('#ext-structured-args').hidden, 'Structured arguments have a configured status instead of an empty disabled field');
+      harness.$('#ext-edit-args').click();
+      harness.check(!harness.$('#ext-advanced').hidden && JSON.stringify(specNow().args) === originalArgs, 'Edit arguments opens JSON without losing conditions');
+      harness.$('#ext-tab-basic').click();
+      harness.$('#ext-label').value = 'Custom helper';
+      harness.$('#ext-label').dispatchEvent(new Event('input', { bubbles: true }));
+      harness.$('#ext-save').click();
+      await harness.waitFor(() => !harness.$('#ext-ok').hidden, 15000, 'CLI settings saved');
+      harness.check(JSON.stringify(specNow().args) === originalArgs, 'Basic CLI edits preserve conditional argument groups');
+      harness.$('#ext-extra-fields').open = false;
+      window.resizeTo(940, 720);
+      await harness.waitFor(() => window.innerWidth <= 940, 5000, 'Compact window');
+      const modal = harness.$('#ext-editor .modal-card') as HTMLElement;
+      const modalBounds = modal.getBoundingClientRect();
+      harness.check(modalBounds.left >= 0 && modalBounds.right <= window.innerWidth && modalBounds.bottom <= window.innerHeight, 'Editor and action buttons fit the compact window');
+      harness.check(modal.scrollWidth <= modal.clientWidth, 'Editor has no horizontal overflow');
+      await capture('custom-connection-compact');
+      harness.$('#ext-cancel').click();
+      harness.$('#settings-close').click();
+      const composer = harness.$('.composer-bar') as HTMLElement;
+      harness.check(composer.scrollWidth <= composer.clientWidth, 'General task controls fit the compact workspace');
+      await capture('workspace-compact');
+      harness.check(harness.hiddenLeaks().length === 0, 'Hidden controls occupy no space');
+      return { file, models };
+    },
+  });
+  const ok = report(`Connection workflow (${locale})`, result);
+  assert.ok(ok, result.error);
+  const saved = JSON.parse(fs.readFileSync(path.join(result.userData, 'adapters', result.value.file), 'utf8'));
+  assert.equal(saved.label, 'Research AI');
+  assert.equal(JSON.stringify(saved.models), result.value.models);
+  const cli = JSON.parse(fs.readFileSync(path.join(result.userData, 'adapters', 'blank-cli.json'), 'utf8'));
+  assert.equal(cli.label, 'Custom helper');
+  assert.equal(cli.args[1].if, 'canEdit');
+  result.cleanup();
+}
+
+async function layout(locale: 'zh-Hant' | 'en') {
+  const result = await runApp({
+    members: [scriptedMember({ id: 's1', name: 'Member' })],
+    settings: { uiLocale: locale, workDir: '' },
+    constants: { locale },
+    timeoutMs: 2 * 60 * 1000,
+    scenario: async (options) => {
+      const harness: any = globalThis;
+      await harness.ready();
+      const chip = harness.$('#workdir-chip') as HTMLButtonElement;
+      harness.check(chip.classList.contains('empty') && chip.querySelector('.chip-icon')?.getAttribute('data-icon') === 'folderPlus' && chip.offsetWidth > 100, `Missing working folder is a full folder-plus button (${chip.offsetWidth}px)`);
+      harness.check(chip.title.length > 20 && !/\{dir\}/.test(chip.title), `Missing folder explains the next step (${chip.title})`);
+      harness.$('#topbar').classList.add('compact');
+      harness.check(chip.offsetWidth === 30 && chip.offsetHeight === 30, `Compact toolbar keeps a square folder button (${chip.offsetWidth}x${chip.offsetHeight})`);
+      harness.$('#topbar').classList.remove('compact');
+      const drag = async (handle: HTMLElement, dx: number, dy: number) => {
+        const box = handle.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const pointer = (type: string, px: number, py: number) => handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 7, button: 0, buttons: 1, clientX: px, clientY: py }));
+        pointer('pointerdown', x, y);
+        pointer('pointermove', x + dx, y + dy);
+        pointer('pointerup', x + dx, y + dy);
+        await harness.w(150);
+      };
+      const sidebar = harness.$('#sidebar') as HTMLElement;
+      const input = harness.$('#input') as HTMLTextAreaElement;
+      const sidebarBefore = sidebar.offsetWidth;
+      const inputBefore = input.offsetHeight;
+      await drag(harness.$('#sidebar-resize'), 80, 0);
+      harness.check(sidebar.offsetWidth === sidebarBefore + 80, `Sidebar follows the drag (${sidebarBefore} -> ${sidebar.offsetWidth})`);
+      await drag(harness.$('#composer-resize'), 0, -70);
+      harness.check(input.offsetHeight === inputBefore + 70, `Input area grows upward (${inputBefore} -> ${input.offsetHeight})`);
+      await harness.waitFor(async () => {
+        const saved = (await (window as any).api.getConfig()).settings;
+        return saved.sidebarWidth === sidebar.offsetWidth && saved.composerHeight === input.offsetHeight;
+      }, 5000, 'Layout sizes saved');
+      await drag(harness.$('#sidebar-resize'), 2000, 0);
+      const timeline = harness.$('#timeline') as HTMLElement;
+      harness.check(sidebar.offsetWidth <= 420 && timeline.offsetWidth >= 520, `Sidebar keeps room for the timeline (${sidebar.offsetWidth}/${timeline.offsetWidth})`);
+      await drag(harness.$('#composer-resize'), 0, -2000);
+      harness.check(input.offsetHeight <= Math.round(window.innerHeight * 0.45), 'Input area cannot cover the conversation');
+      const composerHandle = harness.$('#composer-resize') as HTMLElement;
+      const before = input.offsetHeight;
+      composerHandle.focus();
+      composerHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      harness.check(input.offsetHeight === before - 24 && composerHandle.getAttribute('aria-valuenow') === String(input.offsetHeight), 'Keyboard resizing updates the separator value');
+      harness.$('#sidebar-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      composerHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      harness.check(sidebar.offsetWidth === sidebarBefore && input.offsetHeight === inputBefore, 'Double-click restores default sizes');
+      await harness.waitFor(async () => {
+        const saved = (await (window as any).api.getConfig()).settings;
+        return !('sidebarWidth' in saved) && !('composerHeight' in saved);
+      }, 5000, 'Reset removes saved sizes');
+      await drag(harness.$('#sidebar-resize'), 36, 0);
+      await drag(composerHandle, 0, -40);
+      for (const animation of document.getAnimations()) {
+        if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish();
+      }
+      await harness.shot(`layout-${options.locale}`);
+      harness.check(harness.hiddenLeaks().length === 0, 'Resize handles leave no hidden-space leaks');
+      return { sidebar: sidebar.offsetWidth, input: input.offsetHeight };
+    },
+  });
+  const ok = report(`Resizable layout (${locale})`, result);
+  const saved = JSON.parse(fs.readFileSync(path.join(result.userData, 'config.json'), 'utf8')).settings;
+  result.cleanup();
+  assert.ok(ok, result.error);
+  assert.equal(saved.sidebarWidth, result.value.sidebar);
+  assert.equal(saved.composerHeight, result.value.input);
+}
+
 async function main() {
+  await layout('zh-Hant');
+  await layout('en');
+  await connections('zh-Hant');
+  await connections('en');
+  if (process.argv.includes('--connections-only')) return;
   await copilotMember('zh-Hant');
   await copilotMember('en');
   // root 對唯讀檔照樣寫得進去,這個情境就測不到東西了——照實說跳過,不要假裝通過

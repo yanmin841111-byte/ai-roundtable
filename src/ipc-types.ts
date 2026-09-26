@@ -104,6 +104,8 @@ export interface AppSettings {
   workStyle?: 'general' | 'code';
   // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度
   terminalWidth?: number;
+  sidebarWidth?: number;
+  composerHeight?: number;
   // 同時進行的獨立任務件數上限;同一個專案目錄、同一台本機模型的任務另外排隊
   maxParallelJobs?: number;
 }
@@ -178,6 +180,37 @@ export interface EnvFix {
   command?: string;
   settingsTab?: string;
   url?: string;
+  // 有內建安裝流程的 CLI id;介面打開安裝視窗,由使用者確認後才執行
+  install?: string;
+}
+
+// ---------- 內建 CLI 安裝 ----------
+export type InstallTool = 'brew' | 'winget' | 'official' | 'npm';
+
+export interface CliInstallMethod {
+  tool: InstallTool;
+  command: string;
+  recommended: boolean;
+}
+
+export interface CliInstallPlan {
+  cliId: string;
+  label: string;
+  platform: string;
+  // 這台電腦現在能用的方式;空陣列代表要先看官方說明
+  methods: CliInstallMethod[];
+  docsUrl: string;
+  loginCommand: string;
+  // 健康檢查能不能判斷登入狀態;不能時裝好只代表找得到指令
+  detectsLogin: boolean;
+}
+
+export interface CliInstallResult {
+  ok: boolean;
+  reason?: 'busy' | 'unavailable' | 'failed' | 'timeout' | 'canceled';
+  code?: number | null;
+  detail?: string;
+  health?: CliHealth;
 }
 
 export interface CliStatus {
@@ -687,6 +720,9 @@ export interface IpcContract {
   'config:save': { args: [cfg: SaveConfigPayload<AppConfig>]; result: AppConfig };
   'cli:types': { args: []; result: Record<string, CliType> };
   'cli:check': { args: [opts?: { probeCredentialed?: boolean }]; result: Record<string, CliHealth> };
+  'cli:installPlan': { args: [cliId: string]; result: CliInstallPlan | null };
+  'cli:install': { args: [payload: { cliId: string; tool: InstallTool }]; result: CliInstallResult };
+  'cli:installCancel': { args: []; result: void };
   'dialog:pickDir': { args: []; result: string | null };
   'dialog:pickExecutable': { args: []; result: string | null };
   'shell:openPath': { args: [p: string]; result: string };
@@ -750,6 +786,7 @@ export interface IpcEvents {
   'chat:reset': { jobId: string };
   'session:saved': { jobId: string; id: string | null };
   'jobs:changed': JobsState;
+  'cli:installOutput': { cliId: string; line: string };
   // pty 的原始輸出。不在主程序解碼成字串:多位元組字元會被切在兩個 chunk 之間,
   // 交給終端自己處理才不會出現半個字。
   'terminal:data': { id: string; data: Uint8Array };
@@ -765,6 +802,12 @@ export interface RendererApi {
   cliTypes(): Promise<Record<string, CliType>>;
   // probeCredentialed:真的連線驗證有 key 的雲端 API(打開設定畫面時才帶)
   checkCli(opts?: { probeCredentialed?: boolean }): Promise<Record<string, CliHealth>>;
+  cliInstall: {
+    plan(cliId: string): Promise<CliInstallPlan | null>;
+    run(cliId: string, tool: InstallTool): Promise<CliInstallResult>;
+    cancel(): Promise<void>;
+    onOutput(fn: (payload: IpcEvents['cli:installOutput']) => void): void;
+  };
   pickDir(): Promise<string | null>;
   pickExecutable(): Promise<string | null>;
   openPath(p: string): Promise<string>;

@@ -19,26 +19,31 @@ export type EnvFixCard = EnvFix & { hint?: string };
 
 // 「打開設定」這個動作要由 app.ts 提供(env-fix 不認得設定畫面,也不該反向 import)
 let openSettings: ((tab: string) => void) | null = null;
-export function setEnvFixHandlers(handlers: { openSettings: (tab: string) => void }): void {
+let openInstall: ((cliId: string) => void) | null = null;
+export function setEnvFixHandlers(handlers: { openSettings: (tab: string) => void; install?: (cliId: string) => void }): void {
   openSettings = handlers.openSettings;
+  openInstall = handlers.install || null;
 }
 
 export function envFixHtml(fix: EnvFixCard | null | undefined): string {
-  if (!fix || (!fix.hint && !fix.command && !fix.url && !fix.settingsTab)) return '';
+  if (!fix || (!fix.hint && !fix.command && !fix.url && !fix.settingsTab && !fix.install)) return '';
   const hint = fix.hint ? `<div class="env-fix-hint">${escapeHtml(fix.hint)}</div>` : '';
   const command = fix.command
     ? `<div class="env-fix-row"><code class="env-fix-cmd">${escapeHtml(fix.command)}</code>`
       + `<button type="button" class="ghost small" data-env-run="${escapeHtml(fix.command)}" title="${escapeHtml(t('fix.runTitle'))}">${escapeHtml(t('fix.run'))}</button>`
       + `<button type="button" class="ghost small" data-env-copy="${escapeHtml(fix.command)}">${escapeHtml(t('fix.copy'))}</button></div>`
     : '';
-  // 一次只給一個下一步:指令 > 設定 > 說明頁。兩顆按鈕並列會讓「該按哪一個」變成一個問題
-  const settings = !fix.command && fix.settingsTab
+  // 一次只給一個下一步:指令 > 安裝 > 設定 > 說明頁。兩顆按鈕並列會讓「該按哪一個」變成一個問題
+  const install = !fix.command && fix.install && openInstall
+    ? `<div class="env-fix-row"><button type="button" class="ghost small" data-env-install="${escapeHtml(fix.install)}">${escapeHtml(t('fix.install'))}</button></div>`
+    : '';
+  const settings = !fix.command && !install && fix.settingsTab
     ? `<div class="env-fix-row"><button type="button" class="ghost small" data-env-settings="${escapeHtml(fix.settingsTab)}">${escapeHtml(t('fix.openSettings'))}</button></div>`
     : '';
-  const url = !fix.command && !fix.settingsTab && fix.url
+  const url = !fix.command && !install && !fix.settingsTab && fix.url
     ? `<div class="env-fix-row"><button type="button" class="ghost small" data-env-url="${escapeHtml(fix.url)}">${escapeHtml(t('fix.openDocs'))}</button></div>`
     : '';
-  return `<div class="env-fix">${hint}${command}${settings}${url}</div>`;
+  return `<div class="env-fix">${hint}${command}${install}${settings}${url}</div>`;
 }
 
 /** 綁定卡片上的按鈕。用 innerHTML 畫完之後呼叫一次 */
@@ -62,6 +67,12 @@ export function bindEnvFix(root: ParentNode = document): void {
     button.onclick = (event) => {
       event.stopPropagation();
       if (openSettings) openSettings(button.dataset.envSettings || 'general');
+    };
+  });
+  root.querySelectorAll<HTMLButtonElement>('[data-env-install]').forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      if (openInstall) openInstall(button.dataset.envInstall || '');
     };
   });
   root.querySelectorAll<HTMLButtonElement>('[data-env-url]').forEach((button) => {

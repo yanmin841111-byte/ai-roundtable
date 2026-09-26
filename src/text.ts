@@ -20,9 +20,9 @@ export function resolveTextLocale(setting: string | null | undefined): TextLocal
 }
 
 const ZH: Record<string, Entry> = {
-  'api.missingKeyEnv': '缺少 API key:請到「設定 → CLI 與擴充」填入,或設定環境變數 {env}',
-  'api.missingKey': '缺少 API key:請到「設定 → CLI 與擴充」填入並儲存',
-  'api.invalidKey': 'API key 被 {service} 拒絕:請到「設定 → CLI 與擴充」重新填入',
+  'api.missingKeyEnv': '缺少 API key:請到「設定 → AI 連接」填入,或設定環境變數 {env}',
+  'api.missingKey': '缺少 API key:請到「設定 → AI 連接」填入並儲存',
+  'api.invalidKey': 'API key 被 {service} 拒絕:請到「設定 → AI 連接」重新填入',
   'api.service': '服務',
   'api.modelsTimeout': '取得模型清單逾時',
   'api.connectionTimeout': '測試連線逾時',
@@ -39,7 +39,7 @@ const ZH: Record<string, Entry> = {
   'api.readToolsFallback': '帶工具的請求被拒絕({error}),改成不帶工具重送一次',
   'api.ephemeralDropped': '(這裡原本附上的檔案內容只用於那一回合,已從記憶中移除)',
   'api.readDropped': '(已讀取 {n} 字元;內容已從記憶中移除,需要時請重新讀取)',
-  'ext.timeoutHint': '如果這個模型需要更久,可以在「設定 → CLI 與擴充」編輯這個擴充,調高「每回合逾時上限」。',
+  'ext.timeoutHint': '如果這個模型需要更久,可以在「設定 → AI 連接」編輯這個擴充,調高「每回合逾時上限」。',
   'api.toolTruncated': '…(已截短)',
   'api.imagesDropped': '(先前回合附上的 {n} 張圖片已從記憶中移除)',
   'api.readToolsUnavailable': '(這個模型這次無法使用 read_file 工具。請不要呼叫任何工具,只依上面提示詞裡的內容作答。)',
@@ -411,7 +411,7 @@ const ZH: Record<string, Entry> = {
   'terminal.noExpect': '這台 Mac 找不到 /usr/bin/expect,終端無法開啟',
   'terminal.tooMany': '最多同時開 {max} 個終端分頁,先關掉一個再開',
   'terminal.spawnFailed': '終端開不起來:{detail}',
-  'adapter.missing': '找不到 CLI「{cli}」:對應的擴充可能已刪除或載入失敗,請到「設定 → CLI 與擴充」檢查',
+  'adapter.missing': '找不到 CLI「{cli}」:對應的擴充可能已刪除或載入失敗,請到「設定 → AI 連接」檢查',
   'adapter.failed': '{label} 執行失敗:{message}',
   // ---------- CLI 成員的執行期訊息 ----------
   // 這些會直接出現在對話泡泡的錯誤列與工具動作清單裡。錯誤原文(stderr)接在翻譯後面,不翻譯。
@@ -556,9 +556,9 @@ const ZH: Record<string, Entry> = {
 };
 
 const EN: Record<string, Entry> = {
-  'api.missingKeyEnv': 'Missing API key: enter it in Settings → CLIs & extensions, or set {env}',
-  'api.missingKey': 'Missing API key: enter and save it in Settings → CLIs & extensions',
-  'api.invalidKey': 'API key rejected by {service}: enter a new key in Settings → CLIs & extensions',
+  'api.missingKeyEnv': 'Missing API key: enter it in Settings → AI connections, or set {env}',
+  'api.missingKey': 'Missing API key: enter and save it in Settings → AI connections',
+  'api.invalidKey': 'API key rejected by {service}: enter a new key in Settings → AI connections',
   'api.service': 'the service',
   'api.modelsTimeout': 'Timed out fetching the model list',
   'api.connectionTimeout': 'Connection test timed out',
@@ -575,7 +575,7 @@ const EN: Record<string, Entry> = {
   'api.readToolsFallback': 'The request with tools was rejected ({error}); resent once without tools',
   'api.ephemeralDropped': '(File contents attached here were for that turn only and have been removed from memory.)',
   'api.readDropped': '(Read {n} characters; the content was removed from memory, read the file again if needed)',
-  'ext.timeoutHint': 'If this model needs longer, edit this extension in Settings → CLIs & extensions and raise “Time limit per turn”.',
+  'ext.timeoutHint': 'If this model needs longer, edit this extension in Settings → AI connections and raise “Time limit per turn”.',
   'api.toolTruncated': '… (truncated)',
   'api.imagesDropped': '({n} image(s) attached in an earlier turn were removed from memory)',
   'api.readToolsUnavailable': '(The read_file tool is not available for this model this time. Do not call any tools; answer from the content of this prompt only.)',
@@ -933,7 +933,7 @@ const EN: Record<string, Entry> = {
   'terminal.noExpect': '/usr/bin/expect was not found on this Mac, so the terminal cannot open',
   'terminal.tooMany': 'Up to {max} terminal tabs can be open at once — close one first',
   'terminal.spawnFailed': 'The terminal could not start: {detail}',
-  'adapter.missing': 'CLI "{cli}" not found: its extension may have been deleted or failed to load. Check Settings → CLIs & extensions',
+  'adapter.missing': 'CLI "{cli}" not found: its extension may have been deleted or failed to load. Check Settings → AI connections',
   'adapter.failed': '{label} failed: {message}',
   // ---------- CLI member runtime messages ----------
   'proc.seconds': (p: Params) => `${p.n} second${Number(p.n) === 1 ? '' : 's'}`,

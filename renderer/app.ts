@@ -6,14 +6,15 @@ import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
 import { isPhaseInfo } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
-import { icon } from './icons';
-import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape } from './util';
+import { controlLabel, icon } from './icons';
+import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape, bindResizeHandle } from './util';
 import { openDiff, loadDiff } from './diff-view';
 import { renderTaskSummary } from './task-card';
 import { refreshTaskVerifications } from './task-verification';
 import { setupLineups, renderLineupButton } from './lineup-menu';
 import { setupTerminal, toggleTerminal, syncTerminalTheme, relocalizeTerminal } from './terminal';
 import { envFixHtml, bindEnvFix, describeCliHealth, setEnvFixHandlers } from './env-fix';
+import { isInstallRunning, openInstallDialog, setupInstallDialog } from './install-dialog';
 import type { PhaseValue } from '../src/ipc-types';
 import type {
   AgentConfig, AppConfig, AttachLimits, AttachmentInput, CliType, CliHealth,
@@ -111,8 +112,12 @@ async function init() {
   renderWorkdirChip();
   checkClis();
   setupComposerAttachments();
+  setupLayoutResize();
+  ensureStagePin();
+  window.addEventListener('resize', scheduleStagePin);
   // 修復卡片上的「打開設定」由這裡提供:env-fix 只負責畫面,不認得設定畫面
-  setEnvFixHandlers({ openSettings: (tab) => openSettings(tab) });
+  setEnvFixHandlers({ openSettings: (tab) => openSettings(tab), install: (cliId) => { void openInstallDialog(cliId); } });
+  setupInstallDialog(async () => { await checkClis(); return cliStatus; });
   // 終端面板:平常收著。成員在工作目錄動手,使用者也該能在同一個目錄自己下指令。
   setupTerminal({
     workDir: () => selectedJob()?.workDir || config.settings.workDir,
@@ -150,6 +155,19 @@ async function init() {
     if (!switchingJobs && (!running || confirm(t('confirm.reset')))) void window.api.reset().catch((error) => alert(cleanIpcError(error)));
   };
   $<HTMLButtonElement>('#export-btn').onclick = exportConversation;
+  const tools = $('#task-tools');
+  const toolsButton = $('#tools-btn');
+  const positionTools = () => {
+    const bounds = toolsButton.getBoundingClientRect();
+    tools.style.top = `${bounds.bottom + 8}px`;
+    tools.style.right = `${Math.max(12, window.innerWidth - bounds.right)}px`;
+  };
+  tools.addEventListener('beforetoggle', positionTools);
+  tools.addEventListener('toggle', () => toolsButton.setAttribute('aria-expanded', String(tools.matches(':popover-open'))));
+  tools.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button:not(:disabled)')) tools.hidePopover();
+  });
+  window.addEventListener('resize', positionTools);
   $<HTMLButtonElement>('#sessions-btn').onclick = () => void openFolder(() => window.api.openSessions());
   $<HTMLButtonElement>('#settings-btn').onclick = () => openSettings();
   $<HTMLButtonElement>('#cli-summary').onclick = () => openSettings('clis');
@@ -160,7 +178,7 @@ async function init() {
   $<HTMLButtonElement>('#diff-btn').onclick = () => { void openDiff(); };
   $<HTMLButtonElement>('#diff-close').onclick = () => $<HTMLDivElement>('#diff-modal').classList.add('hidden');
   $<HTMLButtonElement>('#diff-refresh').onclick = () => loadDiff();
-  for (const id of ['#settings', '#history-modal', '#ext-picker', '#diff-modal']) {
+  for (const id of ['#settings', '#history-modal', '#ext-picker', '#diff-modal', '#install-modal']) {
     $(id).addEventListener('mousedown', (e) => { if (e.target === $(id)) closeTopModal(); });
   }
   document.addEventListener('keydown', (e) => {
@@ -193,6 +211,13 @@ async function init() {
   $<HTMLButtonElement>('#ext-docs').onclick = () => window.api.ext.openDocs();
   $<HTMLButtonElement>('#ext-editor-docs').onclick = () => window.api.ext.openDocs();
   $<HTMLButtonElement>('#ext-picker-close').onclick = () => $<HTMLDivElement>('#ext-picker').classList.add('hidden');
+  $<HTMLButtonElement>('#ext-picker-local').onclick = () => {
+    $('#ext-picker').classList.add('hidden');
+    showSettingsTab('clis');
+    $('#quick-ollama').scrollIntoView({ block: 'nearest' });
+    $('#quick-detect').focus();
+    void detectOllama();
+  };
   const extFilterButtons = [...document.querySelectorAll<HTMLButtonElement>('.template-filters [data-filter]')];
   extFilterButtons.forEach((button, index) => {
     button.onclick = () => {
@@ -216,17 +241,35 @@ async function init() {
   });
   $<HTMLInputElement>('#ext-search').addEventListener('input', renderExtTemplates);
   $<HTMLButtonElement>('#ext-editor-close').onclick = () => $<HTMLDivElement>('#ext-editor').classList.add('hidden');
+  $<HTMLButtonElement>('#ext-cancel').onclick = () => $<HTMLDivElement>('#ext-editor').classList.add('hidden');
   $<HTMLButtonElement>('#ext-save').onclick = () => { void saveExtension(); };
   $<HTMLButtonElement>('#ext-delete').onclick = deleteExtension;
   $<HTMLButtonElement>('#ext-tab-basic').onclick = () => showExtEditorTab('basic');
   $<HTMLButtonElement>('#ext-tab-advanced').onclick = () => showExtEditorTab('advanced');
+  $<HTMLButtonElement>('#ext-edit-args').onclick = () => { showExtEditorTab('advanced'); $('#ext-content').focus(); };
+  $<HTMLButtonElement>('#ext-key-reveal').onclick = () => {
+    const input = $<HTMLInputElement>('#ext-api-key');
+    const reveal = input.type === 'password';
+    input.type = reveal ? 'text' : 'password';
+    const button = $('#ext-key-reveal');
+    button.setAttribute('aria-pressed', String(reveal));
+    controlLabel(button, reveal ? 'hide' : 'show', t(reveal ? 'extEditor.hideKey' : 'extEditor.showKey'));
+  };
   $<HTMLButtonElement>('#ext-pick-bin').onclick = pickExtensionExecutable;
   $<HTMLButtonElement>('#ext-key-clear').onclick = clearExtensionSecret;
   $<HTMLButtonElement>('#ext-key-test').onclick = testExtensionConnection;
+  $<HTMLButtonElement>('#ext-get-key').onclick = () => {
+    const url = $('#ext-get-key').dataset.url;
+    if (url) window.open(url, '_blank');
+  };
   for (const id of ['#ext-id', '#ext-label', '#ext-type', '#ext-bin', '#ext-args', '#ext-base-url', '#ext-api-env', '#ext-models', '#ext-timeout']) {
     $(id).addEventListener('input', syncExtBasicToJson);
   }
-  $<HTMLSelectElement>('#ext-type').addEventListener('change', updateExtTypeFields);
+  $<HTMLSelectElement>('#ext-type').addEventListener('change', () => {
+    syncExtBasicToJson();
+    $<HTMLDetailsElement>('#ext-connection-fields').open = true;
+    void refreshExtensionSecretStatus();
+  });
   $<HTMLTextAreaElement>('#ext-content').addEventListener('blur', () => {
     if (!editingExtFile || editingExtFile.endsWith('.js')) return;
     try { fillExtBasic(JSON.parse($<HTMLTextAreaElement>('#ext-content').value)); } catch {}
@@ -315,6 +358,7 @@ function closeTopModal() {
   const open = [...document.querySelectorAll<HTMLElement>('.modal:not(.hidden)')];
   const top = open[open.length - 1];
   if (!top || top.id === 'ext-editor') return false; // 擴充編輯器有未儲存的程式碼,不用 Esc 關
+  if (top.id === 'install-modal' && isInstallRunning()) return true;
   if (top.id === 'history-modal') closeHistoryModal();
   else top.classList.add('hidden');
   return true;
@@ -397,6 +441,7 @@ function clearTimeline() {
   messageData.clear();
   $<HTMLDivElement>('#timeline').innerHTML = '';
   $<HTMLDivElement>('#timeline').appendChild(emptyEl());
+  ensureStagePin();
   updateUsageTotal();
   updateSpeakingHighlight();
 }
@@ -788,8 +833,9 @@ function renderExtensions() {
     if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
     const entry = extSummary.entries.find((e) => e.file === type.file);
     if (entry && entry.overrides) badges.push(`<span class="badge warn">${escapeHtml(t('ext.overrides'))}</span>`);
-    if (type.modelError) badges.push(`<span class="badge warn">${escapeHtml(t('ext.modelListFailed'))}</span>`);
-    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub"${subTitle || ` title="${escapeHtml(sub || '')}"`}>${escapeHtml(sub || '')}</div>${auth}${type.modelError ? `<div class="ext-err">${escapeHtml(type.modelError)}</div>` : ''}</div>` });
+    const modelError = st?.state === 'missing' ? '' : type.modelError;
+    if (modelError) badges.push(`<span class="badge warn">${escapeHtml(t('ext.modelListFailed'))}</span>`);
+    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub"${subTitle || ` title="${escapeHtml(sub || '')}"`}>${escapeHtml(sub || '')}</div>${auth}${modelError ? `<div class="ext-err">${escapeHtml(modelError)}</div>` : ''}</div>` });
   }
   // 載入失敗的擴充
   for (const e of extSummary.entries.filter((x) => x.error)) {
@@ -828,10 +874,20 @@ function renderExtTemplates() {
     return;
   }
 
-  const blankTemplates = templates.filter(isBlankTemplate);
-  const readyTemplates = templates.filter((template) => !isBlankTemplate(template));
+  const readyTemplates = templates.filter((template) => template.type === 'openai' && !template.file.startsWith('ollama-') && !isBlankTemplate(template));
+  const advancedTemplates = templates.filter((template) => !readyTemplates.includes(template));
   appendTemplateGroup(box, t('extPicker.ready'), readyTemplates);
-  appendTemplateGroup(box, t('extPicker.blank'), blankTemplates);
+  if (advancedTemplates.length) {
+    const advanced = document.createElement('details');
+    advanced.className = 'ext-template-advanced';
+    advanced.open = !!query || extTemplateFilter !== 'all';
+    const summary = document.createElement('summary');
+    summary.textContent = t('extPicker.custom');
+    advanced.appendChild(summary);
+    appendTemplateGroup(advanced, t('extPicker.other'), advancedTemplates.filter((template) => !isBlankTemplate(template)));
+    appendTemplateGroup(advanced, t('extPicker.blank'), advancedTemplates.filter(isBlankTemplate));
+    box.appendChild(advanced);
+  }
 }
 
 function isBlankTemplate(template: ExtTemplate): boolean {
@@ -850,8 +906,10 @@ function appendTemplateGroup(container: HTMLElement, title: string, templates: E
   for (const tpl of templates) {
     const el = document.createElement('button');
     el.className = 'template';
+    el.dataset.template = tpl.file;
     el.title = tpl.description;
-    el.innerHTML = `<span class="row"><b>${escapeHtml(tpl.label)}</b><span class="badge">${escapeHtml(typeLabel(tpl.type))}</span></span><span class="hint">${escapeHtml(tpl.description)}</span><span class="template-action">${escapeHtml(t('extPicker.use'))}</span>`;
+    el.innerHTML = `<span class="row"><b>${escapeHtml(tpl.label)}</b></span><span class="hint">${escapeHtml(t(tpl.type === 'openai' ? 'extPicker.apiCredential' : 'extPicker.installedProgram'))}</span><span class="template-action">${escapeHtml(t('extPicker.use'))}</span>`;
+    el.querySelector('.row')!.prepend(icon(tpl.type === 'openai' ? 'cloud' : 'terminal'));
     el.onclick = async () => {
       el.disabled = true;
       try {
@@ -877,14 +935,23 @@ async function openExtEditor(file: string): Promise<void> {
     const migration = typeof result === 'object' && result ? result.migration : '';
     const migrationError = typeof result === 'object' && result ? result.migrationError : '';
     editingExtFile = file;
-    $('#ext-editor-title').textContent = t('extEditor.titleFile', { file });
+    $('#ext-editor-title').textContent = t('extEditor.title');
     $<HTMLInputElement>('#ext-file').value = file;
     $<HTMLTextAreaElement>('#ext-content').value = content;
     $<HTMLInputElement>('#ext-api-key').value = '';
+    $<HTMLInputElement>('#ext-api-key').type = 'password';
+    $('#ext-key-reveal').setAttribute('aria-pressed', 'false');
+    controlLabel($('#ext-key-reveal'), 'show', t('extEditor.showKey'));
+    $<HTMLDetailsElement>('#ext-extra-fields').open = false;
+    $<HTMLDetailsElement>('#ext-file-settings').open = false;
+    $<HTMLDetailsElement>('#ext-connection-fields').open = true;
     if (file.endsWith('.json')) {
       // JSON 壞掉時 showExtEditorTab 會退回「進階 JSON」分頁，讓使用者直接修
       editingExtSpec = null;
       showExtEditorTab('basic');
+      const spec = editingExtSpec as ExtSpec | null;
+      $<HTMLDetailsElement>('#ext-connection-fields').open = !spec || spec.type !== 'openai' || !spec.baseUrl || spec.baseUrl.includes('api.example.com') || spec.models == null || (Array.isArray(spec.models) && !spec.models.length);
+      if (spec?.label) $('#ext-editor-title').textContent = spec.label;
       await refreshExtensionSecretStatus();
     } else {
       editingExtSpec = null;
@@ -911,6 +978,7 @@ function showExtEditorTab(tab: string): void {
   const basic = tab === 'basic';
   $<HTMLDivElement>('#ext-basic').hidden = !basic;
   $<HTMLDivElement>('#ext-advanced').hidden = basic;
+  $<HTMLDetailsElement>('#ext-file-settings').open = !basic;
   $<HTMLButtonElement>('#ext-tab-basic').classList.toggle('active', basic);
   $<HTMLButtonElement>('#ext-tab-advanced').classList.toggle('active', !basic);
   $<HTMLButtonElement>('#ext-tab-basic').setAttribute('aria-selected', String(basic));
@@ -930,7 +998,9 @@ function fillExtBasic(spec: ExtSpec | null | undefined): void {
   const simpleArgs = Array.isArray(spec.args) && spec.args.every((arg) => typeof arg === 'string');
   $<HTMLTextAreaElement>('#ext-args').disabled = Array.isArray(spec.args) && !simpleArgs;
   $<HTMLTextAreaElement>('#ext-args').value = simpleArgs ? (spec.args as string[]).join('\n') : '';
-  $('#ext-args-help').textContent = $<HTMLTextAreaElement>('#ext-args').disabled ? t('extEditor.argsAdvanced') : '';
+  const structuredArgs = $<HTMLTextAreaElement>('#ext-args').disabled;
+  $('#ext-simple-args').hidden = structuredArgs;
+  $('#ext-structured-args').hidden = !structuredArgs;
   $<HTMLInputElement>('#ext-base-url').value = spec.baseUrl || '';
   $<HTMLInputElement>('#ext-api-env').value = spec.apiKeyEnv || '';
   $<HTMLInputElement>('#ext-models').disabled = false;
@@ -946,11 +1016,26 @@ function fillExtBasic(spec: ExtSpec | null | undefined): void {
 }
 
 const TIMEOUT_MAX_MINUTES = 600;
+const PROVIDER_KEY_PAGES: Record<string, string> = {
+  'api.deepseek.com': 'https://platform.deepseek.com/api_keys',
+  'api.x.ai': 'https://console.x.ai/',
+  'api.moonshot.cn': 'https://platform.moonshot.cn/console/api-keys',
+  'api.moonshot.ai': 'https://platform.moonshot.ai/console/api-keys',
+  'openrouter.ai': 'https://openrouter.ai/settings/keys',
+};
 
 function updateExtTypeFields() {
   const api = $<HTMLSelectElement>('#ext-type').value === 'openai';
   $<HTMLDivElement>('#ext-cli-fields').hidden = api;
   $<HTMLDivElement>('#ext-api-fields').hidden = !api;
+  $<HTMLDivElement>('#ext-cli-options').hidden = api;
+  $<HTMLDivElement>('#ext-api-options').hidden = !api;
+  $('#ext-url-field').hidden = !api;
+  const keyPage = $('#ext-get-key');
+  let url = '';
+  try { url = PROVIDER_KEY_PAGES[new URL($<HTMLInputElement>('#ext-base-url').value).hostname] || ''; } catch {}
+  keyPage.dataset.url = url;
+  keyPage.hidden = !api || !url;
 }
 
 function syncExtBasicToJson() {
@@ -1026,16 +1111,18 @@ async function clearExtensionSecret() {
 }
 
 async function testExtensionConnection() {
-  const saved = await saveExtension({ quiet: true });
-  if (!saved) return;
-  $<HTMLButtonElement>('#ext-key-test').disabled = true;
+  const button = $<HTMLButtonElement>('#ext-key-test');
+  button.disabled = true;
+  button.textContent = t('extEditor.testing');
   try {
+    const saved = await saveExtension({ quiet: true });
+    if (!saved) return;
     const result = await window.api.secrets.test(editingExtSpec?.id || '');
     // 測試連線失敗時,hint 是照實說的那一句(例如「請先執行 ollama serve」),
     // error 是原始訊息;下一步和 app 其他地方同一張卡片
     showExtResult(result.ok ? null : result.hint || result.error, result.ok ? `✓ ${result.version || t('extEditor.connected')}` : null, result.ok ? null : result.fix);
   } catch (e) { showExtResult(cleanIpcError(e), null); }
-  finally { $<HTMLButtonElement>('#ext-key-test').disabled = false; }
+  finally { button.disabled = false; button.textContent = t('extEditor.keyTest'); }
 }
 
 function showExtResult(error: string | null | undefined | false, ok: string | null, fix?: EnvFix | null): void {
@@ -1065,7 +1152,7 @@ async function saveExtension({ quiet = false }: { quiet?: boolean } = {}): Promi
     }
     const { error } = await window.api.ext.write(file, $<HTMLTextAreaElement>('#ext-content').value, editingExtFile);
     editingExtFile = file;
-    $('#ext-editor-title').textContent = t('extEditor.titleFile', { file });
+    $('#ext-editor-title').textContent = editingExtSpec?.label || t('extEditor.title');
     await refreshCatalog();
     await refreshExtensionSecretStatus();
     if (error || !quiet) showExtResult(error, error ? null : t('extEditor.saved'));
@@ -1798,6 +1885,7 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   else updateContinuation(el);
   updateSpeakingHighlight();
   if (atBottom) tl.scrollTop = tl.scrollHeight;
+  scheduleStagePin();
 }
 
 // 同一批平行發言(m.group)放進同一個格狀容器:每列最多三則,第四則起換行
@@ -1879,10 +1967,66 @@ function renderJobs(): void {
 function renderWorkdirChip(): void {
   const pinned = selectedJob()?.workDir || '';
   const workDir = pinned || config.settings.workDir || '';
+  const chip = $<HTMLButtonElement>('#workdir-chip');
+  const iconName = workDir ? 'folder' : 'folderPlus';
+  const chipIcon = $('#workdir-chip .chip-icon');
+  if (chipIcon.dataset.icon !== iconName) { chipIcon.dataset.icon = iconName; chipIcon.replaceChildren(icon(iconName)); }
+  chip.classList.toggle('empty', !workDir);
   $('#workdir-label').textContent = workDir ? shortPath(workDir) : t('topbar.workdirUnset');
-  $<HTMLButtonElement>('#workdir-chip').title = pinned
+  chip.title = pinned
     ? t('jobs.workdirPinned', { dir: pinned })
-    : t('topbar.workdirTitle', { dir: workDir || t('topbar.unset') });
+    : workDir ? t('topbar.workdirTitle', { dir: workDir }) : t('topbar.workdirChoose');
+}
+
+const SIDEBAR_DEFAULT = 264;
+const SIDEBAR_MIN = 220;
+const COMPOSER_MIN = 60;
+const COMPOSER_DEFAULT = 76;
+const clamp = (value: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, value)));
+
+function setupLayoutResize(): void {
+  const sidebar = $('#sidebar');
+  const input = $<HTMLTextAreaElement>('#input');
+  const sidebarHandle = $('#sidebar-resize');
+  const composerHandle = $('#composer-resize');
+  const sidebarMax = () => Math.max(SIDEBAR_MIN, Math.min(420, window.innerWidth - ($('#terminal-panel').hidden ? 0 : $('#terminal-panel').offsetWidth) - 560));
+  const composerMax = () => Math.max(COMPOSER_MIN, Math.round(window.innerHeight * 0.45));
+  const applySidebar = (value: number) => {
+    const width = clamp(value, SIDEBAR_MIN, sidebarMax());
+    sidebar.style.width = `${width}px`;
+    sidebarHandle.setAttribute('aria-valuenow', String(width));
+    sidebarHandle.setAttribute('aria-valuemax', String(sidebarMax()));
+    return width;
+  };
+  const applyComposer = (value: number) => {
+    const height = clamp(value, COMPOSER_MIN, composerMax());
+    input.style.height = `${height}px`;
+    composerHandle.setAttribute('aria-valuenow', String(height));
+    composerHandle.setAttribute('aria-valuemax', String(composerMax()));
+    scheduleStagePin();
+    return height;
+  };
+  const saveSize = (key: 'sidebarWidth' | 'composerHeight', value: number | undefined) => {
+    if (config.settings[key] === value) return;
+    if (value) config.settings[key] = value; else delete config.settings[key];
+    void saveConfig();
+  };
+  bindResizeHandle(sidebarHandle, {
+    axis: 'x', direction: 1, get: () => sidebar.offsetWidth, apply: applySidebar,
+    save: (value) => saveSize('sidebarWidth', value),
+    reset: () => { sidebar.style.width = ''; sidebarHandle.setAttribute('aria-valuenow', String(sidebar.offsetWidth)); saveSize('sidebarWidth', undefined); },
+  });
+  bindResizeHandle(composerHandle, {
+    axis: 'y', direction: -1, get: () => input.offsetHeight, apply: applyComposer,
+    save: (value) => saveSize('composerHeight', value),
+    reset: () => { applyComposer(COMPOSER_DEFAULT); saveSize('composerHeight', undefined); },
+  });
+  const restore = () => {
+    if (config.settings.sidebarWidth) applySidebar(Number(config.settings.sidebarWidth) || SIDEBAR_DEFAULT);
+    applyComposer(Number(config.settings.composerHeight) || COMPOSER_DEFAULT);
+  };
+  restore();
+  window.addEventListener('resize', restore);
 }
 
 // 排隊中的任務還沒有會議狀態,停止鈕與階段膠囊要靠任務清單來說
@@ -2026,6 +2170,44 @@ function adjacentMsg(el: HTMLElement, dir: number): HTMLElement | null {
     node = dir < 0 ? node.previousElementSibling : node.nextElementSibling;
   }
   return node as HTMLElement | null;
+}
+
+// 捲過階段分隔線後,頂端只留一顆「目前階段」;下一條分隔線靠近時先淡出,兩個標題不會疊在一起
+const STAGE_HANDOFF_PX = 56;
+let stagePinFrame = 0;
+
+function ensureStagePin(): HTMLElement {
+  const timeline = $<HTMLDivElement>('#timeline');
+  let pin = timeline.querySelector<HTMLElement>(':scope > .stage-pin');
+  if (!pin) {
+    pin = document.createElement('div');
+    pin.className = 'stage-pin';
+    pin.setAttribute('aria-hidden', 'true');
+    pin.innerHTML = '<span class="tl-stage-label"></span>';
+    timeline.prepend(pin);
+    timeline.addEventListener('scroll', scheduleStagePin, { passive: true });
+  }
+  return pin;
+}
+
+function scheduleStagePin(): void {
+  if (stagePinFrame) return;
+  stagePinFrame = requestAnimationFrame(() => { stagePinFrame = 0; updateStagePin(); });
+}
+
+function updateStagePin(): void {
+  const timeline = $<HTMLDivElement>('#timeline');
+  const pin = ensureStagePin();
+  const top = timeline.getBoundingClientRect().top;
+  let current: HTMLElement | null = null;
+  let next: HTMLElement | null = null;
+  for (const marker of Array.from(timeline.querySelectorAll<HTMLElement>(':scope > .tl-stage, .ts-end'))) {
+    if (marker.getBoundingClientRect().top < top) current = marker.classList.contains('tl-stage') ? marker : null;
+    else { next = marker; break; }
+  }
+  const handoff = !!next && next.getBoundingClientRect().top - top < STAGE_HANDOFF_PX;
+  if (current) pin.firstElementChild!.textContent = current.textContent;
+  pin.classList.toggle('on', !!current && !handoff);
 }
 
 function insertTimelineMarkers(el: HTMLElement, m: ChatMessage): void {

@@ -17,6 +17,7 @@ import { workdirChanges } from './src/task-changes';
 import { TerminalManager, MAX_SESSIONS as TERMINAL_MAX } from './src/terminal';
 import { findMentions } from './src/shared';
 import { JobScheduler, RunLedger, localEndpointKey, workdirKey } from './src/jobs';
+import { cancelInstall, installPlan, runInstall } from './src/cli-install';
 import type { JobResources } from './src/jobs';
 
 // 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
@@ -354,6 +355,14 @@ app.whenReady().then(async () => {
   });
   handle('cli:types', () => registry.catalog());
   handle('cli:check', (opts) => registry.checkAll(opts || {}));
+  handle('cli:installPlan', (cliId) => installPlan(String(cliId)));
+  handle('cli:install', async (payload) => {
+    const cliId = String(payload?.cliId || '');
+    const result = await runInstall(cliId, String(payload?.tool || ''), (line) => send('cli:installOutput', { cliId, line }), uiLocale());
+    if (result.ok) result.health = (await registry.checkAll())[cliId];
+    return result;
+  });
+  handle('cli:installCancel', () => cancelInstall());
   handle('model:capability', (payload) => registry.modelCapability(String(payload?.adapterId || ''), String(payload?.model || ''), payload?.live === true));
 
   // CLI 擴充管理
@@ -666,5 +675,5 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('window-all-closed', () => { stopOrchestrator(); stopTerminals(); app.quit(); });
-app.on('before-quit', () => { stopOrchestrator(); stopTerminals(); });
+app.on('window-all-closed', () => { stopOrchestrator(); stopTerminals(); cancelInstall(); app.quit(); });
+app.on('before-quit', () => { stopOrchestrator(); stopTerminals(); cancelInstall(); });

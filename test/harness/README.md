@@ -88,6 +88,7 @@ npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑
                         #   env-fix            環境問題(CLI 沒裝、沒登入、本機模型沒跑)呈現成同一套可照做的下一步
                         #   verify             語法檢查不執行檔案;壞成果自動回退,結果卡不誤報完成
                         #   settings-save      設定寫入成功與失敗,介面都照實回報
+                        #   cli-install        沒安裝的內建 CLI 從設定頁與成員設定都能打開安裝視窗(不實際安裝)
                         #   repair-broke       壞修復自動撤回,保留執行階段成果與使用者原有改動
                         #   report-integrity   回報、稽核、磁碟與評測證據一致,回退不掩蓋失敗過程
 npm run harness:reports # 單獨跑證據保存回歸,不使用真實模型

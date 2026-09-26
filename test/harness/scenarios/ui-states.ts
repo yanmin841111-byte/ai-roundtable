@@ -89,7 +89,7 @@ async function main() {
       search.value = 'DeepSeek';
       search.dispatchEvent(new Event('input', { bubbles: true }));
       await g.w(700);
-      const use = Array.from(document.querySelectorAll('#ext-templates button,#ext-templates a')).find((x) => /使用此範本/.test(x.textContent || ''));
+      const use = document.querySelector('[data-template="deepseek-api.json"]');
       (use as HTMLElement).click();
       await g.w(1600);
       const tab = g.$('#ext-tab-basic') as HTMLButtonElement;
@@ -102,6 +102,7 @@ async function main() {
       // --- 每回合逾時上限:以分鐘編輯,對應 JSON 的 timeoutMs;留空就是預設,不寫這個欄位 ---
       const timeout = g.$('#ext-timeout') as HTMLInputElement;
       const specNow = () => JSON.parse((g.$('#ext-content') as HTMLTextAreaElement).value);
+      (g.$('#ext-extra-fields') as HTMLDetailsElement).open = true;
       g.check(timeout.offsetHeight > 0 && timeout.value === '', `編輯器有逾時上限欄位,範本沒設定時留空(值「${timeout.value}」)`);
       timeout.value = '45';
       timeout.dispatchEvent(new Event('input', { bubbles: true }));

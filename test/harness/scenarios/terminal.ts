@@ -57,7 +57,7 @@ async function main() {
       const reset = (g.$('#reset-btn') as HTMLElement).getBoundingClientRect();
       g.check(reset.right <= bar.getBoundingClientRect().right + 1, '最右邊的「新對話」沒有被擠出畫面');
       const composer = g.$('.composer-box') as HTMLElement;
-      const controlsFit = () => Array.from(composer.querySelectorAll<HTMLElement>('select, button')).every((control) => control.getBoundingClientRect().right <= composer.getBoundingClientRect().right + 1 && control.getBoundingClientRect().left >= composer.getBoundingClientRect().left - 1);
+      const controlsFit = () => Array.from(composer.querySelectorAll<HTMLElement>('select, button')).filter((control) => control.offsetWidth > 0).every((control) => control.getBoundingClientRect().right <= composer.getBoundingClientRect().right + 1 && control.getBoundingClientRect().left >= composer.getBoundingClientRect().left - 1);
       g.check(controlsFit(), '終端開啟後流程、附件與送出都留在輸入區內');
 
       // 工作目錄要和成員一樣

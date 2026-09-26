@@ -47,6 +47,7 @@
         <button id="cli-summary" class="cli-summary" data-i18n-title="side.cliStatus" title="查看 CLI 與擴充狀態"></button>
         <button id="settings-btn" class="ghost small" data-icon="settings" data-i18n="side.settings" data-i18n-title="side.settingsTitle" title="設定(⌘,)">設定</button>
       </div>
+      <div id="sidebar-resize" class="panel-resize panel-resize-x" role="separator" aria-orientation="vertical" tabindex="0" aria-valuemin="220" aria-valuemax="420" data-i18n-aria-label="layout.sidebarResize" data-i18n-title="layout.resizeTitle" aria-label="調整側欄寬度" title="拖曳調整;雙擊還原"></div>
     </aside>
 
     <main id="main">
@@ -56,12 +57,14 @@
         <button id="workdir-chip" class="chip"><span class="chip-icon" data-icon="folder" aria-hidden="true"></span><span id="workdir-label"></span></button>
         <div id="usage-total" class="usage-total" hidden></div>
         <div class="spacer"></div>
-        <button id="terminal-btn" class="ghost small" data-icon="terminal" aria-expanded="false" aria-controls="terminal-panel" data-i18n="topbar.terminal" data-i18n-title="topbar.terminalTitle" title="終端(⌘J)">終端</button>
         <button id="diff-btn" class="ghost small" data-icon="diff" data-i18n="topbar.diff" data-i18n-title="topbar.diffTitle" title="查看成員改了哪些檔案">檔案改動</button>
-        <button id="export-btn" class="ghost small icon-only" data-icon="export" data-i18n="topbar.export" disabled>匯出</button>
-        <button id="stop-btn" class="danger small" data-icon="stop" data-i18n="topbar.stop" disabled>停止</button>
-        <button id="reset-btn" class="ghost small" data-icon="new" data-i18n="topbar.new">新對話</button>
+        <button id="tools-btn" class="ghost small" data-icon="more" data-i18n="topbar.tools" popovertarget="task-tools" aria-expanded="false" aria-controls="task-tools">更多工具</button>
       </header>
+      <div id="task-tools" class="task-tools" popover="auto" role="group" data-i18n-aria-label="topbar.tools" aria-label="更多工具">
+        <button id="terminal-btn" class="ghost" data-icon="terminal" aria-expanded="false" aria-controls="terminal-panel" data-i18n="topbar.terminal" data-i18n-title="topbar.terminalTitle">終端</button>
+        <button id="export-btn" class="ghost" data-icon="export" data-i18n="topbar.export" disabled>匯出</button>
+        <button id="reset-btn" class="ghost" data-icon="new" data-i18n="topbar.new">新對話</button>
+      </div>
 
       <section id="timeline">
         <div id="empty" class="empty">
@@ -78,23 +81,25 @@
       </section>
 
       <footer id="composer">
+        <div id="composer-resize" class="panel-resize panel-resize-y" role="separator" aria-orientation="horizontal" tabindex="0" aria-valuemin="60" data-i18n-aria-label="layout.composerResize" data-i18n-title="layout.resizeTitle" aria-label="調整輸入區高度" title="拖曳調整;雙擊還原"></div>
         <div id="job-queue-note" class="job-queue-note" role="status" hidden></div>
         <div class="composer-box">
           <div id="mention-menu" class="mention-menu" role="listbox" data-i18n-aria-label="composer.mentionMenu" aria-label="指定成員" hidden></div>
           <textarea id="input" rows="3" data-i18n-placeholder="composer.placeholder" placeholder="描述任務,或輸入 @ 指定成員處理…(Enter 送出,Shift+Enter 換行)" aria-autocomplete="list" aria-controls="mention-menu"></textarea>
           <div class="composer-bar">
-            <select id="mode" data-i18n-aria-label="settings.defaultMode">
+            <label class="composer-option"><span data-i18n="composer.taskType">任務類型</span><select id="work-style" data-i18n-title="style.title">
+              <option value="general" data-i18n="style.general">一般任務</option>
+              <option value="code" data-i18n="style.code">寫程式</option>
+            </select></label>
+            <label class="composer-option"><span data-i18n="composer.teamMode">合作方式</span><select id="mode" data-i18n-aria-label="composer.teamMode">
               <option value="divide" data-i18n="composer.mode.divide">平行分工</option>
               <option value="relay" data-i18n="composer.mode.relay">接力</option>
               <option value="tdd" data-i18n="composer.mode.tdd">測試先行</option>
               <option value="discuss" data-i18n="composer.mode.discuss">只討論</option>
-            </select>
-            <select id="work-style" data-i18n-aria-label="style.title" data-i18n-title="style.title" title="寫程式模式會多做自動驗證與測試鎖">
-              <option value="code" data-i18n="style.code">寫程式</option>
-              <option value="general" data-i18n="style.general">一般任務</option>
-            </select>
+            </select></label>
             <div class="spacer"></div>
             <span id="hint" class="hint"></span>
+            <button id="stop-btn" class="danger small" data-icon="stop" data-i18n="topbar.stop" disabled>停止</button>
             <button id="send-btn" class="primary" data-icon="send" data-i18n="composer.send">送出</button>
           </div>
         </div>
@@ -310,7 +315,7 @@
         <div class="row gap">
           <label class="field half"><span data-i18n="agent.effort">思考強度</span><select id="f-effort"></select><small class="field-hint" data-i18n="agent.effortHint">想得越久品質通常越好,但也越慢。</small></label>
           <label class="field half checks">
-            <span>&nbsp;</span>
+            <span class="checks-spacer" aria-hidden="true">&nbsp;</span>
             <label class="check" id="f-canEdit-wrap"><input id="f-canEdit" type="checkbox" /> <span data-i18n="agent.canEdit">允許修改檔案與執行指令</span></label>
             <label class="check"><input id="f-enabled" type="checkbox" /> <span data-i18n="agent.enabled">啟用</span></label>
           </label>
@@ -351,11 +356,14 @@
     <div class="modal-card wide">
       <div class="modal-head"><span data-i18n="extPicker.title">新增 CLI / API</span><button id="ext-picker-close" class="ghost small">✕</button></div>
       <div class="modal-body">
-        <div class="hint" style="margin-bottom:10px" data-i18n="extPicker.hint">點選範本即可複製到擴充資料夾並打開編輯器。</div>
+        <div class="ext-local-route">
+          <div><b data-i18n="extPicker.local">這台電腦的 AI</b><span class="hint">Ollama</span></div>
+          <button id="ext-picker-local" type="button" class="ghost" data-i18n="extPicker.detectLocal">偵測本機模型</button>
+        </div>
         <div class="template-toolbar">
           <div class="template-filters" role="radiogroup" data-i18n-aria-label="extPicker.filters" aria-label="範本類型">
-            <button type="button" role="radio" data-filter="cli" aria-checked="false" tabindex="-1">CLI</button>
-            <button type="button" role="radio" data-filter="api" aria-checked="false" tabindex="-1">API</button>
+            <button type="button" role="radio" data-filter="cli" aria-checked="false" tabindex="-1" data-i18n="extPicker.cli">電腦程式</button>
+            <button type="button" role="radio" data-filter="api" aria-checked="false" tabindex="-1" data-i18n="extPicker.api">API 服務</button>
             <button type="button" role="radio" class="active" data-filter="all" aria-checked="true" data-i18n="extPicker.all">全部</button>
           </div>
           <input id="ext-search" type="search" data-i18n-placeholder="extPicker.search" placeholder="搜尋名稱或說明" data-i18n-aria-label="extPicker.searchLabel" aria-label="搜尋範本">
@@ -370,51 +378,97 @@
     <div class="modal-card wide">
       <div class="modal-head"><span id="ext-editor-title" data-i18n="extEditor.title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
       <div class="modal-body">
-        <label class="field"><span data-i18n="extEditor.file">檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
         <div class="ext-editor-tabs" role="tablist" data-i18n-aria-label="extEditor.tabs" aria-label="擴充編輯模式">
           <button id="ext-tab-basic" class="active" type="button" role="tab" aria-selected="true" data-i18n="extEditor.basic">基本設定</button>
           <button id="ext-tab-advanced" type="button" role="tab" aria-selected="false" data-i18n="extEditor.advanced">進階 JSON</button>
         </div>
         <section id="ext-basic" class="ext-basic" role="tabpanel">
-          <!-- 會走到這個編輯器的人是在接自訂端點,API URL 對他們是必填項,藏起來反而做不完事。
-               但只是想用本機模型的人不該誤入這裡,所以指回一鍵連接。 -->
-          <div class="hint ext-simple-hint" data-i18n="extEditor.simplerPath">只是想用本機模型嗎?回到「CLI 與擴充」用上方的「連接本機模型」更快,不必填這些欄位。</div>
           <div id="ext-basic-unavailable" class="hint" data-i18n="extEditor.jsOnly" hidden>JavaScript 外掛請使用進階編輯器。</div>
           <div id="ext-basic-fields" class="ext-basic-fields">
-            <div class="setting-grid">
-              <label class="field"><span data-i18n="extEditor.id">識別碼</span><input id="ext-id" type="text" spellcheck="false" placeholder="my-provider" /></label>
-              <label class="field"><span data-i18n="extEditor.label">顯示名稱</span><input id="ext-label" type="text" data-i18n-placeholder="extEditor.labelPlaceholder" placeholder="我的 AI" /></label>
-            </div>
-            <label class="field"><span data-i18n="extEditor.type">連線類型</span><select id="ext-type"><option value="cli" data-i18n="extEditor.typeCli">CLI 指令</option><option value="openai" data-i18n="extEditor.typeApi">OpenAI 相容 API</option></select></label>
+            <label class="field"><span data-i18n="extEditor.label">AI 名稱</span><input id="ext-label" type="text" data-i18n-placeholder="extEditor.labelPlaceholder" placeholder="我的 AI" /></label>
             <div id="ext-cli-fields">
-              <label class="field"><span data-i18n="extEditor.bin">執行檔</span><span class="row"><input id="ext-bin" type="text" spellcheck="false" data-i18n-placeholder="extEditor.binPlaceholder" placeholder="例如 claude 或 /usr/local/bin/my-cli" /><button id="ext-pick-bin" class="ghost small" type="button" data-i18n="extEditor.pick">選擇…</button></span></label>
-              <label class="field"><span><span data-i18n="extEditor.args">參數</span> <small data-i18n="extEditor.perLine">每行一個</small></span><textarea id="ext-args" rows="4" spellcheck="false" placeholder="--model&#10;{model}"></textarea><small id="ext-args-help" class="hint"></small></label>
+              <label class="field"><span data-i18n="extEditor.bin">指令名稱或執行檔路徑</span><span class="row"><input id="ext-bin" type="text" spellcheck="false" data-i18n-placeholder="extEditor.binPlaceholder" placeholder="例如 claude 或 /usr/local/bin/my-cli" /><button id="ext-pick-bin" class="ghost small" type="button" data-i18n="extEditor.pick">選擇…</button></span></label>
             </div>
             <div id="ext-api-fields">
-              <label class="field"><span data-i18n="extEditor.baseUrl">API URL</span><input id="ext-base-url" type="url" spellcheck="false" placeholder="https://api.example.com/v1" /></label>
-              <!-- 環境變數名稱是給有在用 shell 設定的人;一般使用者只需要下面的 API key 欄位,
-                   放在預設收合的進階區塊裡,基本流程就不會被它干擾 -->
-              <details class="ext-advanced-fields">
-                <summary data-i18n="extEditor.advancedFields">進階選項</summary>
-                <label class="field"><span><span data-i18n="extEditor.apiEnv">API key 環境變數</span> <small data-i18n="extEditor.optional">選填</small></span><input id="ext-api-env" type="text" spellcheck="false" placeholder="MY_API_KEY" /></label>
-              </details>
-              <label class="field"><span data-i18n="extEditor.apiKey">API key</span><span class="row"><input id="ext-api-key" type="password" autocomplete="new-password" data-i18n-placeholder="extEditor.apiKeyPlaceholder" placeholder="填入後不會寫入擴充 JSON" /><span id="ext-key-status" class="badge" data-i18n="extEditor.keyUnset">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button" data-i18n="extEditor.keyClear">清除</button><button id="ext-key-test" class="ghost small" type="button" data-i18n="extEditor.keyTest">測試連線</button></span><small class="hint" data-i18n="extEditor.keyHint">貼在這裡就好。key 存進系統安全儲存,不會寫進擴充 JSON;也可以改用上方進階選項的環境變數。</small></label>
+              <div class="field">
+                <label for="ext-api-key" data-i18n="extEditor.apiKey">服務商提供的 API 金鑰</label>
+                <div class="ext-key-input"><input id="ext-api-key" type="password" autocomplete="new-password" data-i18n-placeholder="extEditor.apiKeyPlaceholder" placeholder="API key" /><button id="ext-key-reveal" class="ghost small icon-only" type="button" aria-pressed="false"></button></div>
+                <div class="ext-key-actions"><span id="ext-key-status" class="badge" data-i18n="extEditor.keyUnset">尚未設定</span><button id="ext-key-clear" class="ghost small" type="button" data-i18n="extEditor.keyClear">移除金鑰</button><span class="spacer"></span><button id="ext-key-test" class="ghost small" type="button" data-i18n="extEditor.keyTest">儲存並測試連線</button></div>
+                <button id="ext-get-key" class="link small" type="button" data-i18n="extEditor.getKey" hidden>取得 API 金鑰 ↗</button>
+                <small class="hint" data-i18n="extEditor.keyHint">金鑰以系統安全儲存加密,不會寫入擴充 JSON。</small>
+              </div>
             </div>
-            <label class="field"><span><span data-i18n="extEditor.models">模型</span> <small data-i18n="extEditor.modelsHint">以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
-            <label class="field"><span><span data-i18n="extEditor.timeout">每回合逾時上限</span> <small data-i18n="extEditor.timeoutUnit">分鐘</small></span><input id="ext-timeout" type="number" min="1" max="600" step="1" inputmode="numeric" data-i18n-placeholder="extEditor.timeoutPlaceholder" placeholder="預設 20" /><small class="hint" data-i18n="extEditor.timeoutHint">成員一回合最多跑多久。本機大模型第一次載入、或任務很大時可能需要更久;留空就是預設的 20 分鐘。</small></label>
+            <details id="ext-connection-fields" class="ext-advanced-fields" open>
+              <summary data-i18n="extEditor.connectionDefaults">模型與連線設定</summary>
+              <div id="ext-url-field"><label class="field"><span data-i18n="extEditor.baseUrl">服務網址 (Base URL)</span><input id="ext-base-url" type="url" spellcheck="false" placeholder="https://api.example.com/v1" /></label></div>
+              <label class="field"><span><span data-i18n="extEditor.models">可用模型名稱</span> <small data-i18n="extEditor.modelsHint">以逗號分隔，或填 auto</small></span><input id="ext-models" type="text" spellcheck="false" placeholder="model-a, model-b" /><small id="ext-models-help" class="hint"></small></label>
+            </details>
+            <details id="ext-extra-fields" class="ext-advanced-fields">
+              <summary data-i18n="extEditor.advancedFields">進階選項</summary>
+              <label class="field"><span data-i18n="extEditor.type">連接方式</span><select id="ext-type"><option value="cli" data-i18n="extEditor.typeCli">電腦上的 CLI 程式</option><option value="openai" data-i18n="extEditor.typeApi">OpenAI 相容 API</option></select></label>
+              <div id="ext-cli-options">
+                <label id="ext-simple-args" class="field"><span><span data-i18n="extEditor.args">指令參數</span> <small data-i18n="extEditor.perLine">每行一個</small></span><textarea id="ext-args" rows="4" spellcheck="false" placeholder="--model&#10;{model}"></textarea></label>
+                <div id="ext-structured-args" class="ext-argument-status" hidden><span><b data-i18n="extEditor.args">指令參數</b><small id="ext-args-help" class="hint" data-i18n="extEditor.argsAdvanced">範本已設定條件參數</small></span><button id="ext-edit-args" type="button" class="ghost small" data-i18n="extEditor.editArgs">編輯 JSON</button></div>
+              </div>
+              <div id="ext-api-options">
+                <label class="field"><span><span data-i18n="extEditor.apiEnv">API key 環境變數</span> <small data-i18n="extEditor.optional">選填</small></span><input id="ext-api-env" type="text" spellcheck="false" placeholder="MY_API_KEY" /></label>
+              </div>
+              <div class="setting-grid">
+                <label class="field"><span data-i18n="extEditor.id">內部識別碼</span><input id="ext-id" type="text" spellcheck="false" placeholder="my-provider" /></label>
+                <label class="field"><span><span data-i18n="extEditor.timeout">每回合逾時上限</span> <small data-i18n="extEditor.timeoutUnit">分鐘</small></span><input id="ext-timeout" type="number" min="1" max="600" step="1" inputmode="numeric" data-i18n-placeholder="extEditor.timeoutPlaceholder" placeholder="預設 20" /></label>
+              </div>
+            </details>
           </div>
         </section>
         <section id="ext-advanced" role="tabpanel" hidden>
           <textarea id="ext-content" class="code-editor" rows="22" spellcheck="false"></textarea>
         </section>
-        <div id="ext-error" class="error-text" hidden></div>
-        <div id="ext-ok" class="ok-text" hidden></div>
+        <details id="ext-file-settings" class="ext-advanced-fields">
+          <summary data-i18n="extEditor.fileSettings">設定檔</summary>
+          <label class="field"><span data-i18n="extEditor.file">檔名(.json 或 .js)</span><input id="ext-file" type="text" spellcheck="false" /></label>
+        </details>
+        <div id="ext-error" class="error-text" role="alert" hidden></div>
+        <div id="ext-ok" class="ok-text" role="status" hidden></div>
       </div>
       <div class="modal-foot">
         <button id="ext-delete" class="danger small" data-i18n="extEditor.delete">刪除擴充</button>
         <div class="spacer"></div>
         <button id="ext-editor-docs" class="ghost small" data-i18n="extEditor.fields">欄位說明 ↗</button>
+        <button id="ext-cancel" class="ghost" data-i18n="extEditor.close">關閉</button>
         <button id="ext-save" class="primary" data-i18n="extEditor.save">儲存並載入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 內建 CLI 安裝:指令由主程序依系統決定,這裡只顯示與確認 -->
+  <div id="install-modal" class="modal hidden">
+    <div class="modal-card install-card" role="dialog" aria-modal="true" aria-labelledby="install-title">
+      <div class="modal-head"><span id="install-title">安裝</span><button id="install-close" class="ghost small icon" type="button" data-i18n-title="install.close" title="關閉">✕</button></div>
+      <div class="modal-body">
+        <ol id="install-steps" class="install-steps">
+          <li data-step="install"><span>1</span><b data-i18n="install.step.install">安裝</b></li>
+          <li data-step="login"><span>2</span><b data-i18n="install.step.login">登入</b></li>
+          <li data-step="ready"><span>3</span><b data-i18n="install.step.ready">開始使用</b></li>
+        </ol>
+        <div class="install-meta"><span id="install-system" class="badge"></span><span id="install-requirement" class="hint"></span></div>
+        <div id="install-choice">
+          <div id="install-methods" class="install-methods" role="radiogroup" data-i18n-aria-label="install.methods" aria-label="安裝方式"></div>
+          <div class="install-command">
+            <div class="install-command-head"><span data-i18n="install.command">將執行的指令</span><button id="install-copy" class="ghost small" type="button" data-i18n="fix.copy">複製</button></div>
+            <code id="install-command-text"></code>
+            <small id="install-command-note" class="hint"></small>
+          </div>
+        </div>
+        <div id="install-status" class="install-status" role="status" hidden></div>
+        <details id="install-log-box" class="install-log" hidden><summary data-i18n="install.log">安裝紀錄</summary><pre id="install-log"></pre></details>
+      </div>
+      <div class="modal-foot">
+        <button id="install-docs" class="ghost small" type="button" data-i18n="install.docs">官方說明 ↗</button>
+        <div class="spacer"></div>
+        <button id="install-recheck" class="ghost" type="button" data-i18n="install.recheck" hidden>重新檢查</button>
+        <button id="install-cancel" class="danger" type="button" data-i18n="install.cancel" hidden>停止安裝</button>
+        <button id="install-done" class="ghost" type="button" data-i18n="install.done">關閉</button>
+        <button id="install-start" class="primary" type="button" data-i18n="install.start">開始安裝</button>
       </div>
     </div>
   </div>

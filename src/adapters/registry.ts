@@ -12,6 +12,7 @@ import type { Adapter, ModelList, RegisteredAdapter } from './types';
 import type { CliHealth, CliStatus, EnvFix } from '../ipc-types';
 import { tx, type TextLocale } from '../text';
 import { capabilityKey, capabilityStore } from '../capabilities';
+import { hasInstaller } from '../cli-install';
 import type { ModelCapability } from '../ipc-types';
 
 const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
@@ -20,11 +21,12 @@ const FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(json|js)$/;
 // 這裡是唯一決定它的地方:設定畫面、成員的模型設定、回合失敗時的錯誤訊息都拿同一份答案,
 // 同一個狀態不會在三個地方變成三種說法。轉接器自己給了答案就尊重它,
 // 沒給、而且只是沒安裝時,退回官方安裝說明。
-export function fixFromStatus(adapter: Pick<Adapter, 'docsUrl'> | undefined, status: CliStatus | null | undefined): EnvFix | undefined {
+export function fixFromStatus(adapter: (Pick<Adapter, 'docsUrl'> & { id?: string; origin?: string }) | undefined, status: CliStatus | null | undefined): EnvFix | undefined {
   if (!status || status.ok) return undefined;
   if (status.fix) return status.fix;
   const state = status.state || 'missing';
-  if (state === 'missing' && adapter && adapter.docsUrl) return { url: adapter.docsUrl };
+  const install = state === 'missing' && adapter?.origin === 'builtin' && adapter.id && hasInstaller(adapter.id) ? { install: adapter.id } : {};
+  if (state === 'missing' && adapter && adapter.docsUrl) return { ...install, url: adapter.docsUrl };
   return undefined;
 }
 

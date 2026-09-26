@@ -18,6 +18,12 @@ const api: RendererApi = {
   saveConfig: (cfg) => invoke('config:save', cfg),
   cliTypes: () => invoke('cli:types'),
   checkCli: (opts) => invoke('cli:check', opts),
+  cliInstall: {
+    plan: (cliId) => invoke('cli:installPlan', cliId),
+    run: (cliId, tool) => invoke('cli:install', { cliId, tool }),
+    cancel: () => invoke('cli:installCancel'),
+    onOutput: (fn) => on('cli:installOutput', fn),
+  },
   pickDir: () => invoke('dialog:pickDir'),
   pickExecutable: () => invoke('dialog:pickExecutable'),
   openPath: (p) => invoke('shell:openPath', p),

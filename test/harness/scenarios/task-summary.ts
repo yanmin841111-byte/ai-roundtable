@@ -113,6 +113,22 @@ async function once(locale: 'zh-Hant' | 'en') {
       g.check(focused.dataset.path === 'a.js', `點檔名跳到 a.js(${focused.dataset.path})`);
       (document.querySelector('#diff-close') as HTMLButtonElement).click();
 
+      const markers = Array.from(timeline.querySelectorAll<HTMLElement>(':scope > .tl-stage'));
+      const pin = timeline.querySelector(':scope > .stage-pin') as HTMLElement;
+      const scrollMarker = async (marker: HTMLElement, below: number) => {
+        timeline.scrollTop += marker.getBoundingClientRect().top - timeline.getBoundingClientRect().top - below;
+        await g.w(120);
+      };
+      g.check(markers.length >= 2 && markers.every((marker) => getComputedStyle(marker).position === 'static'), '階段分隔不再各自吸頂');
+      await scrollMarker(markers[1], -120);
+      g.check(pin.classList.contains('on') && pin.textContent === markers[1].textContent, `捲過階段後頂端只顯示目前階段(${pin.textContent})`);
+      await scrollMarker(markers[1], 20);
+      g.check(!pin.classList.contains('on'), '下一個階段靠近頂端時,目前階段先淡出,不會兩個疊在一起');
+      await scrollMarker(card!.closest('.msg')!.querySelector('.ts-end') as HTMLElement, 20);
+      g.check(!pin.classList.contains('on'), '「任務結束」靠近頂端時也先淡出,不壓在分隔線上');
+      await scrollMarker(markers[0], 200);
+      g.check(!pin.classList.contains('on'), '還沒捲過任何階段時不顯示固定標題');
+
       const leaks = g.hiddenLeaks();
       g.check(leaks.length === 0, `沒有帶 hidden 卻仍佔版面的元素(${leaks.join(', ') || '無'})`);
       const member = document.querySelector('#agent-list .agent-card') as HTMLElement;

@@ -239,7 +239,7 @@ so you can update the lineup or save a new one.
 
 ## Adding other CLIs and APIs
 
-Bottom-left "⚙ Settings" → "CLIs & extensions" → "+ Add" adds another AI from a
+Bottom-left "⚙ Settings" → "AI connections" → "+ Add" adds another AI from a
 template:
 
 | Template                                          | Type   | Needs                                                                           |

@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **One-click install for built-in CLIs**: when Claude Code, Codex CLI, GitHub Copilot CLI or Cursor CLI is missing, settings, member settings and turn errors offer "Install…". Official install methods are ordered for macOS / Windows / Linux and the Homebrew, WinGet or npm already present; the exact command is shown and runs only after the user starts it. The UI sends identifiers only, and the main process builds commands from a fixed list. Afterwards the app guides sign-in and re-checks; sign-in and subscriptions remain the user's step.
+- **Resizable layout**: sidebar width and input height can be dragged or adjusted with arrow keys, reset by double-click, and are saved. Limits keep room for the conversation.
 - **General discussion policy**: sequential or independent-first discussion for every adapter and flow, persisted in settings and lineups. The independent round omits transcripts and resumed sessions, defers questions and consensus until all finish, and always leaves a critique round. Old settings remain sequential.
 - **Multi-condition evaluation infrastructure**: independent-first discussion, sequential/independent isolated candidates, and repeated solo attempts selected by public ratchet gates under a token target. Per-candidate evidence and failing-test IDs are retained; Jaccard reports both-correct and unavailable pairs separately. Hidden scores never select a candidate. Dry runs, an approval flag and source/protocol fingerprints protect preregistration and resumption. No new formal model experiment has run.
 - **Counterexample evidence on result cards**: result cards now preserve and display each counterexample's title, reviewer, confirmation state, post-repair state and bounded execution output; text exports and history carry the same evidence. Older records explicitly say the evidence was not saved instead of treating missing data as no issue.
@@ -20,12 +22,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **Easier AI connections**: the settings tab is renamed "AI connections" and leads with local models and ready-made AI services; custom CLIs, JSON and file names move under advanced options. API keys can be shown or hidden, known providers link to their key pages, and basic edits keep template conditional arguments and model metadata.
+- **General-purpose workspace**: terminal, export and new chat move under "More tools", Stop sits next to Send, and compact pills separate "Task type" from "Collaboration". A missing working folder shows a "Choose a working folder" button. Visuals add a subtle glow, dot grid and consistent radii; animations stop when reduced motion is requested.
 - The README distinguishes unproven roundtable benefits from disproven ones, notes that Claude Code + Codex has not been measured, and limits ratchet/counterexample claims to their actual evidence.
 - The rollback decision moved from "did the repair turn a passing verification into a failing one" to the ratchet above. It adds a baseline comparison and can see fine-grained gates: a project verify command is one coarse boolean, where "3 tests failing" and "10 tests failing" look identical.
 - Evidence tiers: only the user's own gates (syntax checks, verify commands) and counterexamples confirmed during this task can trigger an automatic rollback. Counterexamples inherited from the corpus still run and are still reported, but do not trigger a rollback on their own — an old counterexample may test the wrong requirement, and a task may be deliberately changing that behaviour. The principle: **the more independently verifiable something is, the more weight it carries**.
 
 ### Fixed
 
+- Timeline stage headers no longer stick together, overlap, or cover messages. After scrolling past a stage, one current-stage pill remains and fades out before the next stage or "Task finished" divider.
+- Member settings fields align at the top, and a missing CLI no longer repeats the same command-not-found message.
 - OpenAI-compatible API turns now total token usage across tool requests and fallback retries, preserving per-request records. Missing fields remain unknown instead of treating the last response as the complete token budget usage.
 - Independent-first rounds no longer mark attachments as seen by the persistent session, so the second round still receives new attachments when resuming an older session.
 - Counterexample cards and exports explicitly report when no post-repair rerun occurred instead of labeling the initial result as "Passed after repair".

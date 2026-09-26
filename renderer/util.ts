@@ -28,3 +28,46 @@ export function cssEscape(value: string): string {
   if (window.CSS && CSS.escape) return CSS.escape(String(value));
   return String(value).replace(/"/g, '\\"');
 }
+
+interface ResizeOptions {
+  axis: 'x' | 'y';
+  // 往右或往下拖時尺寸變大用 1,往左或往上變大用 -1
+  direction: 1 | -1;
+  get: () => number;
+  apply: (size: number) => number;
+  save: (size: number) => void;
+  reset: () => void;
+  step?: number;
+}
+
+export function bindResizeHandle(handle: HTMLElement, { axis, direction, get, apply, save, reset, step = 24 }: ResizeOptions): void {
+  const coordinate = (event: PointerEvent) => axis === 'x' ? event.clientX : event.clientY;
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const start = coordinate(event);
+    const startSize = get();
+    try { handle.setPointerCapture(event.pointerId); } catch {}
+    document.body.classList.add(axis === 'x' ? 'resizing-x' : 'resizing-y');
+    const move = (next: PointerEvent) => apply(startSize + (coordinate(next) - start) * direction);
+    const end = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
+      document.body.classList.remove('resizing-x', 'resizing-y');
+      save(get());
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', end);
+    document.addEventListener('pointercancel', end);
+  });
+  handle.addEventListener('dblclick', reset);
+  handle.addEventListener('keydown', (event) => {
+    const keys = axis === 'x' ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown'];
+    if (event.key === 'Home' || event.key === 'Enter') { event.preventDefault(); reset(); return; }
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const grow = event.key === keys[1] ? direction : -direction;
+    save(apply(get() + grow * step));
+  });
+}

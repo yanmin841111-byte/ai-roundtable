@@ -12,12 +12,12 @@ AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI
 
 ## 快速開始
 
-1. 左下角「⚙ 設定」→「CLI 與擴充」按「+ 新增」,選一個範本。
+1. 左下角「⚙ 設定」→「AI 連接」按「+ 新增」,選一個範本。
 2. 範本會複製到你的擴充資料夾並打開編輯器,改好後按「儲存並載入」。
 3. 設定有錯時,編輯器與設定頁會直接顯示原因。
 4. 到成員設定的「AI CLI」選單選擇新的擴充。
 
-擴充資料夾位於 `~/Library/Application Support/AI Roundtable/adapters/`,在「設定 → 資料與紀錄」可以直接打開。也可以直接在資料夾裡新增或修改檔案,再到「設定 → CLI 與擴充」按 ↻ 重新載入。
+擴充資料夾位於 `~/Library/Application Support/AI Roundtable/adapters/`,在「設定 → 資料與紀錄」可以直接打開。也可以直接在資料夾裡新增或修改檔案,再到「設定 → AI 連接」按 ↻ 重新載入。
 
 開發時可以用環境變數 `AI_ROUNDTABLE_ADAPTERS_DIR` 指定其他資料夾。
 
@@ -212,7 +212,7 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 | 欄位 | 預設 | 說明 |
 | --- | --- | --- |
 | `baseUrl` | 必填 | API 根網址 |
-| `secretRef` | 無 | 「設定 → CLI 與擴充」安全儲存 API key 後自動寫入的參照;不要手動放入 key |
+| `secretRef` | 無 | 「設定 → AI 連接」安全儲存 API key 後自動寫入的參照;不要手動放入 key |
 | `apiKeyEnv` | 無 | 讀取 API key 的環境變數名稱;安全儲存未設定時使用 |
 | `headers` | 無 | 額外 HTTP header |
 | `path` | `/chat/completions` | 對話端點 |
@@ -245,7 +245,7 @@ ollama pull qwen3.8:27b-mlx
 ollama serve
 ```
 
-接著在「設定 → CLI 與擴充」加入 Ollama 範本，並在成員設定選擇 `qwen3.8:27b-mlx`。模型清單來自 `http://localhost:11434/v1/models`;若 app 顯示端點無法連線，先確認 `ollama serve` 正在執行。此範本會把 png / jpeg / webp / gif 圖片以 OpenAI `image_url` data URI 傳給模型；其他附件仍以文字處理。
+接著在「設定 → AI 連接」加入 Ollama 範本，並在成員設定選擇 `qwen3.8:27b-mlx`。模型清單來自 `http://localhost:11434/v1/models`;若 app 顯示端點無法連線，先確認 `ollama serve` 正在執行。此範本會把 png / jpeg / webp / gif 圖片以 OpenAI `image_url` data URI 傳給模型；其他附件仍以文字處理。
 
 簡易設定介面可直接呼叫同一個後端方法，不必顯示端點或 JSON：先以 `registry.quickSetupOllama()` 取得 `{ models, recommendedModel }`，讓使用者只選模型；再以 `registry.quickSetupOllama({ model })` 建立或更新設定。回傳的 `adapterId` 與 `selectedModel` 可直接寫入成員設定。偵測會使用既有設定的 `baseUrl`；更新時保留端點、認證、逾時與歷史上限等環境偏好，但模型能力、thinking 與附件支援會套用最新範本，避免舊設定讓選項失效或圖片無法送出。模型清單中的 `name:latest` 也會自動接受裸名 `name`，但其他 tag 不會被猜測或替換。
 
@@ -261,7 +261,7 @@ ollama serve
 
 ### 設定 API key
 
-一般使用者可在「設定 → CLI 與擴充」的 API key 欄位輸入,app 會用作業系統安全儲存加密,不會把明文寫進擴充 JSON。也可以在 `~/.zshrc` 加上:
+一般使用者可在「設定 → AI 連接」的 API key 欄位輸入,app 會用作業系統安全儲存加密,不會把明文寫進擴充 JSON。也可以在 `~/.zshrc` 加上:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."

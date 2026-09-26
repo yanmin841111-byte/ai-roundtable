@@ -124,7 +124,7 @@ async function relay() {
       await g.ready();
       const mode = g.$('#mode') as HTMLSelectElement;
       g.check(Array.from(mode.options).some((option) => option.value === 'relay'), '模式選單提供接力');
-      g.check(Array.from(mode.options).some((option) => option.value === 'divide' && /平行/.test(option.text)), '平行分工與接力分開標示');
+      g.check(Array.from(mode.options).some((option) => option.value === 'divide' && option.text !== Array.from(mode.options).find((item) => item.value === 'relay')!.text), '平行分工與接力分開標示');
       mode.value = 'relay';
       g.$('#input').value = '依序完成規格與實作';
       g.$('#send-btn').click();
