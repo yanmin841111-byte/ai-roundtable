@@ -20,6 +20,7 @@ export function scriptedMember(opts: {
   name?: string;
   plan?: { summary: string; assignments: Array<{ agent: string; task: string }> };
   discuss?: string;
+  planReview?: string;
   review?: string;
   /** 修復後複查時的回覆(沒給就沿用 review) */
   recheck?: string;
@@ -38,6 +39,7 @@ export function scriptedMember(opts: {
   const payload = Buffer.from(JSON.stringify({
     plan: opts.plan || null,
     discuss: opts.discuss || '同意直接進入分工\n[AGREED]',
+    planReview: opts.planReview || '[AGREED]',
     review: opts.review || '看過了,沒問題\n[NO_ISSUES]',
     recheck: opts.recheck || null,
     writes: opts.writes || null,

@@ -11,6 +11,7 @@ export interface Model {
   defaultEffort?: string;
   aliases?: string[];
   unrestrictedEffort?: boolean;
+  lowCost?: boolean;
 }
 
 // 回傳 { effort, note }:effort 為 null 表示不傳強度參數;note 說明做了什麼調整。

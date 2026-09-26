@@ -2,19 +2,32 @@
 // 套用、比對的規則在 src/lineups.ts;這裡只負責畫面。
 import { t } from './i18n';
 import { $ } from './util';
-import { applyLineup, lineupFromConfig, lineupMatches, LINEUP_NAME_MAX, LINEUPS_MAX } from '../src/lineups';
+import { controlLabel } from './icons';
+import { applyLineup, lineupFromConfig, lineupMatches, suggestLineupMembers, LINEUP_NAME_MAX, LINEUPS_MAX } from '../src/lineups';
+import type { SuggestedMembers } from '../src/lineups';
 import type { AppConfig, Lineup } from './api';
 
 export interface LineupDeps {
   config: () => AppConfig;
   // 寫回設定、存檔、重畫側欄與流程選單
-  commit: (next: AppConfig) => void;
+  commit: (next: AppConfig) => Promise<boolean>;
   running: () => boolean;
+  availability: () => Record<string, { ready: boolean; writable: boolean; detail: string }>;
+  refresh: () => Promise<void>;
+  pickWorkDir: () => Promise<void>;
+  openConnections: () => void;
+  addMember: () => void;
+  // 用同一個已連接的 Copilot CLI 建立三位不同模型的唯讀成員;不可用時為 null
+  copilotTrio: (() => Promise<boolean>) | null;
 }
 
 let deps: LineupDeps;
 let naming = false; // 選單底部正在輸入新陣容的名稱
 let noteTimer: ReturnType<typeof setTimeout> | undefined;
+let preset: 'code' | 'general' | null = null;
+let selection: SuggestedMembers | null = null;
+let saving = false;
+let refreshing = false;
 
 export function setupLineups(d: LineupDeps): void {
   deps = d;
@@ -49,6 +62,7 @@ export function renderLineupButton(): void {
 }
 
 function toggleMenu(): void {
+  if (saving) return;
   const menu = $('#lineup-menu');
   if (!menu.hidden) { closeLineupMenu(); return; }
   naming = false;
@@ -59,12 +73,15 @@ function toggleMenu(): void {
 }
 
 export function closeLineupMenu(): void {
+  if (saving) return;
   $('#lineup-menu').hidden = true;
   naming = false;
+  preset = null;
+  selection = null;
   $<HTMLButtonElement>('#lineup-btn').setAttribute('aria-expanded', 'false');
 }
 
-function modeLabel(mode: string): string { return t(mode === 'discuss' ? 'lineup.mode.discuss' : mode === 'relay' ? 'lineup.mode.relay' : 'lineup.mode.divide'); }
+function modeLabel(mode: string): string { return t(mode === 'guarded' ? 'lineup.mode.guarded' : mode === 'discuss' ? 'lineup.mode.discuss' : mode === 'relay' ? 'lineup.mode.relay' : 'lineup.mode.divide'); }
 
 function renderMenu(): void {
   const menu = $('#lineup-menu');
@@ -72,6 +89,28 @@ function renderMenu(): void {
   const cur = active();
   const busy = deps.running();
   menu.replaceChildren();
+  if (preset) { renderPreset(menu); return; }
+
+  const quick = document.createElement('div');
+  quick.className = 'lineup-menu-head';
+  quick.textContent = t('lineup.quick.title');
+  menu.appendChild(quick);
+  for (const kind of ['code', 'general'] as const) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lineup-action lineup-quick';
+    button.dataset.preset = kind;
+    button.disabled = busy || saving;
+    controlLabel(button, kind === 'code' ? 'terminal' : 'result', t(`lineup.quick.${kind}`));
+    button.onclick = () => {
+      if (deps.running() || saving) return;
+      preset = kind;
+      selection = null;
+      renderMenu();
+      menu.querySelector<HTMLElement>('select, button')?.focus();
+    };
+    menu.appendChild(button);
+  }
 
   const head = document.createElement('div');
   head.className = 'lineup-menu-head';
@@ -200,7 +239,8 @@ function newId(): string {
   return (crypto.randomUUID && crypto.randomUUID()) || `lineup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function save(name: string, id: string): void {
+async function save(name: string, id: string): Promise<void> {
+  if (saving) return;
   const config = deps.config();
   const lineup = lineupFromConfig(config, name, id);
   if (!lineup.members.length || !lineup.name) return;
@@ -208,27 +248,210 @@ function save(name: string, id: string): void {
   const replaced = rest.length !== lineups().length;
   // 設定檔載入時只留前 LINEUPS_MAX 個;多存的會在下次開啟時消失,所以在這裡就擋下來
   if (!replaced && lineups().length >= LINEUPS_MAX) { note(t('lineup.full', { max: LINEUPS_MAX }), true); return; }
-  deps.commit({ ...config, lineups: replaced ? lineups().map((l) => (l.id === id ? lineup : l)) : [...rest, lineup], settings: { ...config.settings, activeLineupId: id } });
+  if (!await commit({ ...config, lineups: replaced ? lineups().map((l) => (l.id === id ? lineup : l)) : [...rest, lineup], settings: { ...config.settings, activeLineupId: id } })) return;
   naming = false;
   closeLineupMenu();
   note(t(replaced ? 'lineup.updated' : 'lineup.saved', { name: lineup.name }));
 }
 
-function apply(l: Lineup): void {
-  if (deps.running()) return;
+async function apply(l: Lineup): Promise<void> {
+  if (deps.running() || saving) return;
   const result = applyLineup(deps.config(), l);
   if (!result) { note(t('lineup.allMissing'), true); return; }
-  deps.commit(result.config);
+  if (!await commit(result.config)) return;
   closeLineupMenu();
   note(result.missing ? t('lineup.appliedMissing', { name: l.name, n: result.missing }) : t('lineup.applied', { name: l.name }), !!result.missing);
 }
 
-function remove(l: Lineup): void {
+async function remove(l: Lineup): Promise<void> {
+  if (saving) return;
   if (!confirm(t('lineup.confirmDelete', { name: l.name }))) return;
   const config = deps.config();
   const settings = config.settings.activeLineupId === l.id ? { ...config.settings, activeLineupId: null } : config.settings;
-  deps.commit({ ...config, lineups: lineups().filter((x) => x.id !== l.id), settings });
+  if (!await commit({ ...config, lineups: lineups().filter((x) => x.id !== l.id), settings })) return;
   renderMenu();
+}
+
+async function commit(next: AppConfig): Promise<boolean> {
+  saving = true;
+  $('#lineup-menu').querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach((control) => { control.disabled = true; });
+  try {
+    if (await deps.commit(next)) return true;
+    note(t('lineup.quick.saveFailed'), true);
+    return false;
+  } catch {
+    note(t('lineup.quick.saveFailed'), true);
+    return false;
+  } finally {
+    saving = false;
+    renderMenu();
+  }
+}
+
+function renderPreset(menu: HTMLElement): void {
+  const kind = preset!;
+  const config = deps.config();
+  const availability = deps.availability();
+  const readyIds = config.agents.filter((agent) => availability[agent.id]?.ready).map((agent) => agent.id);
+  const writableIds = config.agents.filter((agent) => availability[agent.id]?.writable).map((agent) => agent.id);
+  const suggested = suggestLineupMembers(config, readyIds, writableIds, kind);
+  if (!selection && !('reason' in suggested)) selection = suggested;
+  const head = document.createElement('div');
+  head.className = 'lineup-menu-head';
+  head.textContent = t(`lineup.quick.${kind}`);
+  menu.appendChild(head);
+  const form = document.createElement('form');
+  form.className = 'lineup-preset';
+  const roles = ['leadId', 'authorId', 'reviewerId'] as const;
+  const intro = document.createElement('p');
+  intro.className = 'lineup-preset-intro';
+  intro.textContent = t('lineup.quick.intro');
+  form.appendChild(intro);
+  if (selection) for (const [index, role] of roles.entries()) {
+    const label = document.createElement('label');
+    label.className = 'lineup-role';
+    const title = document.createElement('span');
+    title.className = 'lineup-role-title';
+    const step = document.createElement('span');
+    step.className = 'lineup-role-step';
+    step.textContent = String(index + 1);
+    title.append(step, t(`lineup.quick.${role}`));
+    label.appendChild(title);
+    const select = document.createElement('select');
+    select.dataset.teamRole = role;
+    select.setAttribute('aria-label', t(`lineup.quick.${role}`));
+    for (const member of config.agents) {
+      const option = document.createElement('option');
+      option.value = member.id;
+      option.textContent = `${member.name} · ${member.model || member.cli}`;
+      option.disabled = !availability[member.id]?.ready || (kind === 'code' && role === 'authorId' && !availability[member.id]?.writable);
+      select.appendChild(option);
+    }
+    select.value = selection[role];
+    select.disabled = deps.running() || saving;
+    select.onchange = () => {
+      const previous = selection![role];
+      const occupied = roles.find((other) => other !== role && selection![other] === select.value);
+      if (occupied) selection![occupied] = previous;
+      selection![role] = select.value;
+      renderMenu();
+      menu.querySelector<HTMLElement>(`[data-team-role="${role}"]`)?.focus();
+    };
+    const detail = document.createElement('small');
+    const state = availability[selection[role]];
+    detail.className = state?.writable ? 'lineup-role-detail writable' : 'lineup-role-detail';
+    detail.textContent = [state?.detail || t('lineup.quick.unknown'), t(state?.writable ? 'lineup.quick.canEdit' : 'agent.readOnly')].join(' · ');
+    label.append(select, detail);
+    form.appendChild(label);
+  }
+  const selectedIds = selection ? roles.map((role) => selection![role]) : [];
+  const enough = selectedIds.length === 3 && new Set(selectedIds).size === 3 && selectedIds.every((id) => readyIds.includes(id));
+  const writer = !!selection && (kind === 'general' || writableIds.includes(selection.authorId));
+  const folder = !!config.settings.workDir.trim();
+  const needsWriter = !selection && 'reason' in suggested && suggested.reason === 'writer';
+  const issue = deps.running() ? t('lineup.running') : needsWriter ? t('lineup.quick.writer') : !enough ? t('lineup.quick.members', { n: readyIds.length }) : !writer ? t('lineup.quick.writer') : !folder ? t('lineup.quick.folder') : '';
+  if (issue) {
+    const warning = document.createElement('div');
+    warning.className = 'lineup-preset-warning';
+    warning.setAttribute('role', 'status');
+    warning.textContent = issue;
+    form.appendChild(warning);
+  }
+  if (!enough) for (const member of config.agents.filter((agent) => !readyIds.includes(agent.id))) {
+    const status = document.createElement('div');
+    status.className = 'lineup-preset-status';
+    status.textContent = `${member.name}: ${availability[member.id]?.detail || t('lineup.quick.unknown')}`;
+    form.appendChild(status);
+  }
+  if (!folder) {
+    const choose = document.createElement('button');
+    choose.type = 'button';
+    choose.className = 'lineup-action lineup-quick';
+    controlLabel(choose, 'folderPlus', t('lineup.quick.chooseFolder'));
+    choose.disabled = deps.running() || saving;
+    choose.onclick = async () => { await deps.pickWorkDir(); if (preset) renderMenu(); };
+    form.appendChild(choose);
+  }
+  if (!enough && deps.copilotTrio) {
+    const trio = document.createElement('button');
+    trio.type = 'button';
+    trio.className = 'lineup-action lineup-quick lineup-trio';
+    trio.dataset.teamAction = 'copilotTrio';
+    controlLabel(trio, 'new', t('lineup.quick.copilotTrio'));
+    trio.title = t('lineup.quick.copilotTrioTitle');
+    trio.disabled = deps.running() || saving || refreshing;
+    trio.onclick = async () => {
+      if (saving || !deps.copilotTrio) return;
+      saving = true;
+      renderMenu();
+      let ok = false;
+      try { ok = await deps.copilotTrio(); } catch { ok = false; }
+      saving = false;
+      selection = null;
+      if (!ok) note(t('lineup.quick.saveFailed'), true);
+      renderMenu();
+    };
+    form.appendChild(trio);
+  }
+  if (!enough || !writer) {
+    for (const action of ['connections', 'addMember', 'refresh'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'lineup-action lineup-quick';
+      button.dataset.teamAction = action;
+      controlLabel(button, action === 'refresh' ? 'refresh' : action === 'connections' ? 'settings' : 'new', t(`lineup.quick.${action}`));
+      button.disabled = deps.running() || saving || refreshing;
+      button.onclick = async () => {
+        if (action === 'refresh') {
+          refreshing = true;
+          renderMenu();
+          try { await deps.refresh(); } catch { note(t('lineup.quick.refreshFailed'), true); }
+          finally { refreshing = false; if (preset) renderMenu(); }
+        } else {
+          closeLineupMenu();
+          if (action === 'connections') deps.openConnections(); else deps.addMember();
+        }
+      };
+      form.appendChild(button);
+    }
+  }
+  const actions = document.createElement('div');
+  actions.className = 'lineup-preset-actions';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'ghost small';
+  back.textContent = t('lineup.cancel');
+  back.disabled = saving;
+  back.onclick = () => { preset = null; selection = null; renderMenu(); menu.querySelector<HTMLElement>('[data-preset]')?.focus(); };
+  const apply = document.createElement('button');
+  apply.type = 'submit';
+  apply.className = 'primary small lineup-quick';
+  apply.id = 'lineup-preset-apply';
+  controlLabel(apply, 'accept', t('lineup.quick.apply'));
+  apply.disabled = !!issue || saving || refreshing;
+  actions.append(back, apply);
+  form.appendChild(actions);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (!selection || saving || refreshing || deps.running()) return;
+    const current = deps.config();
+    const states = deps.availability();
+    const ids = roles.map((role) => selection![role]);
+    if (new Set(ids).size !== 3 || !ids.every((id) => states[id]?.ready) || !current.settings.workDir.trim() || (kind === 'code' && !states[selection.authorId]?.writable)) { renderMenu(); return; }
+    if (lineups().length >= LINEUPS_MAX) { note(t('lineup.full', { max: LINEUPS_MAX }), true); return; }
+    const baseName = t(`lineup.quick.${kind}`);
+    let name = baseName;
+    for (let suffix = 2; lineups().some((lineup) => lineup.name === name); suffix++) name = `${baseName} ${suffix}`;
+    const author = current.agents.find((agent) => agent.id === selection!.authorId)!;
+    const members = roles.map((role) => ({ id: selection![role], persona: t(`lineup.quick.persona.${kind}.${role}`, { author: author.name }) }));
+    const lineup: Lineup = { id: newId(), name, members, leadAgentId: selection.leadId, mode: 'guarded', maxRounds: Math.max(2, Math.min(10, current.settings.maxRounds || 3)), discussionMode: 'independent-first', workStyle: kind };
+    const result = applyLineup(current, lineup);
+    if (!result || result.missing) { renderMenu(); return; }
+    if (!await commit({ ...result.config, lineups: [...lineups(), lineup] })) return;
+    closeLineupMenu();
+    note(t('lineup.applied', { name }));
+  };
+  menu.appendChild(form);
 }
 
 // 側欄成員清單上方的一行提示,幾秒後消失。換陣容會改掉整份成員清單,一定要說出剛剛發生了什麼

@@ -95,6 +95,7 @@ export interface FixFailure {
 
 export interface FixOutcome {
   unresolved: Issue[];
+  repairRounds?: number;
   reviewFailed: Review[];
   fixFailed: FixFailure[];
   // 修復回合成功跑完的成員與它的修復回報(之後會再複查一次)
@@ -108,6 +109,7 @@ export interface FixOutcome {
   verify?: unknown;
   // 修復後重跑的反例(形狀見 src/counterexample.ts 的 CounterexampleRun),同樣用 unknown
   counterexamples?: unknown;
+  discoveredCounterexamples?: unknown;
 }
 
 export interface SummaryInput extends Partial<FixOutcome> {

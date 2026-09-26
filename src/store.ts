@@ -70,9 +70,9 @@ class Store {
     }
   }
   save(config: AppConfig): AppConfig {
-    this.config = config;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(config, null, 2));
+    this.config = config;
     return this.config;
   }
   get(): AppConfig { return this.config; }

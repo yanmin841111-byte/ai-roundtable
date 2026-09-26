@@ -5,7 +5,7 @@ import { hasMarker } from '../shared';
 import { attachmentCapabilities } from '../attachments';
 import type { AgentConfig, ReviewVerdict } from '../ipc-types';
 import type { Adapter } from '../adapters/types';
-import type { ExecReport, ReviewPair } from './types';
+import type { ExecReport, Review, ReviewPair } from './types';
 
 export const NO_ISSUES = 'NO_ISSUES';
 
@@ -27,8 +27,11 @@ export function hasQualifiedReviewer(agents: AgentConfig[] | null | undefined, t
   return reviewerCandidates(agents, targetId).length > 0;
 }
 
-export function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: ExecReport[]): ReviewPair[] {
+export function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: ExecReport[], allReviewers = false): ReviewPair[] {
   if (!Array.isArray(reports) || reports.length === 0) return [];
+  if (allReviewers) {
+    return reports.flatMap((target) => reviewerCandidates(agents, target.agent.id).map((reviewer) => ({ reviewer, target })));
+  }
   if (reports.length >= 2) {
     return reports.map((r, i) => ({ reviewer: r.agent, target: reports[(i + 1) % reports.length] }));
   }
@@ -39,6 +42,15 @@ export function pickReviewPairs(agents: AgentConfig[] | null | undefined, report
   const candidates = reviewerCandidates(agents, target.agent.id);
   const reviewer = candidates.find((a) => executed.has(a.id)) || candidates[0];
   return reviewer ? [{ reviewer, target }] : [];
+}
+
+export function allReviewsPassed(agents: AgentConfig[], targetId: string, reviews: Review[]): boolean {
+  const candidates = reviewerCandidates(agents, targetId);
+  if (new Set(candidates.map((agent) => agent.id)).size < 2) return false;
+  return candidates.every((agent) => {
+    const votes = reviews.filter((review) => review.target.agent.id === targetId && review.reviewer.id === agent.id);
+    return votes.length === 1 && reviewVerdict(votes[0].text, votes[0].error) === 'pass';
+  });
 }
 
 // ---------- 審查者看得到改動的方式 ----------

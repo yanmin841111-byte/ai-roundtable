@@ -4,6 +4,8 @@
 
 import { runApp, report } from '../app';
 import { scriptedMember } from '../fixtures';
+import fs from 'fs';
+import path from 'path';
 
 async function once(locale: 'zh-Hant' | 'en') {
   const zh = locale === 'zh-Hant';
@@ -108,10 +110,140 @@ async function once(locale: 'zh-Hant' | 'en') {
   return r;
 }
 
+async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'members' | 'writer' | 'folder' | 'save-failed') {
+  const result = await runApp({
+    members: [
+      scriptedMember({ id: 'a', name: 'Alice', canEdit: false }),
+      scriptedMember({ id: 'b', name: 'Bob', canEdit: condition !== 'writer' }),
+      { ...scriptedMember({ id: 'c', name: 'Carol', canEdit: false }), ...(condition === 'members' ? { cli: 'unregistered-fixture' } : {}) },
+    ],
+    settings: { leadAgentId: 'a', uiLocale: locale, maxRounds: 1, sidebarWidth: 220, ...(condition === 'folder' ? { workDir: '' } : {}) },
+    beforeLaunch: condition === 'save-failed' ? ({ userData }) => fs.chmodSync(path.join(userData, 'config.json'), 0o444) : undefined,
+    constants: { locale, condition },
+    timeoutMs: 90_000,
+    scenario: async (context: any) => {
+      const app: any = globalThis;
+      await app.ready();
+      const original = await app.api.getConfig();
+      const menu = () => document.querySelector('#lineup-menu') as HTMLElement;
+      const open = (kind: string) => {
+        if (menu().hidden) (document.querySelector('#lineup-btn') as HTMLButtonElement).click();
+        (menu().querySelector(`[data-preset="${kind}"]`) as HTMLButtonElement).click();
+      };
+      open('code');
+      const warning = () => menu().querySelector('.lineup-preset-warning')?.textContent || '';
+      if (['members', 'writer', 'folder'].includes(context.condition)) {
+        const expected = context.condition === 'members' ? /2/ : context.condition === 'writer' ? /改檔權限|edit permission/ : /資料夾|working folder/;
+        await app.waitFor(() => expected.test(warning()), 15_000, 'specific setup issue displayed');
+        app.check((document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, '前置條件不足時不能套用');
+        if (context.condition === 'members') app.check(menu().textContent?.includes('Carol'), '指出不可用的成員');
+        if (context.condition === 'writer') app.check(!/Three available|需要三位/.test(warning()), '沒有改檔權限不誤報成員不足');
+        if (context.condition === 'folder') app.check(Array.from(menu().querySelectorAll('button')).some((button) => /選擇工作資料夾|Choose a working folder/.test(button.textContent || '')), '提供資料夾選擇入口');
+        app.check(JSON.stringify(await app.api.getConfig()) === JSON.stringify(original), '被阻擋的組隊不變更設定');
+        await app.shot(`quick-${context.condition}-${context.locale}`);
+        if (context.condition === 'members') {
+          (menu().querySelector('[data-team-action="addMember"]') as HTMLButtonElement).click();
+          await app.waitFor(() => !document.querySelector('#modal')!.classList.contains('hidden'), 5000, 'member editor opened');
+          app.check(menu().hidden, '新增成員時關閉組隊選單');
+          (document.querySelector('#modal-cancel') as HTMLButtonElement | null)?.click();
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+          open('code');
+          const trio = menu().querySelector('[data-team-action="copilotTrio"]') as HTMLButtonElement;
+          app.check(!!trio, '成員不足時提供 Copilot 三模型建立');
+          trio.click();
+          await app.waitFor(async () => (await app.api.getConfig()).agents.filter((member: any) => member.cli === 'copilot').length === 3, 5000, 'copilot trio saved');
+          const trioConfig = await app.api.getConfig();
+          const copilots = trioConfig.agents.filter((member: any) => member.cli === 'copilot');
+          app.check(new Set(copilots.map((member: any) => member.model)).size === 3 && copilots.every((member: any) => !member.canEdit), '三個不同模型且預設唯讀');
+          app.check((await app.api.snapshot()).messages.length === 0, '建立成員不送出任務');
+          await app.shot(`quick-copilot-trio-${context.locale}`);
+        }
+        if (context.condition === 'writer') {
+          (menu().querySelector('.lineup-preset-actions .ghost') as HTMLButtonElement).click();
+          open('general');
+          app.check(!(document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, '唯讀成員仍可組成文件研究組');
+          (document.querySelector('#lineup-preset-apply') as HTMLButtonElement).click();
+          await app.waitFor(() => menu().hidden, 5000, 'read-only research team saved');
+          const research = await app.api.getConfig();
+          app.check(research.settings.workStyle === 'general' && research.agents.every((member: any) => !member.canEdit), '研究組不提升任何改檔權限');
+        }
+        return { condition: context.condition };
+      }
+      await app.waitFor(() => !(document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, 15_000, 'available team preview');
+      app.check(menu().querySelectorAll('[data-team-role]').length === 3, '預覽列出三個角色');
+      app.check(/尚未測試|not tested/.test(menu().textContent || ''), '自訂指令不誤報已驗證');
+      app.check((menu().querySelector('[data-team-role="authorId"]') as HTMLSelectElement).value === 'b', '程式開發選用有權限的執行者');
+      app.check(JSON.stringify(await app.api.getConfig()) === JSON.stringify(original), '預覽不改設定');
+      app.check(menu().scrollWidth <= menu().clientWidth + 1, '組隊預覽沒有水平溢出');
+      await app.shot(`quick-preview-${context.locale}-${context.condition}`);
+      (menu().querySelector('.lineup-preset-actions .ghost') as HTMLButtonElement).click();
+      app.check(JSON.stringify(await app.api.getConfig()) === JSON.stringify(original), '取消保留原設定');
+      open('code');
+      const lead = menu().querySelector('[data-team-role="leadId"]') as HTMLSelectElement;
+      lead.value = 'c';
+      lead.dispatchEvent(new Event('change'));
+      app.check((menu().querySelector('[data-team-role="reviewerId"]') as HTMLSelectElement).value === 'a', '角色交換仍維持三個不同成員');
+      const swapLead = (value: string) => {
+        const select = menu().querySelector('[data-team-role="leadId"]') as HTMLSelectElement;
+        select.value = value;
+        select.dispatchEvent(new Event('change'));
+      };
+      swapLead('b');
+      app.check((document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled && /改檔權限|edit permission/.test(warning()), '角色交換不繞過執行者的改檔限制');
+      swapLead('c');
+      (document.querySelector('#lineup-preset-apply') as HTMLButtonElement).click();
+      if (context.condition === 'save-failed') {
+        await app.waitFor(() => /未儲存|not saved/.test(document.querySelector('#lineup-note')?.textContent || ''), 5000, 'save failure displayed');
+        app.check(JSON.stringify(await app.api.getConfig()) === JSON.stringify(original), '儲存失敗時主程序保留原設定');
+        app.check((document.querySelector('#mode') as HTMLSelectElement).value === original.settings.mode, '儲存失敗時介面不假裝套用');
+        app.check(!menu().hidden && !(document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, '保留預覽並可重試');
+        await app.shot(`quick-save-failed-${context.locale}`);
+        return { condition: context.condition };
+      }
+      await app.waitFor(() => menu().hidden, 5000, 'team saved');
+      const saved = await app.api.getConfig();
+      app.check(saved.settings.mode === 'guarded' && saved.settings.workStyle === 'code' && saved.settings.discussionMode === 'independent-first' && saved.settings.maxRounds >= 2, '開發組套用多 AI 把關與獨立首輪');
+      app.check(saved.settings.leadAgentId === 'c', '保存調整後的主持人');
+      app.check(saved.lineups?.length === 1, '建立可再次套用的陣容');
+      app.check(saved.agents.every((member: any) => {
+        const before = original.agents.find((item: any) => item.id === member.id)!;
+        return ['cli', 'model', 'effort', 'canEdit', 'customCommand'].every((key) => member[key] === (before as any)[key]);
+      }), '沒有變更模型、指令或改檔權限');
+      for (let round = 0; round < 2; round++) {
+        open('general');
+        (document.querySelector('#lineup-preset-apply') as HTMLButtonElement).click();
+        await app.waitFor(() => menu().hidden, 5000, 'research team saved');
+      }
+      const research = await app.api.getConfig();
+      app.check(research.settings.workStyle === 'general' && research.settings.mode === 'guarded', '文件研究組切換到一般任務');
+      app.check(research.lineups?.length === 3 && new Set(research.lineups.map((lineup: any) => lineup.name)).size === 3, '同名預設建立新陣容,不覆蓋先前陣容');
+      app.check((await app.api.snapshot()).messages.length === 0, '套用陣容不會啟動 AI 任務');
+      await app.shot(`quick-applied-${context.locale}`);
+      return { condition: context.condition, active: research.settings.activeLineupId };
+    },
+  });
+  report(`快速組隊 ${condition} ${locale}`, result);
+  if (result.ok) {
+    const disk = JSON.parse(fs.readFileSync(path.join(result.userData, 'config.json'), 'utf8'));
+    if (condition === 'ready' && (disk.settings.activeLineupId !== result.value.active || disk.lineups.length !== 3)) throw new Error('Preset teams not saved on disk');
+    if (condition === 'save-failed' && disk.settings.mode !== 'divide') throw new Error('Failed save changed disk config');
+  }
+  result.cleanup();
+  return result.ok;
+}
+
 async function main() {
+  let quickOk = true;
+  for (const locale of ['zh-Hant', 'en'] as const) {
+    for (const condition of ['ready', 'members', 'writer', 'folder', 'save-failed'] as const) quickOk = await quickTeam(locale, condition) && quickOk;
+  }
+  if (process.argv.includes('--quick-only')) {
+    if (!quickOk) process.exitCode = 1;
+    return;
+  }
   const zh = await once('zh-Hant');
   const en = await once('en');
-  if (!zh.ok || !en.ok) process.exitCode = 1;
+  if (!zh.ok || !en.ok || !quickOk) process.exitCode = 1;
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; });

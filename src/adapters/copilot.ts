@@ -1,8 +1,33 @@
 import { randomUUID } from 'crypto';
 import type { Activity, AgentConfig } from '../ipc-types';
+import type { Model } from '../model-rules';
 import type { Adapter, RunContext, RunResult } from './types';
 import { checkCli, parseJson, runProcess, truncate } from './process';
 import { tx } from '../text';
+
+// 公司授權常用的較低成本模型;實際可用清單仍由組織政策決定,不可用時 CLI 會回報錯誤。
+export const COPILOT_LOW_COST_MODELS = ['gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini'] as const;
+const MODELS_TTL_MS = 10 * 60 * 1000;
+
+function copilotModel(id: string): Model {
+  const lowCost = (COPILOT_LOW_COST_MODELS as readonly string[]).includes(id);
+  return { id, label: id, efforts: id === 'auto' ? [] : ['low', 'medium', 'high'], defaultEffort: '', aliases: [], description: '', ...(lowCost ? { lowCost } : {}) };
+}
+
+// `copilot help config` 的 `model` 段落列出 CLI 支援的模型,每行 `- "id"`;不送模型請求。
+export function parseCopilotModels(output: string): Model[] {
+  const ids: string[] = [];
+  let inModel = false;
+  for (const line of String(output || '').split('\n')) {
+    if (/^\s*`model`:/.test(line)) { inModel = true; continue; }
+    if (!inModel) continue;
+    const match = line.match(/^\s*-\s*"([A-Za-z0-9][\w.\-]*)"\s*$/);
+    if (!match) break;
+    if (!ids.includes(match[1])) ids.push(match[1]);
+  }
+  const cheap = COPILOT_LOW_COST_MODELS.filter((id) => ids.includes(id));
+  return [copilotModel('auto'), ...[...cheap, ...ids.filter((id) => !cheap.includes(id as never) && id !== 'auto')].map(copilotModel)];
+}
 
 export function copilotArgs(
   agent: Pick<AgentConfig, 'canEdit' | 'model' | 'effort'>,
@@ -23,6 +48,21 @@ export function copilotArgs(
 }
 
 export function createCopilotAdapter({ bin = 'copilot' }: { bin?: string } = {}): Adapter {
+  const fallback = [copilotModel('auto'), ...COPILOT_LOW_COST_MODELS.map(copilotModel)];
+  let fetched: { models: Model[] | null; at: number; pending: Promise<void> | null } = { models: null, at: 0, pending: null };
+
+  async function refreshModels(force = false) {
+    if (!force && fetched.at && Date.now() - fetched.at < MODELS_TTL_MS) return;
+    if (fetched.pending) return fetched.pending;
+    fetched.pending = (async () => {
+      let out = '';
+      await runProcess(bin, ['help', 'config'], { timeoutMs: 15000, killGraceMs: 1000 }, { onLine: (line) => { out += line + '\n'; } });
+      const models = parseCopilotModels(out);
+      fetched = { models: models.length > 1 ? models : fetched.models, at: Date.now(), pending: null };
+    })();
+    return fetched.pending;
+  }
+
   async function run(agent: AgentConfig, ctx: RunContext): Promise<RunResult> {
     const locale = ctx.locale || 'zh-Hant';
     const prompt = ctx.systemPrompt && !ctx.sessionId ? `${ctx.systemPrompt}\n\n---\n\n${ctx.prompt}` : ctx.prompt;
@@ -141,7 +181,8 @@ export function createCopilotAdapter({ bin = 'copilot' }: { bin?: string } = {})
     supportsResume: true, supportsEdit: true,
     capabilities: { attachments: ['filePath'], attachmentsNeedCwd: true },
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    listModels: () => ({ models: [{ id: 'auto', label: 'Auto', efforts: [], defaultEffort: '', aliases: [], description: '' }], source: 'builtin' }),
+    listModels: () => ({ models: fetched.models || fallback, source: fetched.models ? 'cli' : 'builtin' }),
+    refreshModels,
     check: (opts) => checkCli(bin, undefined, opts?.locale),
     usageShape: 'unknown',
     run,

@@ -53,10 +53,62 @@ async function once(locale: 'zh-Hant' | 'en') {
   return r;
 }
 
+async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'review') {
+  const zh = locale === 'zh-Hant';
+  const result = await runApp({
+    members: [
+      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }] } }),
+      scriptedMember({ id: 'author', name: 'Bob', canEdit: true, writes: { 'notes.txt': 'Draft' }, fixWrites: { 'notes.txt': 'Revised' }, report: 'Draft ready', fixReport: 'Revised notes' }),
+      scriptedMember({ id: 'reviewer', name: 'Carol', planReview: outcome === 'plan' ? 'Acceptance criteria missing' : '[AGREED]', review: 'Please revise the notes', recheck: outcome === 'review' ? 'Still incomplete' : '[NO_ISSUES]' }),
+    ],
+    settings: { leadAgentId: 'lead', maxRounds: 1, mode: 'guarded', workStyle: 'general', uiLocale: locale, language: zh ? '繁體中文' : 'English' },
+    constants: { zh, outcome },
+    scenario: async (context: any) => {
+      const app: any = globalThis;
+      await app.ready();
+      const mode = document.querySelector('#mode') as HTMLSelectElement;
+      app.check(mode.value === 'guarded', '新模式可從已保存設定載入');
+      app.check(mode.selectedOptions[0].textContent === (context.zh ? '多 AI 把關' : 'Multi-AI checks'), '模式名稱跟隨介面語言');
+      app.check(!!document.querySelector('#default-mode option[value="guarded"]'), '設定頁也能選擇新模式');
+      const messages = await app.send('Write project notes', 'guarded');
+      const message = messages.find((item: any) => item.taskSummary);
+      app.check(!!message, '每種結束狀態都有結果卡');
+      const summary = message.taskSummary;
+      app.check(summary.guard.status === (context.outcome === 'passed' ? 'passed' : 'blocked'), '結果卡狀態與實際關卡一致');
+      app.check(summary.guard.repairRounds === (context.outcome === 'plan' ? 0 : context.outcome === 'passed' ? 1 : 3), '結果卡保存實際修正輪數');
+      const reviews = messages.filter((item: any) => item.review);
+      app.check(reviews.length === (context.outcome === 'plan' ? 0 : context.outcome === 'passed' ? 4 : 8), '每輪皆由兩位非作者審查');
+      const card = document.querySelector(`#timeline [data-msg-id="${message.id}"]`) as HTMLElement;
+      app.check(!!card.querySelector('.task-summary'), '結果卡已渲染');
+      const expected = context.outcome === 'plan'
+        ? (context.zh ? '計畫未通過' : 'Plan not approved')
+        : context.outcome === 'passed' ? (context.zh ? '全員審查通過' : 'All reviewers approved') : (context.zh ? '多 AI 把關未通過' : 'Multi-AI checks not passed');
+      app.check(card.textContent?.includes(expected), '通過與阻擋狀態清楚顯示');
+      app.check(card.scrollWidth <= card.clientWidth + 1, '結果卡沒有水平溢出');
+      card.scrollIntoView({ block: 'center' });
+      await app.shot(`guarded-${context.outcome}-${context.zh ? 'zh' : 'en'}`);
+      return { guard: summary.guard, files: summary.files };
+    },
+  });
+  report(`多 AI 把關 ${outcome} ${locale}`, result);
+  if (result.ok && outcome !== 'plan' && result.read('notes.txt') !== 'Revised') throw new Error('Repaired content missing on disk');
+  if (result.ok && outcome === 'plan' && result.read('notes.txt') !== null) throw new Error('Blocked plan changed files');
+  result.cleanup();
+  return result.ok;
+}
+
 async function main() {
+  let guardedOk = true;
+  for (const locale of ['zh-Hant', 'en'] as const) {
+    for (const outcome of ['passed', 'plan', 'review'] as const) guardedOk = await guarded(locale, outcome) && guardedOk;
+  }
+  if (process.argv.includes('--guarded-only')) {
+    if (!guardedOk) process.exitCode = 1;
+    return;
+  }
   const zh = await once('zh-Hant');
   const en = await once('en');
-  if (!zh.ok || !en.ok) process.exitCode = 1;
+  if (!zh.ok || !en.ok || !guardedOk) process.exitCode = 1;
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; });

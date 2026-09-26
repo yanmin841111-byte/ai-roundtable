@@ -19,6 +19,7 @@ process.stdin.on('data', (d) => (input += d));
 process.stdin.on('end', () => {
   const PHASES = {
     分工: 'divide', 'Divide the work': 'divide',
+    計畫審核: 'planReview', 'Plan approval': 'planReview',
     執行: 'execute', Execute: 'execute',
     交叉審查: 'review', 'Cross-review': 'review',
     修復: 'fix', Repair: 'fix',
@@ -47,6 +48,7 @@ process.stdin.on('end', () => {
     fix: config.fixReport || '沒有需要修復的項目',
     summary: '總結:流程已跑完',
     discuss: config.discuss,
+    planReview: config.planReview || '[AGREED]',
   }[key];
   setTimeout(() => process.stdout.write(out + '\n'), Number(config.delayMs) || 0);
 });

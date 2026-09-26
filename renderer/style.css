@@ -853,6 +853,23 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .lineup-action { width: 100%; text-align: left; border: 0; background: transparent; color: var(--accent); font-size: 12.5px; font-weight: 500; padding: 7px 8px; border-radius: 8px; white-space: normal; }
 .lineup-action:hover { background: var(--accent-soft); }
 .lineup-action:disabled:hover { background: transparent; }
+.lineup-quick { display: flex; align-items: center; gap: 7px; }
+.lineup-quick .ui-icon { flex: 0 0 16px; }
+.lineup-quick .control-label { min-width: 0; overflow-wrap: anywhere; }
+.lineup-preset { display: flex; flex-direction: column; gap: 8px; padding: 4px; min-width: 0; }
+.lineup-preset-intro { margin: 0 2px 2px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.lineup-preset label { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; }
+.lineup-role { padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.lineup-role:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+.lineup-role-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.lineup-role-step { display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 50%; font-size: 10.5px; color: var(--accent); background: var(--accent-soft); }
+.lineup-role-detail.writable { color: var(--accent); }
+.lineup-trio { border: 1px dashed var(--accent-border); }
+.lineup-preset select { width: 100%; min-width: 0; max-width: 100%; font-size: 12px; }
+.lineup-preset small, .lineup-preset-status { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.lineup-preset-warning { color: var(--warn); font-size: 12px; overflow-wrap: anywhere; }
+.lineup-preset-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.lineup-preset-actions button { white-space: normal; }
 .lineup-form { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px 2px; }
 .lineup-form-row { display: flex; gap: 6px; align-items: center; }
 .lineup-form-row input { flex: 1; min-width: 0; padding: 5px 9px; font-size: 12.5px; }

@@ -90,14 +90,53 @@ async function init() {
   setupLineups({
     config: () => config,
     running: () => running,
-    commit: (next) => {
+    availability: () => Object.fromEntries(config.agents.map((agent) => {
+      const type = cliTypes[agent.cli];
+      const health = cliStatus[agent.cli];
+      const configured = !!type && (!type.usesCustomCommand || !!agent.customCommand.trim());
+      const customUnchecked = configured && !!type?.usesCustomCommand && !health;
+      const ready = configured && (customUnchecked || (health?.state === 'ready' && health.ok));
+      const capability = modelCaps.get(capKey(agent.cli, agent.model));
+      return [agent.id, {
+        ready,
+        writable: ready && agent.canEdit && !!type?.supportsEdit && capability?.tools !== false,
+        detail: !configured ? t('agent.cliMissing') : customUnchecked ? t('lineup.quick.customUnchecked') : ready ? t('cli.ready') : describeCliHealth(health, type).text,
+      }];
+    })),
+    refresh: () => checkClis(),
+    pickWorkDir,
+    openConnections: () => openSettings('clis'),
+    addMember: () => { void openModal(null); },
+    copilotTrio: cliTypes.copilot ? async () => {
+      const models = ['gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini'];
+      const taken = new Set(config.agents.map((agent) => agent.id));
+      const created = models.map((model, index) => {
+        let id = `copilot-${model.replace(/[^a-z0-9]+/gi, '-')}`;
+        for (let n = 2; taken.has(id); n++) id = `copilot-${model.replace(/[^a-z0-9]+/gi, '-')}-${n}`;
+        taken.add(id);
+        return { id, name: `Copilot ${model}`, cli: 'copilot', model, effort: '', persona: '', color: ['#2f81f7', '#a371f7', '#3fb950'][index], canEdit: false, enabled: true, customCommand: '' };
+      });
+      const fresh = created.filter((member) => !config.agents.some((agent) => agent.cli === 'copilot' && agent.model === member.model));
+      if (!fresh.length) return true;
+      const next = { ...config, agents: [...config.agents, ...fresh] };
+      try { await window.api.saveConfig(next); }
+      catch (error) { showSaveFailed(cleanIpcError(error)); return false; }
+      config.agents = next.agents;
+      renderSidebar();
+      updateComposerHint();
+      return true;
+    } : null,
+    commit: async (next) => {
+      try { await window.api.saveConfig(next); }
+      catch (error) { showSaveFailed(cleanIpcError(error)); return false; }
       config.agents = next.agents;
       config.settings = next.settings;
       config.lineups = next.lineups;
       $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
       $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
-      void saveConfig();
       renderSidebar();
+      updateComposerHint();
+      return true;
     },
   });
   renderSidebar();
@@ -1294,7 +1333,7 @@ function fillCliDependentFields(cli: string, model?: string, effort?: string): v
   const isCustomCli = !!(cliTypes[cli] && cliTypes[cli].usesCustomCommand);
   const sel = $<HTMLSelectElement>('#f-model-select');
   sel.innerHTML = `<option value="">${escapeHtml(t('agent.cliDefaultModel'))}</option>`
-    + models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label !== m.id ? `${m.id}(${m.label})` : m.id)}</option>`).join('')
+    + models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml((m.label !== m.id ? `${m.id}(${m.label})` : m.id) + (m.lowCost ? t('agent.lowCost') : ''))}</option>`).join('')
     + `<option value="${CUSTOM_MODEL}">${escapeHtml(t('agent.otherModel'))}</option>`;
 
   // model 為 undefined 代表剛切換 CLI:預設選清單第一個。舊設定存的別名(例如 opus)會對應到完整名稱。

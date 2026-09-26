@@ -21,6 +21,7 @@ function durationText(ms: number): string {
 
 // 整體狀態:決定標題旁的狀態標籤(需要留意或失敗時換成警示色)。最嚴重的那個說了算
 function taskState(s: TaskSummary): { tone: 'ok' | 'info' | 'warn' | 'bad'; label: string } {
+  if (s.guard?.status === 'blocked') return { tone: 'bad', label: t(s.guard.stage === 'plan' ? 'task.guard.plan' : 'task.guard.blocked') };
   if (s.verify === 'failed' || s.members.some((member) => ['failed', 'unresolved'].includes(member.outcome)) || s.rollback) {
     return { tone: 'bad', label: t('task.acceptance.blocked') };
   }
@@ -107,6 +108,9 @@ function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary
 function acceptanceEvidence(summary: TaskSummary): HTMLElement {
   const section = document.createElement('section');
   section.className = 'ts-evidence';
+  if (summary.guard) {
+    section.appendChild(evidenceRow(t(`task.guard.${summary.guard.stage === 'plan' ? 'plan' : summary.guard.status}`), t('task.guard.detail', { n: summary.guard.reviewers, rounds: summary.guard.repairRounds }), summary.guard.status === 'blocked' ? 'warn' : ''));
+  }
   const pending = summary.members.filter((member) => member.outcome !== 'approved');
   if (pending.length || summary.verify === 'failed' || summary.rollback || summary.testsTouched || summary.reviewStale) section.appendChild(sectionLabel(t('task.acceptance.attention')));
   for (const member of pending) section.appendChild(evidenceRow(`${member.name}: ${t(`task.outcome.${member.outcome}`)}`, undefined, 'warn'));
@@ -158,6 +162,13 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: strin
   status.className = 'ts-state';
   status.textContent = state.label;
   titleRow.append(icon, title, status);
+  if (s.guard?.status === 'passed') {
+    const approval = document.createElement('span');
+    approval.className = 'badge verdict pass';
+    approval.textContent = t('task.guard.passed');
+    approval.title = t('task.guard.detail', { n: s.guard.reviewers, rounds: s.guard.repairRounds });
+    titleRow.appendChild(approval);
+  }
   if (s.rollback) {
     const rollback = document.createElement('span');
     rollback.className = 'ts-verify tests ts-rollback';

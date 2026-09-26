@@ -40,6 +40,7 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
   const verify = [summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '', summary.testsTouched ? tx(locale, 'sys.taskSummary.testsTouched') : ''].filter(Boolean).join(' · ');
   return [
     tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
+    summary.guard ? tx(locale, `sys.guardSummary.${summary.guard.stage === 'plan' ? 'plan' : summary.guard.status}`, { n: summary.guard.reviewers, rounds: summary.guard.repairRounds }) : '',
     // 修復把事情弄糟時要講成一句人話:「驗證沒過」看不出是誰在哪一步弄壞的
     summary.repairBroke ? tx(locale, 'sys.taskSummary.repairBroke') : '',
     summary.rollback ? tx(locale, summary.rollback.status === 'complete'
@@ -122,6 +123,8 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
   return {
     startedAt: num(raw.startedAt),
     endedAt: num(raw.endedAt),
+    ...(raw.guard && ['plan', 'review'].includes(raw.guard.stage) && ['passed', 'blocked'].includes(raw.guard.status)
+      ? { guard: { stage: raw.guard.stage, status: raw.guard.stage === 'plan' ? 'blocked' : raw.guard.status, reviewers: Math.max(2, num(raw.guard.reviewers)), repairRounds: Math.min(3, num(raw.guard.repairRounds)) } as NonNullable<TaskSummary['guard']> } : {}),
     members,
     files,
     moreFiles: num(raw.moreFiles),

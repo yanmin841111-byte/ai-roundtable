@@ -16,6 +16,43 @@ const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 const agent = (id: string, extra: any = {}) => ({ id, name: id.toUpperCase(), cli: 'claude', model: `m-${id}`, effort: '', persona: `${id} 原本的角色`, color: '#000', canEdit: true, enabled: true, customCommand: '', ...extra });
 const config = (agents: any[], settings: any = {}) => ({ agents, settings: { workDir: '/w', maxRounds: 3, mode: 'divide', leadAgentId: null, language: 'x', maxTranscriptChars: 1, ...settings } });
 
+test('一鍵組隊優先沿用主持人與啟用成員,只選可用成員且不提升改檔權限', () => {
+  const current = config([agent('lead', { canEdit: false }), agent('writer'), agent('reviewer'), agent('offline'), agent('spare', { enabled: false })], { leadAgentId: 'lead' });
+  const before = JSON.stringify(current);
+  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer', 'reviewer', 'spare'], ['writer'], 'code'), { leadId: 'lead', authorId: 'writer', reviewerId: 'reviewer' });
+  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer', 'reviewer'], ['lead'], 'code'), { reason: 'writer' });
+  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer'], ['writer'], 'code'), { reason: 'members' });
+  assert.strictEqual(JSON.stringify(current), before);
+});
+
+test('一般任務可使用唯讀成員,唯一可改檔的主持人則能安排為執行者', () => {
+  const readonly = config([agent('lead', { canEdit: false }), agent('author', { canEdit: false }), agent('reviewer', { canEdit: false })]);
+  const ready = readonly.agents.map((member: any) => member.id);
+  assert.deepStrictEqual(L.suggestLineupMembers(readonly, ready, [], 'general'), { leadId: 'lead', authorId: 'author', reviewerId: 'reviewer' });
+  const writableLead = config([agent('lead'), agent('author', { canEdit: false }), agent('reviewer', { canEdit: false })]);
+  assert.deepStrictEqual(L.suggestLineupMembers(writableLead, ready, ['lead'], 'code'), { leadId: 'author', authorId: 'lead', reviewerId: 'reviewer' });
+});
+
+test('陣容寫入失敗不更動主程序的目前設定', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-lineup-failure-'));
+  try {
+    const store = new Store(dir);
+    const original = store.get();
+    fs.mkdirSync(path.join(dir, 'config.json'));
+    assert.throws(() => store.save({ ...original, settings: { ...original.settings, mode: 'guarded' } }));
+    assert.strictEqual(store.get(), original);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('多 AI 把關隨陣容保存、載入與套用', () => {
+  const current = config([agent('a'), agent('b'), agent('c')], { mode: 'guarded' });
+  const lineup = L.lineupFromConfig(current, 'checks', 'checks');
+  assert.strictEqual(lineup.mode, 'guarded');
+  assert.strictEqual(L.sanitizeLineups([lineup])[0].mode, 'guarded');
+  assert.strictEqual(L.applyLineup(config(current.agents), lineup).config.settings.mode, 'guarded');
+  assert.ok(L.lineupMatches(current, lineup));
+});
+
 test('討論方式隨陣容保存、套用與比對,舊陣容仍是循序', () => {
   const current = config([agent('a')], { discussionMode: 'independent-first' });
   const lineup = L.lineupFromConfig(current, 'independent', 'independent');

@@ -49,6 +49,17 @@ async function run(dir: string, team: Member[], after?: (orc: any) => Promise<vo
   return { card, prompts, orc };
 }
 
+test('多 AI 把關狀態在歷史紀錄與雙語匯出中保留', () => {
+  const { restoreTaskSummary, taskSummaryText } = require('../src/flow/task-summary');
+  for (const stage of ['plan', 'review']) {
+    const raw = { startedAt: 1, endedAt: 2, members: [], files: [], moreFiles: 0, usage: {}, guard: { stage, status: 'blocked', reviewers: 3, repairRounds: 2 } };
+    const restored = restoreTaskSummary(raw);
+    assert.deepStrictEqual(restored.guard, raw.guard);
+    assert.match(taskSummaryText(restored, 'zh-Hant'), /多 AI 把關/);
+    assert.match(taskSummaryText(restored, 'en'), /Multi-AI checks/);
+  }
+});
+
 test('每位成員的結果和流程的走向一致;改了哪些檔案、用量都整理進來', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-card-'));
   const { card } = await run(dir, [

@@ -394,6 +394,7 @@ export interface TaskCounterexample {
 export interface TaskSummary {
   startedAt: number;
   endedAt: number;
+  guard?: { stage: 'plan' | 'review'; status: 'passed' | 'blocked'; reviewers: number; repairRounds: number };
   members: Array<{ name: string; color?: string; outcome: TaskOutcome; reviewers: string[] }>;
   // 這次任務改了哪些檔案(任務開始前後比對,不含使用者之前就有的改動)
   files: Array<{ path: string; status: DiffFileStatus; added: number; removed: number }>;

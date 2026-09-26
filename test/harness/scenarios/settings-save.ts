@@ -76,9 +76,11 @@ async function copilotMember(locale: 'zh-Hant' | 'en') {
       harness.check(effort.disabled, 'Auto leaves reasoning effort to the CLI');
       harness.check(!canEdit.disabled, 'Copilot supports editing permission controls');
       harness.$('#f-name').value = 'Copilot';
+      harness.check(model.options.length > 4, `Copilot lists the CLI models (${model.options.length} options)`);
+      harness.check(Array.from(model.options).some((item: any) => item.value === 'gpt-5-mini' && /低成本|low cost/.test(item.textContent || '')), 'Low-cost Copilot models are labeled');
       model.value = '__custom__';
       model.dispatchEvent(new Event('change'));
-      harness.$('#f-model').value = 'gpt-5.4-mini';
+      harness.$('#f-model').value = 'custom-model-x';
       harness.$('#f-model').dispatchEvent(new Event('input'));
       harness.check(!effort.disabled, 'Manual models offer reasoning effort');
       effort.value = 'high';
@@ -88,7 +90,7 @@ async function copilotMember(locale: 'zh-Hant' | 'en') {
         const config = await (window as any).api.getConfig();
         return config.agents.find((member: any) => member.cli === 'copilot');
       }, 10000, 'Copilot member saved');
-      harness.check(saved.model === 'gpt-5.4-mini' && saved.effort === 'high' && !saved.canEdit, 'Model, effort and read-only permission survive IPC save');
+      harness.check(saved.model === 'custom-model-x' && saved.effort === 'high' && !saved.canEdit, 'Model, effort and read-only permission survive IPC save');
       harness.$(`[data-agent-id="${saved.id}"]`).click();
       await harness.waitFor(() => !harness.$('#modal').classList.contains('hidden'), 10000, 'saved member reopened');
       harness.check(cli.value === 'copilot' && model.value === '__custom__', 'Reopened editor retains Copilot and the manual model');
@@ -108,7 +110,7 @@ async function copilotMember(locale: 'zh-Hant' | 'en') {
   result.cleanup();
   assert.ok(ok, result.error);
   assert.ok(member);
-  assert.equal(member.model, 'gpt-5.4-mini');
+  assert.equal(member.model, 'custom-model-x');
   assert.equal(member.effort, 'high');
   assert.equal(member.canEdit, false);
 }

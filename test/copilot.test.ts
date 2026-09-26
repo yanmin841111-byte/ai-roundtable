@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { createCopilotAdapter } from '../src/adapters/copilot';
+import { createCopilotAdapter, parseCopilotModels } from '../src/adapters/copilot';
 import { builtinAdapters } from '../src/adapters/builtin';
 import type { AgentConfig, Activity } from '../src/ipc-types';
 import type { RunContext } from '../src/adapters/types';
@@ -55,6 +55,24 @@ test('registered as a built-in with safe attachment paths and a default model', 
   assert.equal(adapter.usageShape, 'unknown');
   assert.equal(adapter.listModels!().models![0].id, 'auto');
   assert.equal(adapter.listModels!().source, 'builtin');
+});
+
+test('reads every model from copilot help config and lists low-cost models first', () => {
+  const models = parseCopilotModels(['  `logLevel`: log level.', '', '  `model`: AI model to use.', '    - "claude-sonnet-5"', '    - "gpt-5.4-mini"', '    - "claude-haiku-4.5"', '    - "gpt-5-mini"', '    - "gpt-5.5"', '', '  `contextTier`: tier.', '    - "default"'].join('\n'));
+  assert.deepEqual(models.map(model => model.id), ['auto', 'gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini', 'claude-sonnet-5', 'gpt-5.5']);
+  assert.deepEqual(models.filter(model => model.lowCost).map(model => model.id), ['gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini']);
+  assert.deepEqual(models[0].efforts, []);
+  assert.deepEqual(parseCopilotModels('no model section'), [models[0]]);
+});
+
+test('refreshModels replaces the fallback list with the CLI list without a model request', async () => {
+  const bin = path.join(tmp, 'copilot-help');
+  fs.writeFileSync(bin, `#!/bin/sh\nif [ "$1" = help ] && [ "$2" = config ]; then printf '%s\\n' '  \`model\`: AI model.' '    - "claude-opus-5"' '    - "gpt-5-mini"'; fi\n`);
+  fs.chmodSync(bin, 0o755);
+  const adapter = createCopilotAdapter({ bin });
+  await adapter.refreshModels!();
+  assert.deepEqual(adapter.listModels!().models!.map(model => model.id), ['auto', 'gpt-5-mini', 'claude-opus-5']);
+  assert.equal(adapter.listModels!().source, 'cli');
 });
 
 test('streamed messages and reasoning replace deltas by ID; child replies stay out of the main reply', async () => {

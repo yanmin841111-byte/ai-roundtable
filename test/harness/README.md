@@ -79,11 +79,11 @@ npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑
                         #   waiting            長回合時有沒有顯示階段、經過時間與停滯警示
                         #   retry              失敗的 @ 指定回覆能重試;分工流程裡失敗的回合不行
                         #   review-visibility  審查訊息顯示結論徽章與「看了哪些檔案」,點檔名跳到檔案改動(中英各一次)
-                        #   plan-output        分工原文(JSON)收起來,只留分工結果卡片(中英各一次)
+                        #   plan-output        分工原文收起來;多 AI 把關的計畫阻擋、修正通過、三輪未通過(中英文)
                         #   model-capability   API 成員的模型能力顯示在卡片與編輯視窗;按「測試」才送請求(假端點,中英各一次)
                         #   diff-without-git   工作目錄不是 git repo 時,檔案改動照樣列出紅綠對照(中英各一次)
                         #   task-summary       分工任務結束時的結果卡:每位成員的結論、改動的檔案、點檔名跳到檔案改動(中英各一次)
-                        #   lineups            側欄的陣容:存下目前的組合、改過標出已修改、一鍵換回來、刪除(中英各一次)
+                        #   lineups            側欄陣容保存、切換、刪除;快速組隊預覽、角色交換、前置阻擋與儲存失敗(中英文)
                         #   terminal           內建終端面板:分頁是真的 pty,輸出與尺寸都對得上
                         #   env-fix            環境問題(CLI 沒裝、沒登入、本機模型沒跑)呈現成同一套可照做的下一步
                         #   verify             語法檢查不執行檔案;壞成果自動回退,結果卡不誤報完成
@@ -95,6 +95,9 @@ npm run harness:reports # 單獨跑證據保存回歸,不使用真實模型
 npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正在跑
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過
 ```
+
+快速組隊可在 build 後單獨跑 `node --import tsx test/harness/scenarios/lineups.ts --quick-only`。
+使用假成員及隔離設定,檢查套用不啟動任務、不提升權限、保留舊陣容,以及窄側欄沒有水平溢出。
 
 ### 證據保存回歸
 

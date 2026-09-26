@@ -20,7 +20,8 @@ type Member = { id: string; name: string; task?: string; writes?: Record<string,
   /** 寫測試回合要寫的檔案 */ testWrites?: Record<string, string>;
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
-  expectFiles?: Record<string, string>; execBarrier?: () => Promise<void> };
+  expectFiles?: Record<string, string>; execBarrier?: () => Promise<void>; discussion?: string; planReview?: string[];
+  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>> };
 async function run(team: Member[]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
@@ -29,6 +30,8 @@ async function run(team: Member[]) {
   const prompts: Record<string, string[]> = {};
   const turns: Array<{ who: string; phase: string; sessionId: string | null; lockedPaths: string[] }> = [];
   const reviewsGiven: Record<string, number> = {};
+  const plansReviewed: Record<string, number> = {};
+  const repairsMade: Record<string, number> = {};
   adapters.setRegistry({ get: (id: string) => {
     const m = team.find((x) => x.id === id);
     if (!m) return null;
@@ -38,6 +41,12 @@ async function run(team: Member[]) {
         const phase = /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
         turns.push({ who: m.name, phase, sessionId: ctx.sessionId ?? null, lockedPaths: ctx.lockedPaths || [] });
         if (/【分工】/.test(ctx.prompt)) return { text: JSON.stringify(plan) };
+        if (/【計畫審核】/.test(ctx.prompt)) {
+          if (m.stopOnPlan) orc.stop();
+          const index = plansReviewed[m.name] = (plansReviewed[m.name] || 0) + 1;
+          const text = m.planReview?.[index - 1] || '[AGREED]';
+          return text.startsWith('ERROR:') ? { text: '', error: text.slice(6) } : { text };
+        }
         if (/【寫測試】/.test(ctx.prompt)) {
           for (const [f, c] of Object.entries(m.testWrites || {})) fs.writeFileSync(path.join(dir, f), c);
           return { text: '測試寫好了', toolEvents: Object.keys(m.testWrites || {}).map((f) => ({ name: 'write_file', ok: true, path: f, result: {} })) };
@@ -50,6 +59,7 @@ async function run(team: Member[]) {
           return m.execError ? { text: '', error: m.execError, toolEvents } : { text: '完成', toolEvents };
         }
         if (/【交叉審查】/.test(ctx.prompt)) {
+          if (m.stopOnReview) orc.stop();
           const i = reviewsGiven[m.name] = (reviewsGiven[m.name] || 0) + 1;
           const say = (m.review || [])[i - 1] || '沒問題\n[NO_ISSUES]';
           // 「ERROR:」開頭代表這一次審查回合失敗(逾時、端點錯誤)
@@ -57,7 +67,8 @@ async function run(team: Member[]) {
           return say.startsWith('ERROR:') ? { text: '', error: say.slice(6) } : { text: say, sessionId: 'review-session-' + m.id };
         }
         if (/【修復】/.test(ctx.prompt)) {
-          for (const [f, c] of Object.entries(m.fixWrites || {})) fs.writeFileSync(path.join(dir, f), c);
+          const index = repairsMade[m.name] = (repairsMade[m.name] || 0) + 1;
+          for (const [f, c] of Object.entries(m.fixSequence?.[index - 1] || m.fixWrites || {})) fs.writeFileSync(path.join(dir, f), c);
           // 用檔案工具寫:測試鎖擋的就是這條路,ctx.lockedPaths 會傳進工具層
           const toolEvents: any[] = [];
           if (m.fixViaTools) {
@@ -72,11 +83,11 @@ async function run(team: Member[]) {
           return { text: m.fixError ? '' : '已修正', error: m.fixError, toolEvents };
         }
         if (/【總結】/.test(ctx.prompt)) return { text: '總結' };
-        return { text: '[AGREED]' };
+        return { text: m.discussion || '[AGREED]' };
       } };
   } });
   const agents = team.map((m) => ({ id: m.id, name: m.name, cli: m.id, enabled: true, canEdit: m.canEdit !== false, color: '#000', persona: '', model: '', effort: '', customCommand: '' }));
-  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: dir, maxRounds: 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: team[0].id, verifyCommand: team.find((m) => m.verifyCommand)?.verifyCommand || '', workStyle: team.find((m) => m.workStyle)?.workStyle || 'code' };
+  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: dir, maxRounds: team[0].maxRounds || 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: team[0].id, verifyCommand: team.find((m) => m.verifyCommand)?.verifyCommand || '', workStyle: team.find((m) => m.workStyle)?.workStyle || 'code' };
   const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: os.tmpdir() });
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', team.find((m) => m.mode)?.mode || 'divide');
@@ -103,12 +114,152 @@ async function run(team: Member[]) {
   walk();
   fs.rmSync(dir, { recursive: true, force: true });
   const read = (file: string) => (files.has(file) ? files.get(file)! : null);
-  const card = orc.messages.find((m: any) => m.tag === 'task-summary').taskSummary;
-  const outcome = Object.fromEntries(card.members.map((m: any) => [m.name, m.outcome]));
+  const card = orc.messages.find((m: any) => m.tag === 'task-summary')?.taskSummary;
+  const outcome = Object.fromEntries((card?.members || []).map((m: any) => [m.name, m.outcome]));
   const reviews = orc.messages.filter((m: any) => m.review);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
   return { outcome, card, reviews, prompts, summaryPrompt, turns, orc, read, retained };
 }
+
+test('多 AI 把關:一票通過不能蓋過另一票失敗,且不沿用修改前的通過票', async () => {
+  for (const votes of [['ERROR:timeout'], ['有問題', 'ERROR:timeout'], ['有問題', '仍有問題', '仍有問題', '仍有問題']]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: votes },
+    ]);
+    assert.notStrictEqual(result.outcome['作者'], 'approved');
+    assert.strictEqual(result.card.guard.status, 'blocked');
+    assert.ok(result.turns.filter((turn) => turn.phase === 'repair').length <= 3);
+    assert.ok(result.turns.filter((turn) => turn.phase === 'review').every((turn) => turn.sessionId === null));
+  }
+});
+
+test('多 AI 把關:可以修正多輪,每輪所有審查者都必須重新通過', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: ['有問題', '還有問題', '[NO_ISSUES]'] },
+  ]);
+  assert.strictEqual(result.outcome['作者'], 'approved');
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'repair').length, 2);
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '主持人').length, 3);
+  assert.deepStrictEqual(result.card.guard, { stage: 'review', status: 'passed', reviewers: 2, repairRounds: 2 });
+  assert.deepStrictEqual(result.card.members[0].reviewers, ['主持人', '審查者']);
+});
+
+test('多 AI 把關:其中一份成果修正後,其他成果也要重新送審', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, review: ['a 有問題', '[NO_ISSUES]'] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'other', name: '另一位作者', task: '寫 b.txt', writes: { 'b.txt': 'done' } },
+  ]);
+  assert.strictEqual(result.reviews.length, 8);
+  assert.ok(result.card.members.every((member: any) => member.outcome === 'approved'));
+});
+
+test('多 AI 把關:複查新增的反例確實執行,全員同意也不能覆蓋失敗證據', async () => {
+  const counterexample = '```counterexample new finding\nrequire("assert").strictEqual(1, 2);\n```\n[NO_ISSUES]';
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: ['請修正', counterexample, '[NO_ISSUES]', '[NO_ISSUES]'] },
+  ]);
+  assert.strictEqual(result.card.guard.status, 'blocked');
+  assert.strictEqual(result.outcome['作者'], 'unresolved');
+  assert.ok(result.card.counterexamples.some((item: any) => item.title === 'new finding' && item.confirmation === 'confirmed' && item.afterRepair === 'failed'));
+});
+
+test('多 AI 把關:四位成員的一般任務需要三位審查者,不執行程式驗證', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, workStyle: 'general', verifyCommand: 'exit 1' },
+    { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'done' } },
+    { id: 'second', name: '第二位', canEdit: false },
+    { id: 'third', name: '第三位', canEdit: false },
+  ]);
+  assert.strictEqual(result.card.guard.reviewers, 3);
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.strictEqual(result.card.verify, undefined);
+  assert.strictEqual(result.reviews.length, 3);
+});
+
+test('多 AI 把關:計畫被退回後重新審核,只有新版全員同意才執行', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', maxRounds: 2, canEdit: false },
+    { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'done' } },
+    { id: 'second', name: '第二位', canEdit: false, planReview: ['請補充驗收', '[AGREED]'] },
+  ]);
+  assert.strictEqual(result.orc.messages.filter((message: any) => message.tag === 'plan-review').length, 2);
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.strictEqual(result.card.guard.status, 'passed');
+});
+
+test('多 AI 把關:停止計畫或成果審查後,不能繼續執行或修正', async () => {
+  for (const duringPlan of [true, false]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'done' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, stopOnPlan: duringPlan, stopOnReview: !duringPlan, review: ['請修正'] },
+    ]);
+    assert.strictEqual(result.card, undefined);
+    assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+    if (duringPlan) assert.strictEqual(result.read('a.txt'), null);
+  }
+});
+
+test('多 AI 把關:第二輪修正退步仍可收回整段修正,不標成通過', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, review: ['請修正', '還有問題', '[NO_ISSUES]'] },
+    { id: 'author', name: '作者', task: '寫程式', writes: { 'a.js': 'module.exports = 1;' }, fixSequence: [{ 'a.js': 'module.exports = 2;' }, { 'a.js': 'module.exports = };' }] },
+    { id: 'reviewer', name: '審查者', canEdit: false },
+  ]);
+  assert.strictEqual(result.read('a.js'), 'module.exports = 1;');
+  assert.strictEqual(result.card.guard.status, 'blocked');
+  assert.deepStrictEqual(result.card.rollback, { scope: 'repair', status: 'complete' });
+});
+
+test('多 AI 把關:每份成果由所有其他成員審查,至少兩票且全數通過', () => {
+  const { pickReviewPairs, allReviewsPassed } = require('../src/flow/review');
+  const agents = ['author', 'reviewer1', 'reviewer2', 'reviewer3'].map((id) => ({ id }));
+  const reports = agents.slice(0, 2).map((agent) => ({ agent, task: 'task', report: 'done' }));
+  const pairs = pickReviewPairs(agents, reports, true);
+  assert.strictEqual(pairs.length, 6);
+  assert.ok(pairs.every((pair: any) => pair.reviewer.id !== pair.target.agent.id));
+  const reviews = pairs.map((pair: any) => ({ ...pair, text: '[NO_ISSUES]' }));
+  assert.strictEqual(allReviewsPassed(agents, 'author', reviews), true);
+  assert.strictEqual(allReviewsPassed(agents, 'author', reviews.slice(1)), false);
+  assert.strictEqual(allReviewsPassed(agents, 'author', [{ ...reviews[0], error: 'timeout' }, ...reviews.slice(1)]), false);
+  assert.strictEqual(allReviewsPassed(agents, 'author', [{ ...reviews[0], text: 'needs repair' }, ...reviews.slice(1)]), false);
+  assert.strictEqual(allReviewsPassed(agents.slice(0, 2), 'author', reviews), false);
+  assert.strictEqual(allReviewsPassed(agents, 'author', [...reviews, reviews[0]]), false);
+});
+
+test('多 AI 把關:少於三位、討論未同意、計畫被否決或審核失敗都不開工', async () => {
+  for (const reason of ['members', 'discussion', 'plan', 'error']) {
+    const team: Member[] = [
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' },
+        discussion: reason === 'discussion' ? '不同意' : undefined,
+        planReview: reason === 'plan' ? ['缺少驗收條件'] : reason === 'error' ? ['ERROR:timeout'] : undefined },
+      { id: 'reviewer', name: '審查者', canEdit: false },
+    ];
+    const result = await run(reason === 'members' ? team.slice(0, 2) : team);
+    assert.strictEqual(result.read('a.txt'), null, reason);
+    assert.ok(!result.turns.some((turn) => turn.phase === 'execute'), reason);
+    assert.ok(result.orc.messages.some((message: any) => message.tag === 'guarded-stop'), reason);
+  }
+});
+
+test('多 AI 把關:具體計畫獲所有其他成員同意後才執行', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false },
+  ]);
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.ok(result.orc.messages.some((message: any) => message.tag === 'plan-approved'));
+  assert.match(result.prompts['審查者'].find((prompt) => prompt.includes('【計畫審核】'))!, /寫 a.txt/);
+});
 
 test('修好之後複查通過:才算審查通過;複查看得到上一輪的意見', async () => {
   const r = await run([
