@@ -4,11 +4,11 @@
 
 AI Roundtable ships with Claude Code, Codex CLI, Cursor CLI and GitHub Copilot CLI. Other AIs can be connected through extensions without touching the source:
 
-| Type | Suited to | Can edit files | File |
-| --- | --- | --- | --- |
-| CLI | AI CLIs with a non-interactive mode, e.g. Grok CLI, Kimi Code CLI, Gemini CLI | Yes | `.json`, `"type": "cli"` |
-| API | OpenAI-compatible Chat Completions APIs, e.g. DeepSeek, Kimi, Grok, OpenRouter, Ollama | No by default; file editing requires explicitly enabled restricted tools and a reviewer gate | `.json`, `"type": "openai"` |
-| JS plugin | Anything JSON cannot describe | Up to you | `.js` |
+| Type      | Suited to                                                                              | Can edit files                                                                               | File                        |
+| --------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------- |
+| CLI       | AI CLIs with a non-interactive mode, e.g. Grok CLI, Kimi Code CLI, Gemini CLI          | Yes                                                                                          | `.json`, `"type": "cli"`    |
+| API       | OpenAI-compatible Chat Completions APIs, e.g. DeepSeek, Kimi, Grok, OpenRouter, Ollama | No by default; file editing requires explicitly enabled restricted tools and a reviewer gate | `.json`, `"type": "openai"` |
+| JS plugin | Anything JSON cannot describe                                                          | Up to you                                                                                    | `.js`                       |
 
 ## Quick start
 
@@ -23,18 +23,18 @@ During development, the `AI_ROUNDTABLE_ADAPTERS_DIR` environment variable points
 
 ## Common fields
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `id` | Yes | Unique identifier: letters, digits and `. _ -`. Member settings store this value. Using `claude` or `codex` overrides the built-in adapter |
-| `type` | Yes for JSON | `cli` or `openai` |
-| `label` | No | Display name |
-| `description` | No | Description shown in templates and member settings |
-| `models` | No | Model list, see below; `openai` extensions may use `"auto"` |
-| `efforts` | No | Effort levels offered when the model is typed manually or has no effort restriction |
-| `timeoutMs` | No | Per-model-turn timeout, default 20 minutes; background work such as model downloads does not use this value. The extension editor's “Time limit per turn” sets the same field in minutes, and the timeout error points there |
-| `usageShape` | No | Convention for usage fields, see [Usage normalization](#usage-normalization). Detected from the fields when omitted |
-| `capabilities` | No | Attachment capabilities, see below |
-| `docsUrl` | No | Install or setup page. When this CLI or service is missing, the interface offers "Open install guide" |
+| Field          | Required     | Description                                                                                                                                                                                                                  |
+| -------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`           | Yes          | Unique identifier: letters, digits and `. _ -`. Member settings store this value. Using `claude` or `codex` overrides the built-in adapter                                                                                   |
+| `type`         | Yes for JSON | `cli` or `openai`                                                                                                                                                                                                            |
+| `label`        | No           | Display name                                                                                                                                                                                                                 |
+| `description`  | No           | Description shown in templates and member settings                                                                                                                                                                           |
+| `models`       | No           | Model list, see below; `openai` extensions may use `"auto"`                                                                                                                                                                  |
+| `efforts`      | No           | Effort levels offered when the model is typed manually or has no effort restriction                                                                                                                                          |
+| `timeoutMs`    | No           | Per-model-turn timeout, default 20 minutes; background work such as model downloads does not use this value. The extension editor's “Time limit per turn” sets the same field in minutes, and the timeout error points there |
+| `usageShape`   | No           | Convention for usage fields, see [Usage normalization](#usage-normalization). Detected from the fields when omitted                                                                                                          |
+| `capabilities` | No           | Attachment capabilities, see below                                                                                                                                                                                           |
+| `docsUrl`      | No           | Install or setup page. When this CLI or service is missing, the interface offers "Open install guide"                                                                                                                        |
 
 ### The next step when something is wrong
 
@@ -43,7 +43,12 @@ interface uses one card: a plain sentence about what happened, plus one action t
 plugin can return `fix` from `check()` / `testConnection()` and from `run()`:
 
 ```js
-return { ok: false, state: 'unauthenticated', hint: 'Run my-cli login first', fix: { command: 'my-cli login' } };
+return {
+  ok: false,
+  state: "unauthenticated",
+  hint: "Run my-cli login first",
+  fix: { command: "my-cli login" },
+};
 ```
 
 `fix` holds one of three, most specific first: `command` (a single command, typed into the built-in
@@ -82,26 +87,26 @@ Entries may be strings or objects:
 
 Every CLI and API reports usage with different field names and meanings. `src/usage.ts` normalizes them to one shape at the `runTurn` boundary so the interface and exports can total them safely across members:
 
-| Normalized field | Meaning |
-| --- | --- |
-| `inputTokens` | **The complete input, including cache reads and cache writes** |
-| `cachedInputTokens` | The part read from cache (a subset of `inputTokens`) |
-| `cacheWriteTokens` | The part written to cache (a subset of `inputTokens`, disjoint from `cachedInputTokens`) |
-| `outputTokens` | Output |
-| `costUsd` | Cost, reported by only some sources |
-| `shape` | The convention that was applied, or `unknown` |
-| `raw` | The original object, always kept as is |
+| Normalized field    | Meaning                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `inputTokens`       | **The complete input, including cache reads and cache writes**                           |
+| `cachedInputTokens` | The part read from cache (a subset of `inputTokens`)                                     |
+| `cacheWriteTokens`  | The part written to cache (a subset of `inputTokens`, disjoint from `cachedInputTokens`) |
+| `outputTokens`      | Output                                                                                   |
+| `costUsd`           | Cost, reported by only some sources                                                      |
+| `shape`             | The convention that was applied, or `unknown`                                            |
+| `raw`               | The original object, always kept as is                                                   |
 
 **A field that was not reported is `null`, never `0`.** "This source did not report the number" and "this number is definitely zero" mean different things when totalling; consumers only add up records that actually have a value, and show how many members and turns each column covers.
 
 ### Field mapping per convention
 
-| `usageShape` | Source | `inputTokens` | `cachedInputTokens` | `cacheWriteTokens` |
-| --- | --- | --- | --- | --- |
-| `anthropic` | Claude Code | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` |
-| `codex` | Codex CLI | `input_tokens` (already includes cache) | `cached_input_tokens` | Not reported (`null`) |
-| `cursor` | Cursor CLI | `inputTokens` + `cacheReadTokens` + `cacheWriteTokens` | `cacheReadTokens` | `cacheWriteTokens` |
-| `openai` | OpenAI-compatible API | `prompt_tokens` (already includes cache) | `prompt_tokens_details.cached_tokens` | Not reported (`null`) |
+| `usageShape` | Source                | `inputTokens`                                                              | `cachedInputTokens`                   | `cacheWriteTokens`            |
+| ------------ | --------------------- | -------------------------------------------------------------------------- | ------------------------------------- | ----------------------------- |
+| `anthropic`  | Claude Code           | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens`             | `cache_creation_input_tokens` |
+| `codex`      | Codex CLI             | `input_tokens` (already includes cache)                                    | `cached_input_tokens`                 | Not reported (`null`)         |
+| `cursor`     | Cursor CLI            | `inputTokens` + `cacheReadTokens` + `cacheWriteTokens`                     | `cacheReadTokens`                     | `cacheWriteTokens`            |
+| `openai`     | OpenAI-compatible API | `prompt_tokens` (already includes cache)                                   | `prompt_tokens_details.cached_tokens` | Not reported (`null`)         |
 
 Anthropic's three fields are disjoint, so **their sum is the full prompt**. Taking only `input_tokens + cache_read_input_tokens` badly under-reports turns that write to the cache: one real measurement was 38058 vs 28099, 26% less.
 
@@ -131,9 +136,12 @@ The shape is detected from the fields, and only when the signature is unambiguou
   "input": "arg",
   "systemPrompt": "prepend",
   "args": [
-    "-p", "{prompt}",
-    "--output-format", "streaming-json",
-    "--cwd", "{cwd}",
+    "-p",
+    "{prompt}",
+    "--output-format",
+    "streaming-json",
+    "--cwd",
+    "{cwd}",
     ["-m", "{model}"],
     ["--effort", "{effort}"],
     ["--resume", "{sessionId}"],
@@ -150,22 +158,22 @@ The shape is detected from the fields, and only when the signature is unambiguou
 }
 ```
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `bin` | Required | Command name or full path |
-| `args` | `[]` | Arguments, see below |
-| `input` | `stdin` | How the prompt is passed: `stdin`; `arg` (use `{prompt}`); `file` (written to a temp file, use `{promptFile}`); `none` |
-| `systemPrompt` | `prepend` | How the role prompt is passed: `prepend` puts it before the prompt when not resuming; `arg` uses `{systemPrompt}`; `none` drops it |
-| `output.format` | `text` | `text`: every line is reply text; `jsonl`: one JSON event per line; `json`: parse the whole output at the end |
-| `output.rules` | `[]` | Rules that extract content from JSON events, see below |
-| `output.sessionIdPattern` | None | Regular expression applied to stdout and stderr to capture the session id (first group) |
-| `output.nonJsonLines` | `ignore` | What to do with non-JSON lines in `jsonl` mode: `ignore` or `text` |
-| `supportsResume` | Auto | `true` when a `sessionId` rule or `sessionIdPattern` exists. Without resume support, the full transcript is sent every turn |
-| `supportsEdit` | `true` | When `false`, members cannot enable "Allow editing files" |
-| `env` | None | Extra environment variables; values may use placeholders |
-| `shell` | `false` | Run through a shell |
-| `successExitCodes` | `[0]` | Exit codes treated as success |
-| `versionArgs` | `["--version"]` | Arguments used to check the install; `null` only checks the command exists; `false` skips the check |
+| Field                     | Default         | Description                                                                                                                        |
+| ------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `bin`                     | Required        | Command name or full path                                                                                                          |
+| `args`                    | `[]`            | Arguments, see below                                                                                                               |
+| `input`                   | `stdin`         | How the prompt is passed: `stdin`; `arg` (use `{prompt}`); `file` (written to a temp file, use `{promptFile}`); `none`             |
+| `systemPrompt`            | `prepend`       | How the role prompt is passed: `prepend` puts it before the prompt when not resuming; `arg` uses `{systemPrompt}`; `none` drops it |
+| `output.format`           | `text`          | `text`: every line is reply text; `jsonl`: one JSON event per line; `json`: parse the whole output at the end                      |
+| `output.rules`            | `[]`            | Rules that extract content from JSON events, see below                                                                             |
+| `output.sessionIdPattern` | None            | Regular expression applied to stdout and stderr to capture the session id (first group)                                            |
+| `output.nonJsonLines`     | `ignore`        | What to do with non-JSON lines in `jsonl` mode: `ignore` or `text`                                                                 |
+| `supportsResume`          | Auto            | `true` when a `sessionId` rule or `sessionIdPattern` exists. Without resume support, the full transcript is sent every turn        |
+| `supportsEdit`            | `true`          | When `false`, members cannot enable "Allow editing files"                                                                          |
+| `env`                     | None            | Extra environment variables; values may use placeholders                                                                           |
+| `shell`                   | `false`         | Run through a shell                                                                                                                |
+| `successExitCodes`        | `[0]`           | Exit codes treated as success                                                                                                      |
+| `versionArgs`             | `["--version"]` | Arguments used to check the install; `null` only checks the command exists; `false` skips the check                                |
 
 ### Arguments and placeholders
 
@@ -173,11 +181,11 @@ Available placeholders: `{prompt}`, `{promptFile}`, `{systemPrompt}`, `{model}`,
 
 Each element of `args` may be:
 
-| Form | Behaviour |
-| --- | --- |
-| `"--flag"` or `"{model}"` | A single argument; skipped when it contains a placeholder whose value is empty |
-| `["-m", "{model}"]` | An argument group; the whole group is skipped when any placeholder is empty |
-| `{ "if": "canEdit", "then": [...], "else": [...] }` | Chosen by condition |
+| Form                                                | Behaviour                                                                      |
+| --------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `"--flag"` or `"{model}"`                           | A single argument; skipped when it contains a placeholder whose value is empty |
+| `["-m", "{model}"]`                                 | An argument group; the whole group is skipped when any placeholder is empty    |
+| `{ "if": "canEdit", "then": [...], "else": [...] }` | Chosen by condition                                                            |
 
 Conditions: `"name"` has a value, `"!name"` has none, `"name=value"` equals, `"name!=value"` differs; an array means all must hold.
 
@@ -185,17 +193,17 @@ Conditions: `"name"` has a value, `"!name"` has none, `"name=value"` equals, `"n
 
 Every JSON event is run through all rules whose `match` applies, in order.
 
-| Field | Description |
-| --- | --- |
-| `match` | Match conditions; keys are dot paths. Values may be literals, arrays (any of), or `{"$exists": true}`, `{"$startsWith": "x"}`, `{"$regex": "..."}`, `{"$ne": x}`, `{"$in": [...]}` |
-| `each` | Apply to every element of an array in the event; later paths are relative to each element, and `$event` refers to the whole event |
-| `text` | Path to reply text |
-| `mode` | `append` joins fragments (default), `message` starts a new paragraph, `replace` replaces everything |
-| `thinking` / `thinkingMode` | Path and mode for thinking content |
-| `sessionId` | Path to the session id |
-| `usage` | Path to the usage object |
-| `error` | Path to the error message |
-| `activity` | Show as a tool action: `id`, `title`, `detail`, `result`, `status` (`running`, `done`, `error`). Values are template strings, e.g. `"Tool: {function.name}"`; the same `id` updates the same entry |
+| Field                       | Description                                                                                                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `match`                     | Match conditions; keys are dot paths. Values may be literals, arrays (any of), or `{"$exists": true}`, `{"$startsWith": "x"}`, `{"$regex": "..."}`, `{"$ne": x}`, `{"$in": [...]}`                 |
+| `each`                      | Apply to every element of an array in the event; later paths are relative to each element, and `$event` refers to the whole event                                                                  |
+| `text`                      | Path to reply text                                                                                                                                                                                 |
+| `mode`                      | `append` joins fragments (default), `message` starts a new paragraph, `replace` replaces everything                                                                                                |
+| `thinking` / `thinkingMode` | Path and mode for thinking content                                                                                                                                                                 |
+| `sessionId`                 | Path to the session id                                                                                                                                                                             |
+| `usage`                     | Path to the usage object                                                                                                                                                                           |
+| `error`                     | Path to the error message                                                                                                                                                                          |
+| `activity`                  | Show as a tool action: `id`, `title`, `detail`, `result`, `status` (`running`, `done`, `error`). Values are template strings, e.g. `"Tool: {function.name}"`; the same `id` updates the same entry |
 
 ## API type (OpenAI-compatible)
 
@@ -207,34 +215,37 @@ Every JSON event is run through all rules whose `match` applies, in order.
   "baseUrl": "https://api.deepseek.com",
   "apiKeyEnv": "DEEPSEEK_API_KEY",
   "models": [{ "id": "deepseek-v4-pro", "efforts": ["low", "high", "max"] }],
-  "effortBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "{effort}" }
+  "effortBody": {
+    "thinking": { "type": "enabled" },
+    "reasoning_effort": "{effort}"
+  }
 }
 ```
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `baseUrl` | Required | API root URL |
-| `secretRef` | None | Reference written automatically after the API key is stored securely under "Settings → AI connections"; do not put the key itself here |
-| `apiKeyEnv` | None | Environment variable holding the API key, used when nothing is stored securely |
-| `headers` | None | Extra HTTP headers |
-| `path` | `/chat/completions` | Chat endpoint |
-| `models` | None | Model list, or `"auto"` to fetch from `modelsPath` (refreshed every 10 minutes) |
-| `modelsPath` | `/models` | Model list endpoint |
-| `modelFilter` | None | Regular expression that filters the automatic list |
-| `defaultModel` | None | Used when the member has no model selected |
-| `body` | None | Extra request fields; strings may use `{model}` and `{effort}` |
-| `effortBody` | `{"reasoning_effort": "{effort}"}` | Merged into the request when an effort is selected |
-| `systemRole` | `system` | Role used for the role prompt |
-| `reasoningFields` | `["reasoning_content", "reasoning"]` | Fields carrying thinking content in the stream |
-| `stream` | `true` | Whether to stream |
-| `streamUsage` | `true` | Ask for usage while streaming; set to `false` for services that do not support it |
-| `history` | `true` | Keep the conversation history in memory to resume; when off, the full transcript is sent every turn |
-| `maxHistoryMessages` | `80` | Number of history messages kept; must be a positive integer. Zero, negative values, and fractions fail validation |
-| `unreachableHint` | Generic hint | Guidance shown when a credential-free HTTP endpoint cannot be reached, e.g. `Run ollama serve first` |
-| `fixCommand` | None | A single command that fixes the problem, e.g. `ollama serve`. The interface shows a "Run in terminal" button next to the status; it types the command into the built-in terminal without running it |
-| `docsUrl` | None | Install or setup page. When this CLI or service is not present, the interface offers "Open install guide" |
-| `supportsEdit` | `false` | Must be explicitly `true` together with `fileTools.enabled: true`; the execution flow must still pass the reviewer gate |
-| `fileTools.enabled` | `false` | Enables restricted `read_file`, `replace_text`, and `write_file` tools; no shell or `apply_patch` is exposed |
+| Field                | Default                              | Description                                                                                                                                                                                         |
+| -------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`            | Required                             | API root URL                                                                                                                                                                                        |
+| `secretRef`          | None                                 | Reference written automatically after the API key is stored securely under "Settings → AI connections"; do not put the key itself here                                                           |
+| `apiKeyEnv`          | None                                 | Environment variable holding the API key, used when nothing is stored securely                                                                                                                      |
+| `headers`            | None                                 | Extra HTTP headers                                                                                                                                                                                  |
+| `path`               | `/chat/completions`                  | Chat endpoint                                                                                                                                                                                       |
+| `models`             | None                                 | Model list, or `"auto"` to fetch from `modelsPath` (refreshed every 10 minutes)                                                                                                                     |
+| `modelsPath`         | `/models`                            | Model list endpoint                                                                                                                                                                                 |
+| `modelFilter`        | None                                 | Regular expression that filters the automatic list                                                                                                                                                  |
+| `defaultModel`       | None                                 | Used when the member has no model selected                                                                                                                                                          |
+| `body`               | None                                 | Extra request fields; strings may use `{model}` and `{effort}`                                                                                                                                      |
+| `effortBody`         | `{"reasoning_effort": "{effort}"}`   | Merged into the request when an effort is selected                                                                                                                                                  |
+| `systemRole`         | `system`                             | Role used for the role prompt                                                                                                                                                                       |
+| `reasoningFields`    | `["reasoning_content", "reasoning"]` | Fields carrying thinking content in the stream                                                                                                                                                      |
+| `stream`             | `true`                               | Whether to stream                                                                                                                                                                                   |
+| `streamUsage`        | `true`                               | Ask for usage while streaming; set to `false` for services that do not support it                                                                                                                   |
+| `history`            | `true`                               | Keep the conversation history in memory to resume; when off, the full transcript is sent every turn                                                                                                 |
+| `maxHistoryMessages` | `80`                                 | Number of history messages kept; must be a positive integer. Zero, negative values, and fractions fail validation                                                                                   |
+| `unreachableHint`    | Generic hint                         | Guidance shown when a credential-free HTTP endpoint cannot be reached, e.g. `Run ollama serve first`                                                                                                |
+| `fixCommand`         | None                                 | A single command that fixes the problem, e.g. `ollama serve`. The interface shows a "Run in terminal" button next to the status; it types the command into the built-in terminal without running it |
+| `docsUrl`            | None                                 | Install or setup page. When this CLI or service is not present, the interface offers "Open install guide"                                                                                           |
+| `supportsEdit`       | `false`                              | Must be explicitly `true` together with `fileTools.enabled: true`; the execution flow must still pass the reviewer gate                                                                             |
+| `fileTools.enabled`  | `false`                              | Enables restricted `read_file`, `replace_text`, and `write_file` tools; no shell or `apply_patch` is exposed                                                                                        |
 
 ### Ollama and Qwen3.8
 
@@ -277,20 +288,26 @@ When JSON is not enough, write a `.js` file. See [adapters/templates/aider-plugi
 
 ```js
 module.exports = {
-  id: 'my-agent',
-  label: 'My Agent',
-  bin: 'my-agent',          // when set, the install is checked automatically
+  id: "my-agent",
+  label: "My Agent",
+  bin: "my-agent", // when set, the install is checked automatically
   supportsResume: false,
   supportsEdit: true,
   // attachment capabilities, same format as JSON; when omitted, derived from supportsEdit
   // (can edit files → filePath + textInline, otherwise textInline)
-  capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
-  models: ['a', 'b'],       // or listModels(kit) / refreshModels(kit)
+  capabilities: { attachments: ["filePath"], attachmentsNeedCwd: false },
+  models: ["a", "b"], // or listModels(kit) / refreshModels(kit)
   async run(agent, ctx, kit) {
     // agent: model, effort, canEdit, name…
     // ctx: prompt, systemPrompt, sessionId, cwd, timeoutMs, attachments (metadata with readable paths)
     //      onText(full text), onThinking(full text), onActivity(action), onSession(id), onProc(stoppable process)
-    return { text: 'reply', thinking: '', sessionId: null, usage: null, error: null };
+    return {
+      text: "reply",
+      thinking: "",
+      sessionId: null,
+      usage: null,
+      error: null,
+    };
   },
 };
 ```

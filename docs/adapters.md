@@ -4,11 +4,11 @@
 
 AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI。其他 AI 可以用擴充接進來,不需要改原始碼:
 
-| 類型 | 適合 | 能修改檔案 | 檔案 |
-| --- | --- | --- | --- |
-| CLI | 有非互動模式的 AI CLI,例如 Grok CLI、Kimi Code CLI、Gemini CLI | 可以 | `.json`,`"type": "cli"` |
-| API | OpenAI 相容的 Chat Completions API,例如 DeepSeek、Kimi、Grok、OpenRouter、Ollama | 預設不行；明確啟用受限檔案工具並通過 reviewer 閘門後才可改檔 | `.json`,`"type": "openai"` |
-| JS 外掛 | JSON 描述不了的情況 | 自己決定 | `.js` |
+| 類型    | 適合                                                                             | 能修改檔案                                                   | 檔案                       |
+| ------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------- |
+| CLI     | 有非互動模式的 AI CLI,例如 Grok CLI、Kimi Code CLI、Gemini CLI                   | 可以                                                         | `.json`,`"type": "cli"`    |
+| API     | OpenAI 相容的 Chat Completions API,例如 DeepSeek、Kimi、Grok、OpenRouter、Ollama | 預設不行；明確啟用受限檔案工具並通過 reviewer 閘門後才可改檔 | `.json`,`"type": "openai"` |
+| JS 外掛 | JSON 描述不了的情況                                                              | 自己決定                                                     | `.js`                      |
 
 ## 快速開始
 
@@ -23,18 +23,18 @@ AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI
 
 ## 共用欄位
 
-| 欄位 | 必填 | 說明 |
-| --- | --- | --- |
-| `id` | 是 | 唯一代號,英數字與 `. _ -`。成員設定會存這個值。和內建的 `claude`、`codex` 相同時會覆寫內建 |
-| `type` | JSON 必填 | `cli` 或 `openai` |
-| `label` | 否 | 顯示名稱 |
-| `description` | 否 | 範本與成員設定裡的說明 |
-| `models` | 否 | 模型清單,見下方;`openai` 類型可以寫 `"auto"` |
-| `efforts` | 否 | 手動輸入模型、或模型沒限制強度時可選的強度 |
-| `timeoutMs` | 否 | 單回合模型逾時,預設 20 分鐘；模型下載等背景工作不套用此值。擴充編輯器的「每回合逾時上限」以分鐘設定同一個欄位;逾時的錯誤訊息會提示在那裡調高 |
-| `usageShape` | 否 | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷 |
-| `capabilities` | 否 | 附件能力,格式見下方 |
-| `docsUrl` | 否 | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」 |
+| 欄位           | 必填      | 說明                                                                                                                                         |
+| -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`           | 是        | 唯一代號,英數字與 `. _ -`。成員設定會存這個值。和內建的 `claude`、`codex` 相同時會覆寫內建                                                   |
+| `type`         | JSON 必填 | `cli` 或 `openai`                                                                                                                            |
+| `label`        | 否        | 顯示名稱                                                                                                                                     |
+| `description`  | 否        | 範本與成員設定裡的說明                                                                                                                       |
+| `models`       | 否        | 模型清單,見下方;`openai` 類型可以寫 `"auto"`                                                                                                 |
+| `efforts`      | 否        | 手動輸入模型、或模型沒限制強度時可選的強度                                                                                                   |
+| `timeoutMs`    | 否        | 單回合模型逾時,預設 20 分鐘；模型下載等背景工作不套用此值。擴充編輯器的「每回合逾時上限」以分鐘設定同一個欄位;逾時的錯誤訊息會提示在那裡調高 |
+| `usageShape`   | 否        | 用量欄位的慣例,見[用量正規化](#用量正規化)。不填時依欄位特徵自動判斷                                                                         |
+| `capabilities` | 否        | 附件能力,格式見下方                                                                                                                          |
+| `docsUrl`      | 否        | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」                                                                             |
 
 ### 出問題時的下一步
 
@@ -42,7 +42,12 @@ AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI
 再給一個可照做的動作。JS 外掛的 `check()` / `testConnection()` 與 `run()` 都可以在回傳值裡帶 `fix`:
 
 ```js
-return { ok: false, state: 'unauthenticated', hint: '請先執行 my-cli login', fix: { command: 'my-cli login' } };
+return {
+  ok: false,
+  state: "unauthenticated",
+  hint: "請先執行 my-cli login",
+  fix: { command: "my-cli login" },
+};
 ```
 
 `fix` 三選一,由具體到一般:`command`(一行指令,會填進內建終端但**不會自動執行**)、
@@ -80,26 +85,26 @@ JSON 範本不寫 `fix`,改用 `fixCommand` 與 `docsUrl` 兩個欄位。
 
 各家 CLI / API 回報的用量欄位名稱與語意都不一樣,`src/usage.ts` 會在 `runTurn` 出口統一成同一種形狀,介面與匯出才能安全地跨成員加總:
 
-| 正規化欄位 | 意義 |
-| --- | --- |
-| `inputTokens` | **含快取命中與快取寫入的完整輸入總量** |
-| `cachedInputTokens` | 其中命中快取的部分(`inputTokens` 的子集) |
-| `cacheWriteTokens` | 其中寫入快取的部分(`inputTokens` 的子集,與 `cachedInputTokens` 互斥) |
-| `outputTokens` | 輸出 |
-| `costUsd` | 金額,只有部分來源會回報 |
-| `shape` | 實際採用的慣例,或 `unknown` |
-| `raw` | 原始物件,永遠原樣保留 |
+| 正規化欄位          | 意義                                                                 |
+| ------------------- | -------------------------------------------------------------------- |
+| `inputTokens`       | **含快取命中與快取寫入的完整輸入總量**                               |
+| `cachedInputTokens` | 其中命中快取的部分(`inputTokens` 的子集)                             |
+| `cacheWriteTokens`  | 其中寫入快取的部分(`inputTokens` 的子集,與 `cachedInputTokens` 互斥) |
+| `outputTokens`      | 輸出                                                                 |
+| `costUsd`           | 金額,只有部分來源會回報                                              |
+| `shape`             | 實際採用的慣例,或 `unknown`                                          |
+| `raw`               | 原始物件,永遠原樣保留                                                |
 
 **沒有回報的欄位是 `null`,不是 `0`。**「這個來源沒給這個數字」和「這個數字確定是零」在加總時意義完全不同,消費端只會加總實際有值的紀錄,並顯示每一欄涵蓋了幾位成員、幾個回合。
 
 ### 各慣例的欄位對應
 
-| `usageShape` | 來源 | `inputTokens` | `cachedInputTokens` | `cacheWriteTokens` |
-| --- | --- | --- | --- | --- |
-| `anthropic` | Claude Code | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` |
-| `codex` | Codex CLI | `input_tokens`(本來就含快取) | `cached_input_tokens` | 不回報(`null`) |
-| `cursor` | Cursor CLI | `inputTokens` + `cacheReadTokens` + `cacheWriteTokens` | `cacheReadTokens` | `cacheWriteTokens` |
-| `openai` | OpenAI 相容 API | `prompt_tokens`(本來就含快取) | `prompt_tokens_details.cached_tokens` | 不回報(`null`) |
+| `usageShape` | 來源            | `inputTokens`                                                              | `cachedInputTokens`                   | `cacheWriteTokens`            |
+| ------------ | --------------- | -------------------------------------------------------------------------- | ------------------------------------- | ----------------------------- |
+| `anthropic`  | Claude Code     | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens`             | `cache_creation_input_tokens` |
+| `codex`      | Codex CLI       | `input_tokens`(本來就含快取)                                               | `cached_input_tokens`                 | 不回報(`null`)                |
+| `cursor`     | Cursor CLI      | `inputTokens` + `cacheReadTokens` + `cacheWriteTokens`                     | `cacheReadTokens`                     | `cacheWriteTokens`            |
+| `openai`     | OpenAI 相容 API | `prompt_tokens`(本來就含快取)                                              | `prompt_tokens_details.cached_tokens` | 不回報(`null`)                |
 
 Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input_tokens + cache_read_input_tokens` 會在寫入快取的回合嚴重少報 —— 實測一筆真實資料是 38058 對 28099,少了 26%。
 
@@ -129,9 +134,12 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
   "input": "arg",
   "systemPrompt": "prepend",
   "args": [
-    "-p", "{prompt}",
-    "--output-format", "streaming-json",
-    "--cwd", "{cwd}",
+    "-p",
+    "{prompt}",
+    "--output-format",
+    "streaming-json",
+    "--cwd",
+    "{cwd}",
     ["-m", "{model}"],
     ["--effort", "{effort}"],
     ["--resume", "{sessionId}"],
@@ -148,22 +156,22 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 }
 ```
 
-| 欄位 | 預設 | 說明 |
-| --- | --- | --- |
-| `bin` | 必填 | 指令名稱或完整路徑 |
-| `args` | `[]` | 參數,見下方 |
-| `input` | `stdin` | 提示詞送法:`stdin`、`arg`(用 `{prompt}`)、`file`(寫成暫存檔,用 `{promptFile}`)、`none` |
-| `systemPrompt` | `prepend` | 角色設定送法:`prepend` 在沒有續接時接在提示詞前面;`arg` 用 `{systemPrompt}`;`none` 不送 |
-| `output.format` | `text` | `text` 每行都是回覆;`jsonl` 每行一個 JSON 事件;`json` 結束後解析整段輸出 |
-| `output.rules` | `[]` | 從 JSON 事件取出內容的規則,見下方 |
-| `output.sessionIdPattern` | 無 | 從 stdout 與 stderr 用正規表示式抓 session id,取第一個群組 |
-| `output.nonJsonLines` | `ignore` | `jsonl` 模式遇到非 JSON 行:`ignore` 或 `text` |
-| `supportsResume` | 自動 | 有 `sessionId` 規則或 `sessionIdPattern` 時為 true。不支援續接時,每回合會送完整對話紀錄 |
-| `supportsEdit` | `true` | false 時成員不能開啟「允許修改檔案」 |
-| `env` | 無 | 額外環境變數,值可用佔位 |
-| `shell` | `false` | 用 shell 執行 |
-| `successExitCodes` | `[0]` | 視為成功的結束代碼 |
-| `versionArgs` | `["--version"]` | 檢查是否安裝時用的參數;`null` 只確認指令存在;`false` 不檢查 |
+| 欄位                      | 預設            | 說明                                                                                    |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------- |
+| `bin`                     | 必填            | 指令名稱或完整路徑                                                                      |
+| `args`                    | `[]`            | 參數,見下方                                                                             |
+| `input`                   | `stdin`         | 提示詞送法:`stdin`、`arg`(用 `{prompt}`)、`file`(寫成暫存檔,用 `{promptFile}`)、`none`  |
+| `systemPrompt`            | `prepend`       | 角色設定送法:`prepend` 在沒有續接時接在提示詞前面;`arg` 用 `{systemPrompt}`;`none` 不送 |
+| `output.format`           | `text`          | `text` 每行都是回覆;`jsonl` 每行一個 JSON 事件;`json` 結束後解析整段輸出                |
+| `output.rules`            | `[]`            | 從 JSON 事件取出內容的規則,見下方                                                       |
+| `output.sessionIdPattern` | 無              | 從 stdout 與 stderr 用正規表示式抓 session id,取第一個群組                              |
+| `output.nonJsonLines`     | `ignore`        | `jsonl` 模式遇到非 JSON 行:`ignore` 或 `text`                                           |
+| `supportsResume`          | 自動            | 有 `sessionId` 規則或 `sessionIdPattern` 時為 true。不支援續接時,每回合會送完整對話紀錄 |
+| `supportsEdit`            | `true`          | false 時成員不能開啟「允許修改檔案」                                                    |
+| `env`                     | 無              | 額外環境變數,值可用佔位                                                                 |
+| `shell`                   | `false`         | 用 shell 執行                                                                           |
+| `successExitCodes`        | `[0]`           | 視為成功的結束代碼                                                                      |
+| `versionArgs`             | `["--version"]` | 檢查是否安裝時用的參數;`null` 只確認指令存在;`false` 不檢查                             |
 
 ### 參數與佔位
 
@@ -171,11 +179,11 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 
 `args` 的每個元素可以是:
 
-| 寫法 | 行為 |
-| --- | --- |
-| `"--flag"` 或 `"{model}"` | 單一參數;含佔位且值為空時略過 |
-| `["-m", "{model}"]` | 參數群組;任一佔位為空就整組略過 |
-| `{ "if": "canEdit", "then": [...], "else": [...] }` | 依條件選擇 |
+| 寫法                                                | 行為                            |
+| --------------------------------------------------- | ------------------------------- |
+| `"--flag"` 或 `"{model}"`                           | 單一參數;含佔位且值為空時略過   |
+| `["-m", "{model}"]`                                 | 參數群組;任一佔位為空就整組略過 |
+| `{ "if": "canEdit", "then": [...], "else": [...] }` | 依條件選擇                      |
 
 條件寫法:`"name"` 有值、`"!name"` 沒值、`"name=value"` 相等、`"name!=value"` 不相等,陣列代表全部成立。
 
@@ -183,17 +191,17 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
 
 每個 JSON 事件會依序套用所有符合 `match` 的規則。
 
-| 欄位 | 說明 |
-| --- | --- |
-| `match` | 比對條件,key 是點號路徑。值可以是字面值、陣列(其中之一),或 `{"$exists": true}`、`{"$startsWith": "x"}`、`{"$regex": "..."}`、`{"$ne": x}`、`{"$in": [...]}` |
-| `each` | 對事件中的陣列逐項套用,之後的路徑相對於每一項;`$event` 指整個事件 |
-| `text` | 回覆文字的路徑 |
-| `mode` | `append` 串接片段(預設)、`message` 當成新段落、`replace` 取代全部 |
-| `thinking` / `thinkingMode` | 思考過程的路徑與模式 |
-| `sessionId` | session id 的路徑 |
-| `usage` | 用量物件的路徑 |
-| `error` | 錯誤訊息的路徑 |
-| `activity` | 顯示成工具動作:`id`、`title`、`detail`、`result`、`status`(`running`、`done`、`error`)。值是範本字串,例如 `"工具:{function.name}"`;相同 `id` 會更新同一筆 |
+| 欄位                        | 說明                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `match`                     | 比對條件,key 是點號路徑。值可以是字面值、陣列(其中之一),或 `{"$exists": true}`、`{"$startsWith": "x"}`、`{"$regex": "..."}`、`{"$ne": x}`、`{"$in": [...]}` |
+| `each`                      | 對事件中的陣列逐項套用,之後的路徑相對於每一項;`$event` 指整個事件                                                                                           |
+| `text`                      | 回覆文字的路徑                                                                                                                                              |
+| `mode`                      | `append` 串接片段(預設)、`message` 當成新段落、`replace` 取代全部                                                                                           |
+| `thinking` / `thinkingMode` | 思考過程的路徑與模式                                                                                                                                        |
+| `sessionId`                 | session id 的路徑                                                                                                                                           |
+| `usage`                     | 用量物件的路徑                                                                                                                                              |
+| `error`                     | 錯誤訊息的路徑                                                                                                                                              |
+| `activity`                  | 顯示成工具動作:`id`、`title`、`detail`、`result`、`status`(`running`、`done`、`error`)。值是範本字串,例如 `"工具:{function.name}"`;相同 `id` 會更新同一筆   |
 
 ## API 類型(OpenAI 相容)
 
@@ -205,34 +213,37 @@ Anthropic 的三個欄位互斥,**相加才是完整的 prompt**。只取 `input
   "baseUrl": "https://api.deepseek.com",
   "apiKeyEnv": "DEEPSEEK_API_KEY",
   "models": [{ "id": "deepseek-v4-pro", "efforts": ["low", "high", "max"] }],
-  "effortBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "{effort}" }
+  "effortBody": {
+    "thinking": { "type": "enabled" },
+    "reasoning_effort": "{effort}"
+  }
 }
 ```
 
-| 欄位 | 預設 | 說明 |
-| --- | --- | --- |
-| `baseUrl` | 必填 | API 根網址 |
-| `secretRef` | 無 | 「設定 → AI 連接」安全儲存 API key 後自動寫入的參照;不要手動放入 key |
-| `apiKeyEnv` | 無 | 讀取 API key 的環境變數名稱;安全儲存未設定時使用 |
-| `headers` | 無 | 額外 HTTP header |
-| `path` | `/chat/completions` | 對話端點 |
-| `models` | 無 | 模型清單,或 `"auto"` 從 `modelsPath` 取得(每 10 分鐘更新) |
-| `modelsPath` | `/models` | 模型清單端點 |
-| `modelFilter` | 無 | 自動清單的正規表示式篩選 |
-| `defaultModel` | 無 | 成員沒選模型時使用 |
-| `body` | 無 | 額外請求欄位,字串可用 `{model}`、`{effort}` |
-| `effortBody` | `{"reasoning_effort": "{effort}"}` | 有選強度時合併進請求 |
-| `systemRole` | `system` | 角色設定使用的 role |
-| `reasoningFields` | `["reasoning_content", "reasoning"]` | 串流中思考內容的欄位 |
-| `stream` | `true` | 是否串流 |
-| `streamUsage` | `true` | 串流時要求回傳用量;不支援的服務設 false |
-| `history` | `true` | 在記憶體保留對話歷史來續接;關閉後每回合送完整紀錄 |
-| `maxHistoryMessages` | `80` | 保留的歷史訊息數,必須是正整數；`0`、負數或非整數會驗證失敗 |
-| `unreachableHint` | 通用提示 | 免金鑰 HTTP 端點連不上時顯示的處理方式,例如 `請先執行 ollama serve` |
-| `fixCommand` | 無 | 照著跑就能修好的一行指令,例如 `ollama serve`。介面會在狀態旁放一顆「在終端執行」,按下去會把指令填進內建終端(不會自動執行) |
-| `docsUrl` | 無 | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」 |
-| `supportsEdit` | `false` | 必須明確設為 `true`，且同時設定 `fileTools.enabled: true` 才宣告可改檔；仍需執行流程通過 reviewer 閘門 |
-| `fileTools.enabled` | `false` | 啟用受限的 `read_file`、`replace_text`、`write_file` 工具；不提供 shell 或 `apply_patch` |
+| 欄位                 | 預設                                 | 說明                                                                                                                      |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`            | 必填                                 | API 根網址                                                                                                                |
+| `secretRef`          | 無                                   | 「設定 → AI 連接」安全儲存 API key 後自動寫入的參照;不要手動放入 key                                                   |
+| `apiKeyEnv`          | 無                                   | 讀取 API key 的環境變數名稱;安全儲存未設定時使用                                                                          |
+| `headers`            | 無                                   | 額外 HTTP header                                                                                                          |
+| `path`               | `/chat/completions`                  | 對話端點                                                                                                                  |
+| `models`             | 無                                   | 模型清單,或 `"auto"` 從 `modelsPath` 取得(每 10 分鐘更新)                                                                 |
+| `modelsPath`         | `/models`                            | 模型清單端點                                                                                                              |
+| `modelFilter`        | 無                                   | 自動清單的正規表示式篩選                                                                                                  |
+| `defaultModel`       | 無                                   | 成員沒選模型時使用                                                                                                        |
+| `body`               | 無                                   | 額外請求欄位,字串可用 `{model}`、`{effort}`                                                                               |
+| `effortBody`         | `{"reasoning_effort": "{effort}"}`   | 有選強度時合併進請求                                                                                                      |
+| `systemRole`         | `system`                             | 角色設定使用的 role                                                                                                       |
+| `reasoningFields`    | `["reasoning_content", "reasoning"]` | 串流中思考內容的欄位                                                                                                      |
+| `stream`             | `true`                               | 是否串流                                                                                                                  |
+| `streamUsage`        | `true`                               | 串流時要求回傳用量;不支援的服務設 false                                                                                   |
+| `history`            | `true`                               | 在記憶體保留對話歷史來續接;關閉後每回合送完整紀錄                                                                         |
+| `maxHistoryMessages` | `80`                                 | 保留的歷史訊息數,必須是正整數；`0`、負數或非整數會驗證失敗                                                                |
+| `unreachableHint`    | 通用提示                             | 免金鑰 HTTP 端點連不上時顯示的處理方式,例如 `請先執行 ollama serve`                                                       |
+| `fixCommand`         | 無                                   | 照著跑就能修好的一行指令,例如 `ollama serve`。介面會在狀態旁放一顆「在終端執行」,按下去會把指令填進內建終端(不會自動執行) |
+| `docsUrl`            | 無                                   | 安裝或設定說明頁。這個 CLI / 服務不在時,介面顯示「打開安裝說明」                                                          |
+| `supportsEdit`       | `false`                              | 必須明確設為 `true`，且同時設定 `fileTools.enabled: true` 才宣告可改檔；仍需執行流程通過 reviewer 閘門                    |
+| `fileTools.enabled`  | `false`                              | 啟用受限的 `read_file`、`replace_text`、`write_file` 工具；不提供 shell 或 `apply_patch`                                  |
 
 ### Ollama 與 Qwen3.8
 
@@ -275,19 +286,25 @@ JSON 描述不了時,寫一個 `.js` 檔。範例見 [adapters/templates/aider-p
 
 ```js
 module.exports = {
-  id: 'my-agent',
-  label: 'My Agent',
-  bin: 'my-agent',          // 有寫就會自動檢查是否安裝
+  id: "my-agent",
+  label: "My Agent",
+  bin: "my-agent", // 有寫就會自動檢查是否安裝
   supportsResume: false,
   supportsEdit: true,
   // 附件能力,格式同 JSON;不寫時依 supportsEdit 判斷(可改檔案 → filePath + textInline,否則 textInline)
-  capabilities: { attachments: ['filePath'], attachmentsNeedCwd: false },
-  models: ['a', 'b'],       // 或 listModels(kit) / refreshModels(kit)
+  capabilities: { attachments: ["filePath"], attachmentsNeedCwd: false },
+  models: ["a", "b"], // 或 listModels(kit) / refreshModels(kit)
   async run(agent, ctx, kit) {
     // agent:model、effort、canEdit、name…
     // ctx:prompt、systemPrompt、sessionId、cwd、timeoutMs、attachments(附件 metadata 與可讀路徑)
     //      onText(全文)、onThinking(全文)、onActivity(動作)、onSession(id)、onProc(可停止的行程)
-    return { text: '回覆', thinking: '', sessionId: null, usage: null, error: null };
+    return {
+      text: "回覆",
+      thinking: "",
+      sessionId: null,
+      usage: null,
+      error: null,
+    };
   },
 };
 ```

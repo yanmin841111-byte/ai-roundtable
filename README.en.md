@@ -23,6 +23,13 @@ work, execute it, and review each other.
   whether the member may edit files.
 - **Lineups**: save who takes part, their roles, the lead, the flow and the work
   mode, and switch back with one click.
+- **Quick teams**: pick a development or research team from the sidebar Lineups
+  menu, preview and adjust the planning, authoring and review roles, then apply.
+  When members are missing, GitHub Copilot can add three read-only low-cost model
+  members in one click.
+- **Multi-AI checks**: discussion and a plan with acceptance criteria both need
+  unanimous approval before work starts; steps run in order, and every result
+  needs approval from two or more independent reviewers. Works with two members.
 - **Work mode**: "Writing code" verifies the changes automatically and locks
   existing tests; "General task" (documents, analysis, brainstorming) skips
   both.
@@ -132,6 +139,15 @@ Open also works). After that it opens normally.
 
 After you send a task, depending on the mode:
 
+- **Multi-AI checks (two or more members)**: discussion needs unanimous
+  agreement; the lead's plan must list acceptance criteria and receive every
+  other member's approval before execution. Steps run in plan order, each
+  receiving the previous handoffs. Every result is reviewed in a clean context
+  by all non-authors against each acceptance criterion; with only two members,
+  the author reviews again in a fresh context as the second reviewer. Anything
+  short of unanimous approval goes back to the original author, up to three
+  rounds, each re-verified and re-reviewed in full. Unanimous AI approval is not
+  human acceptance or a deployment guarantee.
 - **Discuss → Write tests → Implement → Cross-review**: the same as the flow
   below with one step added after the division of work: each member first turns
   its own acceptance criteria into tests. Those tests are locked during
@@ -201,21 +217,33 @@ You can send messages at any time while a task runs; they are shown to the next
 member to speak. "Stop" terminates every CLI process. "New chat" clears the
 conversation and each member's session memory.
 
+Members with edit permission can write only during execution and repair turns;
+discussion, planning, plan approval, review and summary are read-only. "Allow
+members to create git commits" is off by default, so changes stay in the
+working folder for you to decide.
+
 ## Member settings
 
 Click a member card in the sidebar to edit it:
 
-| Field                | Description                                                                                                                                                     |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AI CLI               | Built-in Claude Code, Codex CLI, Cursor CLI, GitHub Copilot CLI, custom command, or an extension you added                                                                          |
-| Model / version      | Read from each CLI's local model cache; only current, non-retired models are listed. Choose "Other" to type any model name                                      |
-| Effort               | Options depend on the model; unsupported levels are lowered to the nearest supported one or skipped, and noted in the conversation                              |
-| Role and personality | Goes into the system prompt and sets the member's stance and tone                                                                                               |
+| Field                | Description                                                                                                                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI CLI               | Built-in Claude Code, Codex CLI, Cursor CLI, GitHub Copilot CLI, custom command, or an extension you added                                                                                                                               |
+| Model / version      | Read from each CLI's local model cache; only current, non-retired models are listed. Choose "Other" to type any model name                                                                                                               |
+| Effort               | Options depend on the model; unsupported levels are lowered to the nearest supported one or skipped, and noted in the conversation                                                                                                       |
+| Role and personality | Goes into the system prompt and sets the member's stance and tone                                                                                                                                                                        |
 | Allow editing files  | When on, Claude runs with `--dangerously-skip-permissions`, Codex with `workspace-write`, Cursor with `--force`, Copilot with `--allow-all-tools`; when off, read-only (Cursor uses `--mode ask`, Copilot exposes only `view/glob/grep`) |
-| Custom command       | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -`                                         |
+| Custom command       | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -`                                                                                                                  |
 
 The lead is chosen in Settings and is responsible for dividing the work and
 summarizing.
+
+The GitHub Copilot CLI model list is read from `copilot help config` (no quota
+used); `gpt-5-mini`, `claude-haiku-4.5` and `gpt-5.4-mini` are labeled low cost
+and listed first, while actual availability depends on organization policy. With
+"Allow members to create git commits" off, Copilot members also get
+`--deny-tool=shell(git commit)` and `--deny-tool=shell(git push)`; other CLIs are
+only asked in the prompt, which cannot be enforced.
 
 For GitHub Copilot CLI, follow the official install guide, run `copilot login`, then
 choose "GitHub Copilot CLI" in "Add member → AI CLI". This uses the standalone
