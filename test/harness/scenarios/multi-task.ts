@@ -114,18 +114,18 @@ async function main() {
 async function relay() {
   const result = await runApp({
     members: [
-      scriptedMember({ id: 'lead', name: '主持人', plan: { summary: '先建立再交接', assignments: [{ agent: 'A2', task: '建立規格' }, { agent: 'A3', task: '接續實作' }] } }),
+      scriptedMember({ id: 'lead', name: '主持人', canEdit: false, plan: { summary: '先建立再交接', assignments: [{ agent: 'A2', task: '建立規格' }, { agent: 'A3', task: '接續實作' }], acceptance: ['spec.txt 與 result.json 都已建立'] } }),
       scriptedMember({ id: 'first', name: '第一棒', canEdit: true, writes: { 'spec.txt': 'ready\n' }, report: '規格已完成,請依 spec.txt 實作' }),
       scriptedMember({ id: 'second', name: '第二棒', canEdit: true, writes: { 'result.json': '{"ready":true}\n' }, report: '實作完成' }),
     ],
-    settings: { leadAgentId: 'lead', workStyle: 'general' },
+    settings: { leadAgentId: 'lead', workStyle: 'general', maxRounds: 1 },
     scenario: async () => {
       const g: any = globalThis;
       await g.ready();
       const mode = g.$('#mode') as HTMLSelectElement;
-      g.check(Array.from(mode.options).some((option) => option.value === 'relay'), '模式選單提供接力');
-      g.check(Array.from(mode.options).some((option) => option.value === 'divide' && option.text !== Array.from(mode.options).find((item) => item.value === 'relay')!.text), '平行分工與接力分開標示');
-      mode.value = 'relay';
+      g.check(!Array.from(mode.options).some((option) => option.value === 'relay'), '接力已併入多 AI 把關,不再單獨列出');
+      mode.value = 'guarded';
+      mode.dispatchEvent(new Event('change'));
       g.$('#input').value = '依序完成規格與實作';
       g.$('#send-btn').click();
       await g.waitFor(async () => (await g.snapshot()).messages.some((message: any) => message.tag === 'task-summary'), 30000, '接力結果卡');

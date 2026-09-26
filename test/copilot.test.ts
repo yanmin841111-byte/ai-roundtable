@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
-import { createCopilotAdapter, parseCopilotModels } from '../src/adapters/copilot';
+import { copilotArgs, createCopilotAdapter, parseCopilotModels } from '../src/adapters/copilot';
 import { builtinAdapters } from '../src/adapters/builtin';
 import type { AgentConfig, Activity } from '../src/ipc-types';
 import type { RunContext } from '../src/adapters/types';
@@ -111,6 +111,15 @@ test('streamed messages and reasoning replace deltas by ID; child replies stay o
   assert.ok(!invocation.args.includes('-p'));
   assert.ok(invocation.args.includes('--available-tools=view,glob,grep'));
   assert.equal(invocation.allowAll, 'false');
+});
+
+test('editing members cannot git commit or push unless the user allows it', () => {
+  const deny = ['--deny-tool=shell(git commit)', '--deny-tool=shell(git push)'];
+  const editing = copilotArgs({ canEdit: true, model: '', effort: '' }, {});
+  assert.ok(editing.includes('--allow-all-tools') && deny.every((flag) => editing.includes(flag)));
+  const allowed = copilotArgs({ canEdit: true, model: '', effort: '' }, { allowGit: true });
+  assert.ok(allowed.includes('--allow-all-tools') && deny.every((flag) => !allowed.includes(flag)));
+  assert.ok(copilotArgs({ canEdit: false, model: '', effort: '' }, {}).includes('--deny-tool=shell'));
 });
 
 test('a fresh session has an explicit UUID even when stdout omits session.start', async () => {

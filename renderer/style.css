@@ -1045,7 +1045,8 @@ button { transition: background .14s, border-color .14s, color .14s, box-shadow 
 .empty-steps span:not(.arrow) { border-radius: 999px; background: color-mix(in srgb, var(--panel) 82%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 
 .bubble { border-radius: 12px; box-shadow: var(--shadow-sm), inset 0 1px 0 var(--hairline); }
-.msg.system .bubble { border-radius: 999px; }
+/* 固定圓角:單行接近膠囊,多行的分工卡片也不會被畫成橢圓 */
+.msg.system .bubble { border-radius: 16px; }
 .composer-box { border-radius: 14px; border-color: var(--border); background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: var(--shadow-md), inset 0 1px 0 var(--hairline); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 .composer-box:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--ring), 0 14px 36px -18px color-mix(in srgb, var(--accent) 60%, transparent); }
 .composer-bar { border-top-color: color-mix(in srgb, var(--border) 70%, transparent); }

@@ -64,7 +64,11 @@ class Store {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       const def = defaultConfig();
-      return { agents: Array.isArray(raw.agents) ? raw.agents : def.agents, settings: { ...def.settings, ...(raw.settings || {}) }, lineups: sanitizeLineups(raw.lineups) };
+      const agents = Array.isArray(raw.agents) ? raw.agents : def.agents;
+      const settings = { ...def.settings, ...(raw.settings || {}) };
+      // 接力已併入多 AI 把關;不足三位成員時退回平行分工
+      if (settings.mode === 'relay') settings.mode = agents.filter((agent: { enabled?: boolean }) => agent.enabled !== false).length >= 3 ? 'guarded' : 'divide';
+      return { agents, settings, lineups: sanitizeLineups(raw.lineups) };
     } catch {
       return defaultConfig();
     }

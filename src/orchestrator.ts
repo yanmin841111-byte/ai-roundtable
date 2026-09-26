@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import crypto from 'crypto';
 import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapters';
-import { hasMarker, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
+import { hasMarker, hasAgreement, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
 import type { AgentConfig, AppConfig, AttachmentMeta, ChatMessage, ChatState, PendingQuestion, PhaseInfo, QuestionAnswer, ReviewInfo, RevertOutcome, TaskOutcome, TaskSummary, TaskVerification, TaskVerificationStatus, ToolAuditEntry } from './ipc-types';
@@ -36,6 +36,7 @@ import type { PreparedWorkspaces } from './worktrees';
 const AGREED = 'AGREED';
 const ASK = 'ASK';
 const MARK = (t: string) => `[${t}]`;
+const READ_ONLY_PHASES = new Set(['discuss', 'divide', 'review', 'summary']);
 const EMIT_INTERVAL = 70; // 串流更新合併發送的間隔(ms),避免每個 token 都走一次 IPC
 const ASK_TIMEOUT_MS = 5 * 60 * 1000; // 提問等多久算使用者不回答(結算成 defer,流程繼續)
 const ASK_MAX_PER_SESSION = 3;  // 整個對話最多打斷使用者幾次;被節流掉的問題不計入
@@ -567,7 +568,7 @@ class Orchestrator extends EventEmitter {
   async runTask(task: string, mode: string) {
     return this.runExclusive(async (agents, cwd) => {
       const guarded = mode === 'guarded';
-      if (guarded && new Set(agents.map((agent) => agent.id)).size < 3) {
+      if (guarded && new Set(agents.map((agent) => agent.id)).size < 2) {
         await this.guardPlanStopped('sys.guardMembers');
         return;
       }
@@ -579,7 +580,8 @@ class Orchestrator extends EventEmitter {
       }
       if (mode === 'divide' || mode === 'tdd' || mode === 'relay' || guarded) {
         if (!agreed) this.system(this.text('sys.maxRoundsDivide', { max: this.config.settings.maxRounds }));
-        const relay = mode === 'relay';
+        // 多 AI 把關依計畫順序一棒接一棒:有先後依賴的工作才不會讀到正在被改的檔案
+        const relay = mode === 'relay' || guarded;
         const plan = guarded ? await this.approvePlanPhase(agents, task) : await this.assignPhase(agents, task, relay);
         if (this.stopped) return;
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
@@ -629,7 +631,7 @@ class Orchestrator extends EventEmitter {
         const salvaged = this.salvageFailed(failed, reports, changed);
         const reviewed = [...reports, ...salvaged];
         if (guarded) for (const report of reviewed) {
-          report.task = this.text('prompt.guardReviewTask', { request: task, plan: JSON.stringify(plan), task: report.task });
+          report.task = this.text('prompt.guardReviewTask', { request: task, plan: JSON.stringify(plan), task: report.task, acceptance: (plan.acceptance || []).map((item, i) => `${i + 1}. ${item}`).join('\n') });
         }
         // 先由 app 自己驗證(語法檢查與使用者設定的驗證指令),結果交給審查者:
         // 評測量到審查者讀完檔案照樣放行載不起來的程式,讀是看不出執行時的錯的
@@ -813,7 +815,7 @@ class Orchestrator extends EventEmitter {
         if (this.stopped) return false;
         // 只認「最後幾行、單獨成行」的標記,避免成員在內文中提到它就被誤判為同意
         // 反問使用者的成員這回合不算同意:他自己都還沒下結論
-        if (!error && !asked && hasMarker(text, AGREED)) agreedCount++;
+        if (!error && !asked && hasAgreement(text, AGREED)) agreedCount++;
       }
       for (const question of questions) {
         if (this.stopped) return false;
@@ -826,7 +828,7 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段二:主持人產生分工 JSON(用 A1/A2 短代號,避免模型抄錯 UUID 或名稱)
-  async assignPhase(agents: AgentConfig[], task: string, relay = false): Promise<Plan | null> {
+  async assignPhase(agents: AgentConfig[], task: string, relay = false, acceptance = false): Promise<Plan | null> {
     this.setPhase({ code: 'divide' });
     const lead = this.lead;
     const codes = new Map<string, AgentConfig>();
@@ -839,10 +841,12 @@ class Orchestrator extends EventEmitter {
       roster,
       '',
       this.text(relay ? 'prompt.assignRelay' : 'prompt.assignNoOverlap'),
+      this.config.settings.allowGitCommit === true ? null : this.text('prompt.assignNoGit'),
       this.text('prompt.assignCodes', { codes: joinNames(this.locale, [...codes.keys()]) }),
+      acceptance ? this.text('prompt.assignAcceptance') : null,
       this.text('prompt.assignJson'),
-      this.text('prompt.assignExample'),
-    ].join('\n');
+      this.text(acceptance ? 'prompt.assignExampleAcceptance' : 'prompt.assignExample'),
+    ].filter((line): line is string => line !== null).join('\n');
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       const { text, error, id } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
@@ -855,6 +859,7 @@ class Orchestrator extends EventEmitter {
       }
       const plan = extractJson(text) as Plan | null;
       if (plan && Array.isArray(plan.assignments)) {
+        plan.acceptance = Array.isArray(plan.acceptance) ? plan.acceptance.filter((item): item is string => typeof item === 'string' && !!item.trim()).map((item) => item.trim()).slice(0, 10) : [];
         for (const a of plan.assignments) {
           const target = resolveAgent(a.agent, codes, agents);
           a._agentId = target ? target.id : null;
@@ -873,7 +878,8 @@ class Orchestrator extends EventEmitter {
           const lines = matched.map((a, i) => relay
             ? this.text('prompt.relayPlanItem', { n: i + 1, name: a._agentName || '', task: a.task || '' })
             : this.text('prompt.planItem', { name: a._agentName || '', task: a.task || '' })).join('\n');
-          this.system(this.text('sys.plan', { summary: plan.summary || '', lines }), { tag: 'plan' });
+          const criteria = plan.acceptance?.length ? `\n\n${this.text('prompt.planAcceptance', { list: plan.acceptance.map((item) => `- ${item}`).join('\n') })}` : '';
+          this.system(this.text('sys.plan', { summary: plan.summary || '', lines: lines + criteria }), { tag: 'plan' });
           // 分工結果已經以卡片呈現,主持人那則原文(JSON)在介面上收起來
           const source = this.messages.find((m) => m.id === id);
           if (source) this.updateMessage(source, { rawPlan: true }, true);
@@ -903,9 +909,13 @@ class Orchestrator extends EventEmitter {
     const maxRounds = Math.min(10, Math.max(1, Number(this.config.settings.maxRounds) || 3));
     const reviewers = agents.filter((agent) => agent.id !== this.lead.id);
     for (let round = 1; round <= maxRounds; round++) {
-      const plan = await this.assignPhase(agents, task);
+      const plan = await this.assignPhase(agents, task, true, true);
       if (this.stopped) return null;
       if (!plan) break;
+      if (!plan.acceptance?.length) {
+        this.system(this.text('sys.guardPlanNoAcceptance'), { level: 'warn', tag: 'plan-review' });
+        continue;
+      }
       this.setPhase({ code: 'discuss', round, maxRounds });
       this.system(this.text('sys.guardPlanRound', { round, max: maxRounds }), { tag: 'plan-review' });
       const group = crypto.randomUUID();
@@ -914,7 +924,7 @@ class Orchestrator extends EventEmitter {
         phase: { code: 'discuss', round, maxRounds }, freshContext: true, hideAgreed: true, group,
       })));
       if (this.stopped) return null;
-      if (votes.every((vote) => !vote.error && hasMarker(vote.text, AGREED))) {
+      if (votes.every((vote) => !vote.error && hasAgreement(vote.text, AGREED))) {
         this.system(this.text('sys.guardPlanPassed'), { tag: 'plan-approved' });
         return plan;
       }
@@ -1385,6 +1395,7 @@ class Orchestrator extends EventEmitter {
         toolLine ? this.text(toolLine, vars) : null,
         openLine ? this.text(openLine, vars) : null,
         target.failedWith ? this.text('prompt.reviewExecFailed', { name: target.agent.name, error: target.failedWith }) : null,
+        reviewer.id === target.agent.id ? this.text('prompt.guardSelfReview', vars) : null,
         target.previousNotes ? this.text('prompt.rereview', { name: target.agent.name, notes: target.previousNotes.join('\n\n') }) : null,
         // app 自己跑出來的結果:通過與否都告訴審查者,它才知道哪些部分不必自己猜
         touchedTests.length ? this.text('prompt.reviewTests', { list: touchedTests.join('、') }) : null,
@@ -1619,7 +1630,8 @@ class Orchestrator extends EventEmitter {
     this.lockedForFix = touchedTests;
     const jobs: Array<() => Promise<FixFailure & { text: string }>> = [];
     for (const it of issues.values()) {
-      if (!effectiveCanEdit(it.agent)) { unresolved.push(it); continue; }
+      const readOnlyRevision = guarded && !effectiveCanEdit(it.agent);
+      if (!effectiveCanEdit(it.agent) && !readOnlyRevision) { unresolved.push(it); continue; }
       const reviewer = reviews.find((review) => review.target.agent.id === it.agent.id
         && reviewVerdict(review.text, review.error) === 'issues'
         && effectiveCanEdit(review.reviewer)
@@ -1630,6 +1642,7 @@ class Orchestrator extends EventEmitter {
       const prompt = [
         this.text('prompt.fix'),
         this.text(guarded ? 'prompt.guardFix' : 'prompt.fixLast'),
+        readOnlyRevision ? this.text('prompt.guardReviseReadOnly') : null,
         repairer !== it.agent ? this.text('prompt.repairHandoff', { name: it.agent.name }) : null,
         // 既有的測試檔在修復回合鎖起來:要讓測試通過請改實作。API 成員由檔案工具直接擋下,
         // CLI 成員擋不到,所以提示裡講明,真的改了也會在複查與結果卡上標出來
@@ -1741,7 +1754,7 @@ class Orchestrator extends EventEmitter {
       fix.unresolved.push({ agent: rv.target.agent, task: rv.target.task, notes: [this.text('prompt.reviewNote', { reviewer: rv.reviewer.name, text: stripMarker(rv.text, NO_ISSUES) })] });
     }
     if (still.length) {
-      const names = still.map((rv) => rv.target.agent.name);
+      const names = [...new Set(still.map((rv) => rv.target.agent.name))];
       this.system(this.text('sys.rereviewIssues', { names: this.locale === 'en' ? joinNames('en', names) : names.join('」、「') }), { level: 'warn' });
     }
   }
@@ -1899,6 +1912,8 @@ class Orchestrator extends EventEmitter {
       fileToolsEnabled,
       ...(lockedPaths && lockedPaths.length ? { lockedPaths } : {}),
       readOnlyFileTools,
+      readOnly: isPhaseInfo(phase) && READ_ONLY_PHASES.has(phase.code),
+      allowGit: this.config.settings.allowGitCommit === true,
       ephemeral,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter, staged).filter((a) => !(noImages && a.kind === 'image')) : [],

@@ -18,7 +18,7 @@ export const FIXTURE_DIR = __dirname;
 export function scriptedMember(opts: {
   id?: string;
   name?: string;
-  plan?: { summary: string; assignments: Array<{ agent: string; task: string }> };
+  plan?: { summary: string; assignments: Array<{ agent: string; task: string }>; acceptance?: string[] };
   discuss?: string;
   planReview?: string;
   review?: string;

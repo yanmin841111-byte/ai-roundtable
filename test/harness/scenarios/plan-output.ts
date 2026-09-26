@@ -38,6 +38,11 @@ async function once(locale: 'zh-Hant' | 'en') {
       g.check(note && note.offsetHeight > 0 && new RegExp(H.zh ? '分工結果' : 'Work plan').test(note.textContent || ''), `說明指向下方的分工結果(${note && note.textContent})`);
       const card = Array.from(document.querySelectorAll('#timeline [data-msg-id]')).some((m) => new RegExp(H.zh ? '分工結果' : 'Work plan').test(m.textContent || '') && m !== el);
       g.check(card, '下方的分工結果卡片還在');
+      const planBubble = Array.from(document.querySelectorAll('#timeline .msg.system .bubble')).find((b) => /<li/i.test(b.innerHTML) && new RegExp(H.zh ? '分工結果' : 'Work plan').test(b.textContent || '')) as HTMLElement | undefined;
+      const radius = planBubble ? parseFloat(getComputedStyle(planBubble).borderTopLeftRadius) : NaN;
+      g.check(!!planBubble && radius <= 20, `多行分工卡片不被畫成橢圓(圓角 ${radius}px)`);
+      planBubble?.scrollIntoView({ block: 'center' });
+      await g.shot(`plan-card-${H.zh ? 'zh' : 'en'}`);
       await g.shot(`plan-collapsed-${H.zh ? 'zh' : 'en'}`);
       (details!.querySelector('summary') as HTMLElement).click();
       await g.w(300);
@@ -57,7 +62,7 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
   const zh = locale === 'zh-Hant';
   const result = await runApp({
     members: [
-      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }] } }),
+      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }], acceptance: ['notes.txt exists'] } }),
       scriptedMember({ id: 'author', name: 'Bob', canEdit: true, writes: { 'notes.txt': 'Draft' }, fixWrites: { 'notes.txt': 'Revised' }, report: 'Draft ready', fixReport: 'Revised notes' }),
       scriptedMember({ id: 'reviewer', name: 'Carol', planReview: outcome === 'plan' ? 'Acceptance criteria missing' : '[AGREED]', review: 'Please revise the notes', recheck: outcome === 'review' ? 'Still incomplete' : '[NO_ISSUES]' }),
     ],

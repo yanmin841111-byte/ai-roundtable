@@ -7,7 +7,7 @@ import { normalizeDiscussionMode } from './ipc-types';
 
 export const LINEUPS_MAX = 30;
 export const LINEUP_NAME_MAX = 40;
-const MODES = new Set(['divide', 'relay', 'tdd', 'discuss', 'guarded']);
+const MODES = new Set(['divide', 'tdd', 'discuss', 'guarded']);
 const ROUNDS_MIN = 1;
 const ROUNDS_MAX = 10; // 與設定視窗「最大討論回合」的上限一致
 
@@ -120,7 +120,7 @@ export function sanitizeLineups(raw: unknown): Lineup[] {
       name,
       members,
       leadAgentId: typeof l.leadAgentId === 'string' && members.some((m: { id: string }) => m.id === l.leadAgentId) ? l.leadAgentId : null,
-      mode: MODES.has(l.mode) ? l.mode : 'divide',
+      mode: l.mode === 'relay' ? (members.length >= 3 ? 'guarded' : 'divide') : MODES.has(l.mode) ? l.mode : 'divide',
       maxRounds: clampRounds(l.maxRounds),
       discussionMode: normalizeDiscussionMode(l.discussionMode),
       workStyle: l.workStyle === 'general' ? 'general' : 'code',

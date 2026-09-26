@@ -93,7 +93,6 @@
             </select></label>
             <label class="composer-option"><span data-i18n="composer.teamMode">合作方式</span><select id="mode" data-i18n-aria-label="composer.teamMode">
               <option value="divide" data-i18n="composer.mode.divide">平行分工</option>
-              <option value="relay" data-i18n="composer.mode.relay">接力</option>
               <option value="guarded" data-i18n="composer.mode.guarded">多 AI 把關</option>
               <option value="tdd" data-i18n="composer.mode.tdd">測試先行</option>
               <option value="discuss" data-i18n="composer.mode.discuss">只討論</option>
@@ -180,8 +179,7 @@
                 <div class="setting-label"><b data-i18n="settings.defaultMode">預設流程</b><span data-i18n="settings.defaultModeDesc">「分工執行」會實際建立與修改工作目錄裡的檔案,並互相審查;「只討論」不碰任何檔案。與輸入框旁的選單同步。</span></div>
                 <select id="default-mode">
                   <option value="divide" data-i18n="mode.divide">討論 → 平行分工 → 合併 → 交叉審查</option>
-                  <option value="relay" data-i18n="mode.relay">討論 → 接力(一棒接一棒) → 交叉審查</option>
-                  <option value="guarded" data-i18n="mode.guarded">多 AI 把關 (至少 3 位)</option>
+                  <option value="guarded" data-i18n="mode.guarded">多 AI 把關:討論 → 計畫與驗收條件審核 → 依序執行 → 雙重獨立審查(至少 2 位)</option>
                   <option value="tdd" data-i18n="mode.tdd">討論 → 寫測試 → 實作 → 交叉審查</option>
                   <option value="discuss" data-i18n="mode.discuss">只討論,不執行</option>
                 </select>
@@ -198,6 +196,10 @@
             <div class="setting">
               <div class="setting-label"><b data-i18n="settings.verifyCommand">驗證指令</b><span data-i18n="settings.verifyCommandDesc">執行與修復之後,app 會在工作目錄跑這個指令(例如 npm test),結果交給審查者,失敗就一定要修。留空只做內建的語法檢查。</span></div>
               <textarea id="verify-command" rows="3" data-i18n-placeholder="settings.verifyCommandPlaceholder" placeholder="一行一道,依序執行,例如:&#10;npm run lint&#10;npm run typecheck&#10;npm test"></textarea>
+            </div>
+            <div class="setting">
+              <div class="setting-label"><b data-i18n="settings.allowGit">允許成員建立 git 提交</b><span data-i18n="settings.allowGitDesc">關閉時改動只留在工作目錄,由你決定是否提交。GitHub Copilot 成員會被直接禁止 git commit 與 git push;其他 CLI 依提示詞要求,無法強制。</span></div>
+              <label class="check"><input id="allow-git" type="checkbox" /> <span data-i18n="settings.allowGitLabel">允許</span></label>
             </div>
           </section>
 

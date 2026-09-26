@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { parseAsk, stripAsk, findDiffFocus } = require('../src/shared');
+const { parseAsk, stripAsk, findDiffFocus, hasMarker, hasAgreement, stripAgreement } = require('../src/shared');
 
 let passed = 0;
 const test = (name: string, fn: () => void) => {
@@ -55,6 +55,20 @@ test('parseAsk:選項超過上限時只保留前八個', () => {
   const parsed = parseAsk(`[ASK]\n要選哪個？\n${choices}\n[/ASK]`);
   assert.strictEqual(parsed.options.length, 8);
   assert.deepStrictEqual(parsed.options.map((option: any) => option.id), ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+});
+
+test('hasAgreement:最後一行句尾的共識標記算同意,引號、否定與內文提到不算;審查標記仍嚴格', () => {
+  assert.strictEqual(hasAgreement('分析完成\n[AGREED]', 'AGREED'), true);
+  assert.strictEqual(hasAgreement('執行 node sum.test.js 應顯示 "sum ok"。[AGREED]', 'AGREED'), true);
+  assert.strictEqual(hasAgreement('I agree with the plan. [AGREED]  \n', 'AGREED'), true);
+  assert.strictEqual(hasAgreement('還需要討論,我不寫 [AGREED]', 'AGREED'), false);
+  assert.strictEqual(hasAgreement('So I will not write [AGREED]', 'AGREED'), false);
+  assert.strictEqual(hasAgreement('同意時請寫「[AGREED]', 'AGREED'), false);
+  assert.strictEqual(hasAgreement('等大家都同意後我才會寫 `[AGREED]', 'AGREED'), false);
+  assert.strictEqual(hasAgreement('[AGREED] 還不行,有問題要處理', 'AGREED'), false);
+  assert.strictEqual(hasMarker('看起來沒問題 [NO_ISSUES]', 'NO_ISSUES'), false);
+  assert.strictEqual(stripAgreement('同意這個方案。[AGREED]', 'AGREED'), '同意這個方案。');
+  assert.strictEqual(stripAgreement('同意\n[AGREED]', 'AGREED'), '同意');
 });
 
 test('parseAsk:沒有問題文字時回 null 且畸形輸入不拋錯', () => {

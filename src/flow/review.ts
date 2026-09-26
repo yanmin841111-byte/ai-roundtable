@@ -27,10 +27,17 @@ export function hasQualifiedReviewer(agents: AgentConfig[] | null | undefined, t
   return reviewerCandidates(agents, targetId).length > 0;
 }
 
+// 多 AI 把關的審查者:所有非作者;只有一位非作者時,作者另開全新上下文擔任第二位審查者
+export function guardReviewers(agents: AgentConfig[] | null | undefined, targetId: string): AgentConfig[] {
+  const others = reviewerCandidates(agents, targetId);
+  const author = (agents || []).find((agent) => agent && agent.id === targetId);
+  return others.length === 1 && author ? [...others, author] : others;
+}
+
 export function pickReviewPairs(agents: AgentConfig[] | null | undefined, reports: ExecReport[], allReviewers = false): ReviewPair[] {
   if (!Array.isArray(reports) || reports.length === 0) return [];
   if (allReviewers) {
-    return reports.flatMap((target) => reviewerCandidates(agents, target.agent.id).map((reviewer) => ({ reviewer, target })));
+    return reports.flatMap((target) => guardReviewers(agents, target.agent.id).map((reviewer) => ({ reviewer, target })));
   }
   if (reports.length >= 2) {
     return reports.map((r, i) => ({ reviewer: r.agent, target: reports[(i + 1) % reports.length] }));
@@ -45,7 +52,7 @@ export function pickReviewPairs(agents: AgentConfig[] | null | undefined, report
 }
 
 export function allReviewsPassed(agents: AgentConfig[], targetId: string, reviews: Review[]): boolean {
-  const candidates = reviewerCandidates(agents, targetId);
+  const candidates = guardReviewers(agents, targetId);
   if (new Set(candidates.map((agent) => agent.id)).size < 2) return false;
   return candidates.every((agent) => {
     const votes = reviews.filter((review) => review.target.agent.id === targetId && review.reviewer.id === agent.id);

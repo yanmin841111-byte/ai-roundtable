@@ -52,6 +52,7 @@ export interface Assignment {
 export interface Plan {
   summary?: string;
   assignments: Assignment[];
+  acceptance?: string[];
 }
 
 export interface ExecReport {

@@ -240,7 +240,7 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
-  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#allow-git']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
   $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
@@ -1267,6 +1267,7 @@ function renderSidebar() {
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
   $<HTMLInputElement>('#max-parallel').value = String(config.settings.maxParallelJobs || 2);
   $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
+  $<HTMLInputElement>('#allow-git').checked = config.settings.allowGitCommit === true;
   renderWorkdirChip();
   const sel = $<HTMLSelectElement>('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
@@ -1282,6 +1283,7 @@ function saveSettings() {
   config.settings.leadAgentId = $<HTMLSelectElement>('#lead-agent').value || null;
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
   config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
+  config.settings.allowGitCommit = $<HTMLInputElement>('#allow-git').checked;
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   config.settings.maxParallelJobs = Math.min(6, Math.max(1, Math.round(Number($<HTMLInputElement>('#max-parallel').value) || 2)));
@@ -2370,9 +2372,9 @@ function hydrateAttachmentThumbs(root: HTMLElement | null, list: Array<Attachmen
 }
 
 function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
-  const agreed = Marker.hasMarker(m.text || '', 'AGREED');
+  const agreed = Marker.hasAgreement(m.text || '', 'AGREED');
   // 審查結論改用徽章表示,[NO_ISSUES] 這個給程式看的標記不顯示
-  const text = m.review ? Marker.stripMarker(Marker.stripMarker(m.text || '', 'AGREED'), 'NO_ISSUES') : Marker.stripMarker(m.text || '', 'AGREED');
+  const text = m.review ? Marker.stripMarker(Marker.stripAgreement(m.text || '', 'AGREED'), 'NO_ISSUES') : Marker.stripAgreement(m.text || '', 'AGREED');
   // 結論與流程(要不要進修復回合)是同一個判斷,由主程序寫進訊息,介面不自己猜
   const verdict = m.review && m.status !== 'running' ? m.review.verdict : undefined;
   const verdictBadge = (m.review?.recheck ? `<span class="badge recheck" title="${escapeHtml(t('review.recheckTitle'))}">${escapeHtml(t('review.recheck'))}</span>` : '')

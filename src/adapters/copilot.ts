@@ -31,7 +31,7 @@ export function parseCopilotModels(output: string): Model[] {
 
 export function copilotArgs(
   agent: Pick<AgentConfig, 'canEdit' | 'model' | 'effort'>,
-  ctx: { cwd?: string; sessionId?: string | null; newSessionId?: string | null; attachments?: Array<{ path: string | null }> },
+  ctx: { cwd?: string; sessionId?: string | null; newSessionId?: string | null; attachments?: Array<{ path: string | null }>; allowGit?: boolean },
 ): string[] {
   const args = ['--output-format', 'json', '--stream', 'on', '--no-ask-user', '--no-auto-update'];
   if (agent.model) args.push('--model', agent.model);
@@ -42,7 +42,11 @@ export function copilotArgs(
   for (const attachment of ctx.attachments || []) {
     if (attachment.path) args.push('--attachment', attachment.path);
   }
-  if (agent.canEdit) args.push('--allow-all-tools');
+  if (agent.canEdit) {
+    args.push('--allow-all-tools');
+    // 禁止規則優先於 --allow-all-tools
+    if (!ctx.allowGit) args.push('--deny-tool=shell(git commit)', '--deny-tool=shell(git push)');
+  }
   else args.push('--available-tools=view,glob,grep', '--allow-tool=read', '--deny-tool=write', '--deny-tool=shell', '--disable-builtin-mcps');
   return args;
 }

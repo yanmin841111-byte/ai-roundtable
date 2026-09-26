@@ -44,6 +44,24 @@ test('陣容寫入失敗不更動主程序的目前設定', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('舊的接力設定與陣容轉成多 AI 把關;不足三位時退回平行分工', () => {
+  const members = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, persona: '' }));
+  const [three, two] = L.sanitizeLineups([
+    { id: 'three', name: 'three', members: members(3), mode: 'relay' },
+    { id: 'two', name: 'two', members: members(2), mode: 'relay' },
+  ]);
+  assert.strictEqual(three.mode, 'guarded');
+  assert.strictEqual(two.mode, 'divide');
+  for (const [enabled, expected] of [[3, 'guarded'], [2, 'divide']] as const) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-relay-migrate-'));
+    try {
+      const agents = [agent('a'), agent('b'), agent('c', { enabled: enabled === 3 })];
+      fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ agents, settings: { mode: 'relay' } }));
+      assert.strictEqual(new Store(dir).get().settings.mode, expected);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
 test('多 AI 把關隨陣容保存、載入與套用', () => {
   const current = config([agent('a'), agent('b'), agent('c')], { mode: 'guarded' });
   const lineup = L.lineupFromConfig(current, 'checks', 'checks');

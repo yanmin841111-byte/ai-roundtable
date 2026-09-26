@@ -38,6 +38,26 @@ export function stripMarker(text: unknown, tag: unknown): string {
     .trim();
 }
 
+const QUOTED_BEFORE = /[`"'「『“‘(（]$/;
+const NEGATED_BEFORE = /(不|沒|未|別|勿|尚未|不會|不要)\s*(寫|加|給|標|記)?\s*[:：]?$|\b(not|don't|won't|never|no)\s+(write|add|put|mark|give)?\s*:?$/i;
+
+// 共識標記額外接受「最後一行以標記結尾」:模型常接在句尾。引號內或否定語境仍不算。
+export function hasAgreement(text: unknown, tag: unknown): boolean {
+  if (hasMarker(text, tag)) return true;
+  if (!text || !tag) return false;
+  const want = tagText(tag);
+  const last = String(text).replace(/\r\n/g, '\n').trimEnd().split('\n').pop()!.trim();
+  if (!last.endsWith(want)) return false;
+  const before = last.slice(0, -want.length).trimEnd();
+  return !QUOTED_BEFORE.test(before) && !NEGATED_BEFORE.test(before);
+}
+
+export function stripAgreement(text: unknown, tag: unknown): string {
+  const stripped = stripMarker(text, tag);
+  if (!hasAgreement(stripped, tag)) return stripped;
+  return stripped.slice(0, -tagText(tag).length).trimEnd();
+}
+
 // 審查訊息裡的檔名(相對於工作目錄)對應到改動清單裡的哪一個檔案(相對於 repo 根目錄)。
 // 只接受完全相符:以前用「結尾相符」,README.md 會對到排在前面的 docs/README.md。
 export function findDiffFocus(paths: string[], prefix: string, focus: string): string | null {

@@ -100,6 +100,8 @@ export interface AppSettings {
   activeLineupId?: string | null;
   // 自動驗證指令(在工作目錄執行,例如 npm test)。空字串代表只做內建的語法檢查
   verifyCommand?: string;
+  // 允許成員建立 git 提交與推送;預設關閉,改動留在工作目錄由使用者決定
+  allowGitCommit?: boolean;
   // 工作模式:'code' 是寫程式(自動驗證、測試鎖都生效),'general' 是一般任務(文件、分析、腦力激盪)
   workStyle?: 'general' | 'code';
   // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度

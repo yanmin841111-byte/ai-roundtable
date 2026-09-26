@@ -29,6 +29,10 @@ async function writable() {
       const discussion = g.$('#discussion-mode') as HTMLSelectElement;
       discussion.value = 'independent-first';
       discussion.dispatchEvent(new Event('change'));
+      const allowGit = g.$('#allow-git') as HTMLInputElement;
+      g.check(!allowGit.checked, 'git 提交預設關閉');
+      allowGit.checked = true;
+      allowGit.dispatchEvent(new Event('change'));
       const hint = await g.waitFor(() => {
         const el = g.$('#settings-saved') as HTMLElement;
         return el && !el.hidden ? el : null;
@@ -46,7 +50,7 @@ async function writable() {
   });
   const ok = report('設定存得進去時說已儲存', r);
   const saved = JSON.parse(fs.readFileSync(path.join(r.userData, 'config.json'), 'utf8'));
-  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first';
+  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first' && saved.settings.allowGitCommit === true;
   console.log(written ? '  ok - 設定檔確實被寫進去了' : '  失敗:說存好了,檔案卻沒有改');
   r.cleanup();
   assert.ok(ok && written, r.error || '對照組失敗');

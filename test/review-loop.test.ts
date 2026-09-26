@@ -21,14 +21,16 @@ type Member = { id: string; name: string; task?: string; writes?: Record<string,
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
   expectFiles?: Record<string, string>; execBarrier?: () => Promise<void>; discussion?: string; planReview?: string[];
-  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>> };
+  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean };
 async function run(team: Member[]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
   const workers = team.filter((m) => m.task);
-  const plan = { summary: 's', assignments: workers.map((m) => ({ agent: m.name, task: m.task })) };
+  const plan = { summary: 's', assignments: workers.map((m) => ({ agent: m.name, task: m.task })), acceptance: team[0].acceptance ?? ['完成指派的工作'] };
   const prompts: Record<string, string[]> = {};
   const turns: Array<{ who: string; phase: string; sessionId: string | null; lockedPaths: string[] }> = [];
+  const editableTurns: string[] = [];
+  const gitAllowed: boolean[] = [];
   const reviewsGiven: Record<string, number> = {};
   const plansReviewed: Record<string, number> = {};
   const repairsMade: Record<string, number> = {};
@@ -40,6 +42,8 @@ async function run(team: Member[]) {
         (prompts[m.name] ||= []).push(ctx.prompt);
         const phase = /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
         turns.push({ who: m.name, phase, sessionId: ctx.sessionId ?? null, lockedPaths: ctx.lockedPaths || [] });
+        gitAllowed.push(ctx.allowGit === true);
+        if (_a.canEdit) editableTurns.push(/【計畫審核】/.test(ctx.prompt) ? 'plan' : /【分工】/.test(ctx.prompt) ? 'divide' : /【總結】/.test(ctx.prompt) ? 'summary' : phase === 'other' ? 'discuss' : phase);
         if (/【分工】/.test(ctx.prompt)) return { text: JSON.stringify(plan) };
         if (/【計畫審核】/.test(ctx.prompt)) {
           if (m.stopOnPlan) orc.stop();
@@ -87,7 +91,7 @@ async function run(team: Member[]) {
       } };
   } });
   const agents = team.map((m) => ({ id: m.id, name: m.name, cli: m.id, enabled: true, canEdit: m.canEdit !== false, color: '#000', persona: '', model: '', effort: '', customCommand: '' }));
-  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: dir, maxRounds: team[0].maxRounds || 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: team[0].id, verifyCommand: team.find((m) => m.verifyCommand)?.verifyCommand || '', workStyle: team.find((m) => m.workStyle)?.workStyle || 'code' };
+  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: dir, maxRounds: team[0].maxRounds || 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: team[0].id, verifyCommand: team.find((m) => m.verifyCommand)?.verifyCommand || '', workStyle: team.find((m) => m.workStyle)?.workStyle || 'code', allowGitCommit: team[0].allowGit === true };
   const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: os.tmpdir() });
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', team.find((m) => m.mode)?.mode || 'divide');
@@ -118,7 +122,7 @@ async function run(team: Member[]) {
   const outcome = Object.fromEntries((card?.members || []).map((m: any) => [m.name, m.outcome]));
   const reviews = orc.messages.filter((m: any) => m.review);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
-  return { outcome, card, reviews, prompts, summaryPrompt, turns, orc, read, retained };
+  return { outcome, card, reviews, prompts, summaryPrompt, turns, editableTurns, gitAllowed, orc, read, retained };
 }
 
 test('多 AI 把關:一票通過不能蓋過另一票失敗,且不沿用修改前的通過票', async () => {
@@ -194,6 +198,59 @@ test('多 AI 把關:計畫被退回後重新審核,只有新版全員同意才�
   assert.strictEqual(result.card.guard.status, 'passed');
 });
 
+test('多 AI 把關:唯讀成員的報告被退回時可重寫並重新送審,不會改檔', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', workStyle: 'general', canEdit: false, review: ['報告與檔案不符', '[NO_ISSUES]'] },
+    { id: 'analyst', name: '分析者', task: '整理風險', canEdit: false },
+    { id: 'reviewer', name: '審查者', canEdit: false },
+  ]);
+  assert.ok(result.turns.some((turn) => turn.who === '分析者' && turn.phase === 'repair'));
+  assert.ok(result.prompts['分析者'].some((prompt) => /唯讀/.test(prompt) && /【修復】/.test(prompt)));
+  assert.deepStrictEqual(result.editableTurns, []);
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.strictEqual(result.card.guard.repairRounds, 1);
+});
+
+test('git 提交權限:預設告訴主持人不要安排提交且不授權轉接器;使用者開啟後才放行', async () => {
+  const team = (allowGit: boolean): Member[] => [
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, allowGit },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+  ];
+  const blocked = await run(team(false));
+  assert.ok(blocked.prompts['主持人'].some((prompt: string) => /【分工】/.test(prompt) && /不允許成員建立 git 提交/.test(prompt)));
+  assert.ok(blocked.gitAllowed.every((allowed) => !allowed));
+  const allowed = await run(team(true));
+  assert.ok(!allowed.prompts['主持人'].some((prompt: string) => /不允許成員建立 git 提交/.test(prompt)));
+  assert.ok(allowed.gitAllowed.every((value) => value));
+});
+
+test('有改檔權限的 CLI 成員只在執行與修復回合可寫,討論、計畫審核、審查與總結都唯讀', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', review: ['請修正', '[NO_ISSUES]'] },
+    { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'draft' }, fixWrites: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者' },
+  ]);
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.deepStrictEqual([...new Set(result.editableTurns)].sort(), ['execute', 'repair']);
+});
+
+test('多 AI 把關:討論與計畫審核接受句尾的同意標記,否定語境仍阻擋', async () => {
+  const agreed = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, discussion: '同意這個方向。[AGREED]' },
+    { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'done' } },
+    { id: 'second', name: '第二位', canEdit: false, planReview: ['計畫可行。[AGREED]'] },
+  ]);
+  assert.strictEqual(agreed.read('a.txt'), 'done');
+  assert.strictEqual(agreed.card.guard.status, 'passed');
+  const refused = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫文件', writes: { 'a.txt': 'done' } },
+    { id: 'second', name: '第二位', canEdit: false, planReview: ['驗收條件不清楚,所以我不寫 [AGREED]'] },
+  ]);
+  assert.strictEqual(refused.read('a.txt'), null);
+  assert.ok(refused.orc.messages.some((message: any) => message.tag === 'guarded-stop'));
+});
+
 test('多 AI 把關:停止計畫或成果審查後,不能繼續執行或修正', async () => {
   for (const duringPlan of [true, false]) {
     const result = await run([
@@ -234,7 +291,7 @@ test('多 AI 把關:每份成果由所有其他成員審查,至少兩票且全�
   assert.strictEqual(allReviewsPassed(agents, 'author', [...reviews, reviews[0]]), false);
 });
 
-test('多 AI 把關:少於三位、討論未同意、計畫被否決或審核失敗都不開工', async () => {
+test('多 AI 把關:少於兩位、討論未同意、計畫被否決或審核失敗都不開工', async () => {
   for (const reason of ['members', 'discussion', 'plan', 'error']) {
     const team: Member[] = [
       { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
@@ -243,11 +300,48 @@ test('多 AI 把關:少於三位、討論未同意、計畫被否決或審核失
         planReview: reason === 'plan' ? ['缺少驗收條件'] : reason === 'error' ? ['ERROR:timeout'] : undefined },
       { id: 'reviewer', name: '審查者', canEdit: false },
     ];
-    const result = await run(reason === 'members' ? team.slice(0, 2) : team);
+    const result = await run(reason === 'members' ? team.slice(0, 1) : team);
     assert.strictEqual(result.read('a.txt'), null, reason);
     assert.ok(!result.turns.some((turn) => turn.phase === 'execute'), reason);
     assert.ok(result.orc.messages.some((message: any) => message.tag === 'guarded-stop'), reason);
   }
+});
+
+test('多 AI 把關:兩位成員時,作者另開全新上下文擔任第二位審查者,兩票都過才通過', async () => {
+  const passed = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+  ]);
+  assert.deepStrictEqual(passed.reviews.map((message: any) => message.agentName).sort(), ['主持人', '作者']);
+  const selfPrompt = passed.prompts['作者'].find((prompt: string) => /【交叉審查】/.test(prompt)) || '';
+  assert.match(selfPrompt, /全新上下文的獨立審查者/);
+  assert.strictEqual(passed.card.guard.status, 'passed');
+  assert.strictEqual(passed.card.guard.reviewers, 2);
+  const blocked = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, review: ['驗收條件沒有達成', '仍未達成', '仍未達成', '仍未達成'] },
+  ]);
+  assert.strictEqual(blocked.card.guard.status, 'blocked', '作者的獨立審查不通過就不算通過');
+});
+
+test('多 AI 把關:計畫必須列出驗收條件,並交給審查者逐條對照', async () => {
+  const missing = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, acceptance: [] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false },
+  ]);
+  assert.strictEqual(missing.read('a.txt'), null);
+  assert.ok(missing.orc.messages.some((message: any) => /沒有列出驗收條件/.test(message.text)));
+  assert.ok(!missing.turns.some((turn) => turn.phase === 'execute'));
+  assert.ok(!missing.prompts['審查者'].some((prompt: string) => /【計畫審核】/.test(prompt)), '沒有驗收條件就不送審');
+  const listed = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, acceptance: ['a.txt 內容為 done'] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false },
+  ]);
+  assert.ok(listed.orc.messages.some((message: any) => message.tag === 'plan' && /驗收條件[\s\S]*a\.txt 內容為 done/.test(message.text)));
+  assert.match(listed.prompts['審查者'].find((prompt: string) => /【交叉審查】/.test(prompt)) || '', /完成標準[\s\S]*1\. a\.txt 內容為 done[\s\S]*不要要求它做分工以外/);
+  assert.ok(listed.prompts['主持人'].some((prompt: string) => /【分工】/.test(prompt) && /acceptance/.test(prompt)));
 });
 
 test('多 AI 把關:具體計畫獲所有其他成員同意後才執行', async () => {
@@ -689,6 +783,19 @@ test('測試先行:實作回合真的鎖住剛寫好的測試檔', async () => {
   ]);
   const exec = r.turns.find((t: any) => t.phase === 'execute')!;
   assert.deepStrictEqual(exec.lockedPaths, ['add.test.js'], '實作回合要把測試檔傳進工具層鎖起來');
+});
+
+test('多 AI 把關:依計畫順序一棒接一棒,後一棒看得到前一棒的檔案與交接', async () => {
+  const r = await run([
+    { id: 'lead', name: '主持人', canEdit: false, mode: 'guarded' },
+    { id: 'alice', name: 'Alice', api: true, task: '寫規格 spec.txt', writes: { 'spec.txt': 'add(a,b)\n' } },
+    { id: 'bob', name: 'Bob', api: true, task: '照規格實作 add.js', expectFiles: { 'spec.txt': 'add(a,b)\n' }, writes: { 'add.js': 'exports.add = (a, b) => a + b;\n' } },
+  ]);
+  assert.deepStrictEqual(r.turns.filter((t) => t.phase === 'execute').map((t) => t.who), ['Alice', 'Bob']);
+  assert.match(r.prompts['Bob'].find((p: string) => /【執行】/.test(p)) || '', /第 1 棒:Alice[\s\S]*寫規格 spec\.txt/);
+  assert.ok(r.prompts['主持人'].some((p: string) => /【分工】/.test(p) && /接力/.test(p)), '分工時告訴主持人會依序執行');
+  assert.ok(!r.orc.messages.some((m: any) => /隔離目錄/.test(m.text)), '依序執行不開隔離目錄');
+  assert.strictEqual(r.card.guard.status, 'passed');
 });
 
 test('接力:照順序在同一個目錄一棒接一棒,後一棒看得到前一棒的檔案與交接', async () => {

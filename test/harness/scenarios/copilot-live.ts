@@ -20,13 +20,14 @@ async function main() {
     return;
   }
   if (MODELS.length < 3) throw new Error('COPILOT_MODELS needs at least three models');
+  const pair = process.env.COPILOT_TEAM === '2';
   const [lead, author, reviewer] = MODELS;
   const started = Date.now();
   const result = await runApp({
     members: [
       { id: 'lead', name: `Copilot ${lead}`, cli: 'copilot', model: lead, canEdit: false },
       { id: 'author', name: `Copilot ${author}`, cli: 'copilot', model: author, canEdit: true },
-      { id: 'reviewer', name: `Copilot ${reviewer}`, cli: 'copilot', model: reviewer, canEdit: false },
+      ...(pair ? [] : [{ id: 'reviewer', name: `Copilot ${reviewer}`, cli: 'copilot', model: reviewer, canEdit: false }]),
     ],
     files: FILES,
     git: true,
@@ -50,7 +51,7 @@ async function main() {
       };
     },
   });
-  const ok = report(`Copilot 真機 · ${MODELS.join(' / ')}`, result);
+  const ok = report(`Copilot 真機 · ${(pair ? MODELS.slice(0, 2) : MODELS).join(' / ')}`, result);
   let testPassed = false;
   try {
     execFileSync(process.execPath, ['sum.test.js'], { cwd: result.workDir, stdio: 'pipe' });

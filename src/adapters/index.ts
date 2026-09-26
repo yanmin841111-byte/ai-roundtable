@@ -77,7 +77,7 @@ async function runTurn(agent: AgentConfig, input: TurnInput): Promise<TurnResult
     return { text: '', thinking: '', sessionId: null, usage: null, error: tx(locale, 'adapter.missing', { cli: agent.cli }), fix: { settingsTab: 'clis' } };
   }
   try {
-    const result = await adapter.run({ ...agent, canEdit: effectiveCanEdit(agent) }, ctx);
+    const result = await adapter.run({ ...agent, canEdit: !ctx.readOnly && effectiveCanEdit(agent) }, ctx);
     const r = result || {};
     const error = r.error || null;
     // 所有 usage 都在這個出口正規化,上層(orchestrator、介面、匯出)只會看到同一種形狀
