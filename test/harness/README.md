@@ -73,7 +73,8 @@ console.log(r.numstat()); // git 的說法
 ## 現成情境
 
 ```bash
-npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑。包含以下 16 個情境:
+npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑。包含以下情境:
+                        #   content-safety     使用者與 AI 的 Markdown 清理、新視窗與同視窗導覽阻擋
                         #   ui-states          設定壞掉時燈號與徽章有沒有說實話
                         #   i18n-en            英文介面下,主程序產生的錯誤是不是英文
                         #   waiting            長回合時有沒有顯示階段、經過時間與停滯警示

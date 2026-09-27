@@ -198,8 +198,12 @@
               <textarea id="verify-command" rows="3" data-i18n-placeholder="settings.verifyCommandPlaceholder" placeholder="一行一道,依序執行,例如:&#10;npm run lint&#10;npm run typecheck&#10;npm test"></textarea>
             </div>
             <div class="setting">
-              <div class="setting-label"><b data-i18n="settings.allowGit">允許成員建立 git 提交</b><span data-i18n="settings.allowGitDesc">關閉時改動只留在工作目錄,由你決定是否提交。GitHub Copilot 成員會被直接禁止 git commit 與 git push;其他 CLI 依提示詞要求,無法強制。</span></div>
+              <div class="setting-label"><b data-i18n="settings.allowGit">允許成員建立 git 提交</b><span data-i18n="settings.allowGitDesc">只允許在本機建立提交,不包含推送。關閉時 Copilot 會加上 git commit 禁止規則;其他 CLI 僅以提示詞要求,無法強制。</span></div>
               <label class="check"><input id="allow-git" type="checkbox" /> <span data-i18n="settings.allowGitLabel">允許</span></label>
+            </div>
+            <div class="setting">
+              <div class="setting-label"><b data-i18n="settings.allowGitPush">允許成員推送到遠端</b><span data-i18n="settings.allowGitPushDesc">可能將改動發布到共享儲存庫。預設關閉;Copilot 會加上 git push 禁止規則,其他 CLI 僅以提示詞要求。</span></div>
+              <label class="check"><input id="allow-git-push" type="checkbox" /> <span data-i18n="settings.allowGitLabel">允許</span></label>
             </div>
           </section>
 

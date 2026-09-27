@@ -302,10 +302,10 @@ function renderPreset(menu: HTMLElement): void {
   menu.appendChild(head);
   const form = document.createElement('form');
   form.className = 'lineup-preset';
-  const roles = ['leadId', 'authorId', 'reviewerId'] as const;
+  const roles: Array<keyof SuggestedMembers> = selection?.reviewerId ? ['leadId', 'authorId', 'reviewerId'] : ['leadId', 'authorId'];
   const intro = document.createElement('p');
   intro.className = 'lineup-preset-intro';
-  intro.textContent = t('lineup.quick.intro');
+  intro.textContent = t(selection && !selection.reviewerId ? 'lineup.quick.pairIntro' : 'lineup.quick.intro');
   form.appendChild(intro);
   if (selection) for (const [index, role] of roles.entries()) {
     const label = document.createElement('label');
@@ -327,10 +327,10 @@ function renderPreset(menu: HTMLElement): void {
       option.disabled = !availability[member.id]?.ready || (kind === 'code' && role === 'authorId' && !availability[member.id]?.writable);
       select.appendChild(option);
     }
-    select.value = selection[role];
+    select.value = selection[role]!;
     select.disabled = deps.running() || saving;
     select.onchange = () => {
-      const previous = selection![role];
+      const previous = selection![role]!;
       const occupied = roles.find((other) => other !== role && selection![other] === select.value);
       if (occupied) selection![occupied] = previous;
       selection![role] = select.value;
@@ -338,14 +338,14 @@ function renderPreset(menu: HTMLElement): void {
       menu.querySelector<HTMLElement>(`[data-team-role="${role}"]`)?.focus();
     };
     const detail = document.createElement('small');
-    const state = availability[selection[role]];
+    const state = availability[selection[role]!];
     detail.className = state?.writable ? 'lineup-role-detail writable' : 'lineup-role-detail';
     detail.textContent = [state?.detail || t('lineup.quick.unknown'), t(state?.writable ? 'lineup.quick.canEdit' : 'agent.readOnly')].join(' · ');
     label.append(select, detail);
     form.appendChild(label);
   }
-  const selectedIds = selection ? roles.map((role) => selection![role]) : [];
-  const enough = selectedIds.length === 3 && new Set(selectedIds).size === 3 && selectedIds.every((id) => readyIds.includes(id));
+  const selectedIds = selection ? roles.map((role) => selection![role]!) : [];
+  const enough = selectedIds.length >= 2 && new Set(selectedIds).size === roles.length && selectedIds.every((id) => readyIds.includes(id));
   const writer = !!selection && (kind === 'general' || writableIds.includes(selection.authorId));
   const folder = !!config.settings.workDir.trim();
   const needsWriter = !selection && 'reason' in suggested && suggested.reason === 'writer';
@@ -436,14 +436,14 @@ function renderPreset(menu: HTMLElement): void {
     if (!selection || saving || refreshing || deps.running()) return;
     const current = deps.config();
     const states = deps.availability();
-    const ids = roles.map((role) => selection![role]);
-    if (new Set(ids).size !== 3 || !ids.every((id) => states[id]?.ready) || !current.settings.workDir.trim() || (kind === 'code' && !states[selection.authorId]?.writable)) { renderMenu(); return; }
+    const ids = roles.map((role) => selection![role]!);
+    if (ids.length < 2 || new Set(ids).size !== roles.length || !ids.every((id) => states[id]?.ready) || !current.settings.workDir.trim() || (kind === 'code' && !states[selection.authorId]?.writable)) { renderMenu(); return; }
     if (lineups().length >= LINEUPS_MAX) { note(t('lineup.full', { max: LINEUPS_MAX }), true); return; }
     const baseName = t(`lineup.quick.${kind}`);
     let name = baseName;
     for (let suffix = 2; lineups().some((lineup) => lineup.name === name); suffix++) name = `${baseName} ${suffix}`;
     const author = current.agents.find((agent) => agent.id === selection!.authorId)!;
-    const members = roles.map((role) => ({ id: selection![role], persona: t(`lineup.quick.persona.${kind}.${role}`, { author: author.name }) }));
+    const members = roles.map((role) => ({ id: selection![role]!, persona: t(`lineup.quick.persona.${kind}.${role}`, { author: author.name }) }));
     const lineup: Lineup = { id: newId(), name, members, leadAgentId: selection.leadId, mode: 'guarded', maxRounds: Math.max(2, Math.min(10, current.settings.maxRounds || 3)), discussionMode: 'independent-first', workStyle: kind };
     const result = applyLineup(current, lineup);
     if (!result || result.missing) { renderMenu(); return; }

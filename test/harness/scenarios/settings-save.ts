@@ -33,12 +33,24 @@ async function writable() {
       g.check(!allowGit.checked, 'git 提交預設關閉');
       allowGit.checked = true;
       allowGit.dispatchEvent(new Event('change'));
+      const allowPush = g.$('#allow-git-push') as HTMLInputElement;
+      g.check(!allowPush.checked, 'Local commit permission does not enable pushes');
+      await g.waitFor(async () => {
+        const settings = (await (window as any).api.getConfig()).settings;
+        return settings.allowGitCommit === true && settings.allowGitPush === false;
+      }, 5000, 'Independent permissions saved');
+      allowPush.checked = true;
+      allowPush.dispatchEvent(new Event('change'));
+      await g.waitFor(async () => (await (window as any).api.getConfig()).settings.allowGitPush === true, 5000, 'Explicit push permission saved');
       const hint = await g.waitFor(() => {
         const el = g.$('#settings-saved') as HTMLElement;
         return el && !el.hidden ? el : null;
       }, 8000, '改完設定之後有回應');
       g.check(/已儲存/.test(hint.textContent || ''), `存得進去就說已儲存(顯示:${hint.textContent})`);
       g.check(!hint.classList.contains('failed'), '成功時不帶失敗樣式');
+      g.$('#settings-close').click();
+      g.$('#settings-btn').click();
+      g.check(allowGit.checked && allowPush.checked, 'Both permissions restored independently');
       await g.shot('discussion-mode');
       g.$('#settings-close').click();
       const messages = await g.send('Discuss the task independently first.', 'discuss');
@@ -50,7 +62,7 @@ async function writable() {
   });
   const ok = report('設定存得進去時說已儲存', r);
   const saved = JSON.parse(fs.readFileSync(path.join(r.userData, 'config.json'), 'utf8'));
-  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first' && saved.settings.allowGitCommit === true;
+  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first' && saved.settings.allowGitCommit === true && saved.settings.allowGitPush === true;
   console.log(written ? '  ok - 設定檔確實被寫進去了' : '  失敗:說存好了,檔案卻沒有改');
   r.cleanup();
   assert.ok(ok && written, r.error || '對照組失敗');
@@ -144,16 +156,22 @@ async function connections(locale: 'zh-Hant' | 'en') {
       const bounds = tools.getBoundingClientRect();
       harness.check(bounds.left >= 0 && bounds.right <= window.innerWidth && bounds.top >= 0, 'Tools menu stays inside the window');
       await capture('workspace-tools');
+      console.log('CONNECTION_STEP tools captured');
       tools.hidePopover();
       harness.check(harness.$('#composer').contains(harness.$('#stop-btn')), 'Stop is next to task input');
       const style = harness.$('#work-style') as HTMLSelectElement;
       style.value = 'general';
       style.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('CONNECTION_STEP style dispatched');
       await harness.waitFor(async () => (await (window as any).api.getConfig()).settings.workStyle === 'general', 5000, 'General task mode saved');
+      console.log('CONNECTION_STEP style saved');
 
       harness.$('#settings-btn').click();
+      console.log('CONNECTION_STEP settings opened');
       harness.$('.settings-tab[data-tab="clis"]').click();
+      console.log('CONNECTION_STEP connections tab');
       harness.$('#ext-add').click();
+      console.log('CONNECTION_STEP picker opened');
       harness.check(!harness.$('.ext-template-advanced').open, 'Custom connections are collapsed by default');
       harness.check(!!harness.$('#ext-picker-local'), 'Local AI has a direct detection entry');
       await capture('ai-picker');
@@ -217,6 +235,7 @@ async function connections(locale: 'zh-Hant' | 'en') {
     },
   });
   const ok = report(`Connection workflow (${locale})`, result);
+  if (!ok) console.log(result.stdout.slice(-5000));
   assert.ok(ok, result.error);
   const saved = JSON.parse(fs.readFileSync(path.join(result.userData, 'adapters', result.value.file), 'utf8'));
   assert.equal(saved.label, 'Research AI');
@@ -300,6 +319,7 @@ async function layout(locale: 'zh-Hant' | 'en') {
 }
 
 async function main() {
+  if (process.argv.includes('--permissions-only')) { await writable(); return; }
   await layout('zh-Hant');
   await layout('en');
   await connections('zh-Hant');

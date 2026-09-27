@@ -253,6 +253,7 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
   // 端對端測試(npm run e2e):載入後在介面執行劇本,把結果印到 stdout,依結果決定結束代碼
   const e2eScript = process.env.AI_ROUNDTABLE_E2E_SCRIPT;
+  if (e2eScript) win.webContents.setBackgroundThrottling(false);
   if (e2eScript) win.webContents.once('did-finish-load', async () => {
     let result: { ok?: boolean } | null = null;
     try { result = await win.webContents.executeJavaScript(fs.readFileSync(e2eScript, 'utf8')); } catch (e) { result = { ok: false, ...{ error: e instanceof Error ? e.message : String(e) } }; }
@@ -266,8 +267,8 @@ function createWindow() {
   // 測試 harness 的多張截圖:劇本在 renderer 裡 console.log('__SHOT__ 名稱'),主程序看到就拍一張。
   // 用 console 當通道是刻意的——不必為了測試在 preload 開新的 IPC 面,production 沒有多一吋介面。
   const shotDir = process.env.AI_ROUNDTABLE_E2E_SHOT_DIR;
-  if (shotDir) win.webContents.on('console-message', (_e, _level, msg) => {
-    const m = /^__SHOT__ (.+)$/.exec(String(msg || '').trim());
+  if (shotDir) win.webContents.on('console-message', (event) => {
+    const m = /^__SHOT__ (.+)$/.exec(event.message.trim());
     if (!m) return;
     const name = m[1].replace(/[^A-Za-z0-9._-]/g, '_');
     void (async () => {
@@ -287,8 +288,18 @@ function createWindow() {
     fs.writeFileSync(shotFile, img.toPNG());
     console.log('screenshot saved');
   }, 2500));
-  if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (_e, level, msg, line, src) => console.log(`[renderer:${level}] ${msg} (${path.basename(src || '')}:${line})`));
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (event) => console.log(`[renderer:${event.level}] ${event.message} (${path.basename(event.sourceId || '')}:${event.lineNumber})`));
+  const openExternal = (url: string) => {
+    try {
+      if (['https:', 'http:', 'mailto:'].includes(new URL(url).protocol)) void shell.openExternal(url).catch(() => {});
+    } catch {}
+  };
+  win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event) => { event.preventDefault(); openExternal(event.url); });
+  win.webContents.on('will-frame-navigate', (event) => { if (!event.isMainFrame) event.preventDefault(); });
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  win.webContents.session.setPermissionCheckHandler(() => false);
   mainWindow = win;
 }
 

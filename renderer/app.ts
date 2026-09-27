@@ -1,6 +1,7 @@
 // Renderer 主程式。由 esbuild 打包成單一 IIFE(見 package.json 的 build:renderer)。
 // shared / model-rules 以往靠 UMD 掛在 window 上,改成 import 後由 bundler inline 進來。
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import * as Marker from '../src/shared';
 import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
@@ -24,7 +25,13 @@ import type {
 } from './api';
 
 // marked v15 的 parse() 型別是 string | Promise<string>;這裡一律同步使用。
-const md = (text: string): string => marked.parse(text, { async: false }) as string;
+const md = (text: string): string => DOMPurify.sanitize(marked.parse(text, { async: false }) as string, {
+  ALLOWED_TAGS: ['p', 'br', 'hr', 'strong', 'em', 'del', 's', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img', 'details', 'summary'],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'start', 'colspan', 'rowspan'],
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
+  ALLOWED_URI_REGEXP: /^(?:https?:\/\/|mailto:)/i,
+});
 
 // renderAgentMessage 用的節點集合。
 interface AgentShell {
@@ -240,7 +247,7 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
-  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#allow-git']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
   $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
   $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
@@ -1268,6 +1275,7 @@ function renderSidebar() {
   $<HTMLInputElement>('#max-parallel').value = String(config.settings.maxParallelJobs || 2);
   $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
   $<HTMLInputElement>('#allow-git').checked = config.settings.allowGitCommit === true;
+  $<HTMLInputElement>('#allow-git-push').checked = config.settings.allowGitPush === true;
   renderWorkdirChip();
   const sel = $<HTMLSelectElement>('#lead-agent');
   sel.innerHTML = config.agents.filter((a) => a.enabled !== false).map((a) => `<option value="${a.id}" ${a.id === lead ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
@@ -1284,6 +1292,7 @@ function saveSettings() {
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
   config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
   config.settings.allowGitCommit = $<HTMLInputElement>('#allow-git').checked;
+  config.settings.allowGitPush = $<HTMLInputElement>('#allow-git-push').checked;
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   config.settings.maxParallelJobs = Math.min(6, Math.max(1, Math.round(Number($<HTMLInputElement>('#max-parallel').value) || 2)));

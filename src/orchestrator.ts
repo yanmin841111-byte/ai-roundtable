@@ -841,7 +841,6 @@ class Orchestrator extends EventEmitter {
       roster,
       '',
       this.text(relay ? 'prompt.assignRelay' : 'prompt.assignNoOverlap'),
-      this.config.settings.allowGitCommit === true ? null : this.text('prompt.assignNoGit'),
       this.text('prompt.assignCodes', { codes: joinNames(this.locale, [...codes.keys()]) }),
       acceptance ? this.text('prompt.assignAcceptance') : null,
       this.text('prompt.assignJson'),
@@ -858,7 +857,11 @@ class Orchestrator extends EventEmitter {
         continue;
       }
       const plan = extractJson(text) as Plan | null;
-      if (plan && Array.isArray(plan.assignments)) {
+      if (plan && !Array.isArray(plan) && (plan.summary === undefined || typeof plan.summary === 'string')
+        && Array.isArray(plan.assignments) && plan.assignments.length > 0 && plan.assignments.length <= 100
+        && plan.assignments.every((item) => item && !Array.isArray(item)
+          && typeof item.agent === 'string' && !!item.agent.trim()
+          && typeof item.task === 'string' && !!item.task.trim())) {
         plan.acceptance = Array.isArray(plan.acceptance) ? plan.acceptance.filter((item): item is string => typeof item === 'string' && !!item.trim()).map((item) => item.trim()).slice(0, 10) : [];
         for (const a of plan.assignments) {
           const target = resolveAgent(a.agent, codes, agents);
@@ -1900,6 +1903,8 @@ class Orchestrator extends EventEmitter {
       transcript ? (resumable ? this.text('transcript.new') : this.text('transcript.sofar')) + '\n' + transcript : '',
       attachmentBlock,
       instruction,
+      this.config.settings.allowGitCommit === true ? '' : this.text('prompt.assignNoGit'),
+      this.config.settings.allowGitPush === true ? '' : this.text('prompt.noGitPush'),
     ].filter(Boolean).join('\n\n');
 
     let text = '';
@@ -1914,6 +1919,7 @@ class Orchestrator extends EventEmitter {
       readOnlyFileTools,
       readOnly: isPhaseInfo(phase) && READ_ONLY_PHASES.has(phase.code),
       allowGit: this.config.settings.allowGitCommit === true,
+      allowGitPush: this.config.settings.allowGitPush === true,
       ephemeral,
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter, staged).filter((a) => !(noImages && a.kind === 'image')) : [],

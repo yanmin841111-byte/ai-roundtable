@@ -25,6 +25,7 @@ work, execute it, and review each other.
   mode, and switch back with one click.
 - **Quick teams**: pick a development or research team from the sidebar Lineups
   menu, preview and adjust the planning, authoring and review roles, then apply.
+  Two ready members are enough; a third member gets a separate review role.
   When members are missing, GitHub Copilot can add three read-only low-cost model
   members in one click.
 - **Multi-AI checks**: discussion and a plan with acceptance criteria both need
@@ -218,9 +219,9 @@ member to speak. "Stop" terminates every CLI process. "New chat" clears the
 conversation and each member's session memory.
 
 Members with edit permission can write only during execution and repair turns;
-discussion, planning, plan approval, review and summary are read-only. "Allow
-members to create git commits" is off by default, so changes stay in the
-working folder for you to decide.
+discussion, planning, plan approval, review and summary are read-only. Local
+git commits and remote pushes have separate permissions, both off by default.
+Allowing commits does not allow pushes.
 
 ## Member settings
 
@@ -240,10 +241,11 @@ summarizing.
 
 The GitHub Copilot CLI model list is read from `copilot help config` (no quota
 used); `gpt-5-mini`, `claude-haiku-4.5` and `gpt-5.4-mini` are labeled low cost
-and listed first, while actual availability depends on organization policy. With
-"Allow members to create git commits" off, Copilot members also get
-`--deny-tool=shell(git commit)` and `--deny-tool=shell(git push)`; other CLIs are
-only asked in the prompt, which cannot be enforced.
+and listed first, while actual availability depends on organization policy.
+Copilot members get `--deny-tool=shell(git commit)` when commit permission is
+off, and `--deny-tool=shell(git push)` when push permission is off. Other CLIs
+are only asked in the prompt, which cannot be enforced; these rules are not a
+complete Git security sandbox.
 
 For GitHub Copilot CLI, follow the official install guide, run `copilot login`, then
 choose "GitHub Copilot CLI" in "Add member → AI CLI". This uses the standalone

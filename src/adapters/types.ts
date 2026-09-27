@@ -53,8 +53,9 @@ export interface RunContext extends TurnCallbacks {
   lockedPaths?: string[];
   // 討論、分工、審查、總結回合:不論成員權限,一律以唯讀執行
   readOnly?: boolean;
-  // 使用者允許成員 git commit / push;沒開時支援指令層級權限的 adapter 會直接禁止
+  // allowGit 僅授權本機提交;推送需另外授權
   allowGit?: boolean;
+  allowGitPush?: boolean;
   // prompt 裡只有這一回合需要的一段(原封不動包含在 prompt 裡)。照常送出;
   // 自己保存對話記憶的 adapter 存檔時要換成一行說明,不然之後每回合都會重送。
   ephemeral?: string;

@@ -59,7 +59,7 @@ test('parseAsk:選項超過上限時只保留前八個', () => {
 
 test('hasAgreement:最後一行句尾的共識標記算同意,引號、否定與內文提到不算;審查標記仍嚴格', () => {
   assert.strictEqual(hasAgreement('分析完成\n[AGREED]', 'AGREED'), true);
-  assert.strictEqual(hasAgreement('執行 node sum.test.js 應顯示 "sum ok"。[AGREED]', 'AGREED'), true);
+  assert.strictEqual(hasAgreement('執行 node sum.test.js 應顯示 "sum ok"。[AGREED]', 'AGREED'), false);
   assert.strictEqual(hasAgreement('I agree with the plan. [AGREED]  \n', 'AGREED'), true);
   assert.strictEqual(hasAgreement('還需要討論,我不寫 [AGREED]', 'AGREED'), false);
   assert.strictEqual(hasAgreement('So I will not write [AGREED]', 'AGREED'), false);
@@ -69,6 +69,18 @@ test('hasAgreement:最後一行句尾的共識標記算同意,引號、否定與
   assert.strictEqual(hasMarker('看起來沒問題 [NO_ISSUES]', 'NO_ISSUES'), false);
   assert.strictEqual(stripAgreement('同意這個方案。[AGREED]', 'AGREED'), '同意這個方案。');
   assert.strictEqual(stripAgreement('同意\n[AGREED]', 'AGREED'), '同意');
+});
+
+test('verdict markers reject instructions, code, quotes and superseded decisions', () => {
+  for (const text of ['Do not output [AGREED]', '尚未同意，請勿輸出 [AGREED]', 'When ready output [AGREED]', '```text\n[AGREED]\n```', '~~~\n[AGREED]\n~~~', '> [AGREED]', '    [AGREED]', '<pre>\n[AGREED]\n</pre>', '[AGREED]\nActually, changes are required.', '`example\n[AGREED]']) {
+    assert.strictEqual(hasAgreement(text, 'AGREED'), false, text);
+    assert.strictEqual(stripAgreement(text, 'AGREED'), text.trim(), text);
+  }
+  for (const text of ['```\n[NO_ISSUES]\n```', '> [NO_ISSUES]', '[NO_ISSUES]\nNeeds fixes']) {
+    assert.strictEqual(hasMarker(text, 'NO_ISSUES'), false, text);
+  }
+  assert.strictEqual(hasAgreement('同意執行。[AGREED]', 'AGREED'), true);
+  assert.strictEqual(hasMarker('Checked\n[NO_ISSUES]', 'NO_ISSUES'), true);
 });
 
 test('parseAsk:沒有問題文字時回 null 且畸形輸入不拋錯', () => {

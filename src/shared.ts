@@ -1,10 +1,7 @@
 // 共用工具:orchestrator(Node)與 renderer(瀏覽器)共用同一套標記語意。
 // 標準 ESM export:Node 端由 tsc 編成 CommonJS,renderer 端由 esbuild inline 進 bundle。
+import { marked } from 'marked';
 
-// 只檢查最後幾行,避免成員在內文中「提到」標記就被誤判。
-// 本機小模型常在標記後面多寫一兩行收尾,放寬到 6 行讓它們不會一直被漏判;
-// 「必須單獨成行」這條規則不放寬,否則句子裡提到標記就會被誤判。
-export const TAIL_LINES = 6;
 
 // findMentions 只看得到名稱;回傳型別用泛型帶回呼叫端自己的成員型別。
 export interface MentionAgent {
@@ -15,47 +12,40 @@ function tagText(tag: unknown): string {
   return '[' + String(tag || '').trim() + ']';
 }
 
-// 標記必須單獨成一行,且出現在文字結尾的最後 TAIL_LINES 行之內。
+function verdictLine(text: unknown): string | null {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const tokens = marked.lexer(text.replace(/\r\n/g, '\n').trimEnd());
+  const last = tokens.filter((token) => token.type !== 'space').at(-1);
+  if (last?.type !== 'paragraph' || last.tokens?.at(-1)?.type !== 'text') return null;
+  if (last.tokens.some((token) => token.type === 'text' && token.raw.includes('`'))) return null;
+  return last.raw.trimEnd().split('\n').at(-1)!.trim();
+}
+
 export function hasMarker(text: unknown, tag: unknown): boolean {
   if (!text || !tag) return false;
-  const want = tagText(tag);
-  const lines = String(text).replace(/\r\n/g, '\n').trimEnd().split('\n');
-  const tail = lines.slice(-TAIL_LINES);
-  for (const line of tail) if (line.trim() === want) return true;
-  return false;
+  return verdictLine(text) === tagText(tag);
 }
 
-// 移除所有「單獨成行」的該標記(不限最後幾行),回傳 trim 後的文字。
 export function stripMarker(text: unknown, tag: unknown): string {
   if (!text) return '';
-  if (!tag) return String(text).trim();
-  const want = tagText(tag);
-  return String(text)
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter((l) => l.trim() !== want)
-    .join('\n')
-    .trim();
+  const value = String(text).trim();
+  return hasMarker(text, tag) ? value.slice(0, -tagText(tag).length).trimEnd() : value;
 }
 
-const QUOTED_BEFORE = /[`"'「『“‘(（]$/;
-const NEGATED_BEFORE = /(不|沒|未|別|勿|尚未|不會|不要)\s*(寫|加|給|標|記)?\s*[:：]?$|\b(not|don't|won't|never|no)\s+(write|add|put|mark|give)?\s*:?$/i;
+const AFFIRMATIVE = /^(?:同意(?:執行|這個方案|這個方向|此計畫|計畫)?|計畫可行|(?:I )?(?:agree(?: with (?:the|this) plan)?|approve(?: (?:the|this) plan)?|agreed|approved))[。.!！]?$/i;
 
-// 共識標記額外接受「最後一行以標記結尾」:模型常接在句尾。引號內或否定語境仍不算。
 export function hasAgreement(text: unknown, tag: unknown): boolean {
-  if (hasMarker(text, tag)) return true;
   if (!text || !tag) return false;
   const want = tagText(tag);
-  const last = String(text).replace(/\r\n/g, '\n').trimEnd().split('\n').pop()!.trim();
-  if (!last.endsWith(want)) return false;
+  const last = verdictLine(text);
+  if (!last?.endsWith(want)) return false;
   const before = last.slice(0, -want.length).trimEnd();
-  return !QUOTED_BEFORE.test(before) && !NEGATED_BEFORE.test(before);
+  return !before || AFFIRMATIVE.test(before);
 }
 
 export function stripAgreement(text: unknown, tag: unknown): string {
-  const stripped = stripMarker(text, tag);
-  if (!hasAgreement(stripped, tag)) return stripped;
-  return stripped.slice(0, -tagText(tag).length).trimEnd();
+  const value = text ? String(text).trim() : '';
+  return hasAgreement(text, tag) ? value.slice(0, -tagText(tag).length).trimEnd() : value;
 }
 
 // 審查訊息裡的檔名(相對於工作目錄)對應到改動清單裡的哪一個檔案(相對於 repo 根目錄)。

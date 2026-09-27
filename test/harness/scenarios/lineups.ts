@@ -110,12 +110,12 @@ async function once(locale: 'zh-Hant' | 'en') {
   return r;
 }
 
-async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'members' | 'writer' | 'folder' | 'save-failed') {
+async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'pair' | 'members' | 'writer' | 'folder' | 'save-failed') {
   const result = await runApp({
     members: [
       scriptedMember({ id: 'a', name: 'Alice', canEdit: false }),
-      scriptedMember({ id: 'b', name: 'Bob', canEdit: condition !== 'writer' }),
-      { ...scriptedMember({ id: 'c', name: 'Carol', canEdit: false }), ...(condition === 'members' ? { cli: 'unregistered-fixture' } : {}) },
+      { ...scriptedMember({ id: 'b', name: 'Bob', canEdit: condition !== 'writer' }), ...(condition === 'members' ? { cli: 'unregistered-fixture' } : {}) },
+      { ...scriptedMember({ id: 'c', name: 'Carol', canEdit: false }), ...(['members', 'pair'].includes(condition) ? { cli: 'unregistered-fixture' } : {}) },
     ],
     settings: { leadAgentId: 'a', uiLocale: locale, maxRounds: 1, sidebarWidth: 220, ...(condition === 'folder' ? { workDir: '' } : {}) },
     beforeLaunch: condition === 'save-failed' ? ({ userData }) => fs.chmodSync(path.join(userData, 'config.json'), 0o444) : undefined,
@@ -133,7 +133,7 @@ async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'members
       open('code');
       const warning = () => menu().querySelector('.lineup-preset-warning')?.textContent || '';
       if (['members', 'writer', 'folder'].includes(context.condition)) {
-        const expected = context.condition === 'members' ? /2/ : context.condition === 'writer' ? /改檔權限|edit permission/ : /資料夾|working folder/;
+        const expected = context.condition === 'members' ? /1/ : context.condition === 'writer' ? /改檔權限|edit permission/ : /資料夾|working folder/;
         await app.waitFor(() => expected.test(warning()), 15_000, 'specific setup issue displayed');
         app.check((document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, '前置條件不足時不能套用');
         if (context.condition === 'members') app.check(menu().textContent?.includes('Carol'), '指出不可用的成員');
@@ -170,6 +170,19 @@ async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'members
         return { condition: context.condition };
       }
       await app.waitFor(() => !(document.querySelector('#lineup-preset-apply') as HTMLButtonElement).disabled, 15_000, 'available team preview');
+      if (context.condition === 'pair') {
+        app.check(menu().querySelectorAll('[data-team-role]').length === 2, 'Two available members have two distinct roles');
+        app.check(menu().scrollWidth <= menu().clientWidth + 1, 'Pair preview fits the sidebar');
+        await app.shot(`quick-pair-${context.locale}`);
+        (document.querySelector('#lineup-preset-apply') as HTMLButtonElement).click();
+        await app.waitFor(() => menu().hidden, 5000, 'pair saved');
+        const saved = await app.api.getConfig();
+        app.check(saved.settings.mode === 'guarded' && saved.lineups[0].members.length === 2, 'Pair retains guarded mode');
+        app.check(saved.agents.filter((member: any) => member.enabled).length === 2, 'No third member created or enabled');
+        app.check(saved.agents.every((member: any) => member.canEdit === original.agents.find((before: any) => before.id === member.id).canEdit), 'Pair preserves edit permissions');
+        app.check((await app.api.snapshot()).messages.length === 0, 'Applying a pair does not run a task');
+        return { condition: context.condition };
+      }
       app.check(menu().querySelectorAll('[data-team-role]').length === 3, '預覽列出三個角色');
       app.check(/尚未測試|not tested/.test(menu().textContent || ''), '自訂指令不誤報已驗證');
       app.check((menu().querySelector('[data-team-role="authorId"]') as HTMLSelectElement).value === 'b', '程式開發選用有權限的執行者');
@@ -235,7 +248,7 @@ async function quickTeam(locale: 'zh-Hant' | 'en', condition: 'ready' | 'members
 async function main() {
   let quickOk = true;
   for (const locale of ['zh-Hant', 'en'] as const) {
-    for (const condition of ['ready', 'members', 'writer', 'folder', 'save-failed'] as const) quickOk = await quickTeam(locale, condition) && quickOk;
+    for (const condition of ['ready', 'pair', 'members', 'writer', 'folder', 'save-failed'] as const) quickOk = await quickTeam(locale, condition) && quickOk;
   }
   if (process.argv.includes('--quick-only')) {
     if (!quickOk) process.exitCode = 1;

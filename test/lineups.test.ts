@@ -21,7 +21,9 @@ test('一鍵組隊優先沿用主持人與啟用成員,只選可用成員且不�
   const before = JSON.stringify(current);
   assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer', 'reviewer', 'spare'], ['writer'], 'code'), { leadId: 'lead', authorId: 'writer', reviewerId: 'reviewer' });
   assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer', 'reviewer'], ['lead'], 'code'), { reason: 'writer' });
-  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer'], ['writer'], 'code'), { reason: 'members' });
+  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead', 'writer'], ['writer'], 'code'), { leadId: 'lead', authorId: 'writer', reviewerId: null });
+  assert.deepStrictEqual(L.suggestLineupMembers(current, ['lead'], ['writer'], 'code'), { reason: 'members' });
+  assert.deepStrictEqual(L.suggestLineupMembers(config([agent('lead'), agent('lead')]), ['lead'], ['lead'], 'code'), { reason: 'members' });
   assert.strictEqual(JSON.stringify(current), before);
 });
 
@@ -44,18 +46,20 @@ test('陣容寫入失敗不更動主程序的目前設定', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('舊的接力設定與陣容轉成多 AI 把關;不足三位時退回平行分工', () => {
+test('舊的接力設定與陣容轉成多 AI 把關;不足兩位時退回平行分工', () => {
   const members = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, persona: '' }));
-  const [three, two] = L.sanitizeLineups([
+  const [three, two, one] = L.sanitizeLineups([
     { id: 'three', name: 'three', members: members(3), mode: 'relay' },
     { id: 'two', name: 'two', members: members(2), mode: 'relay' },
+    { id: 'one', name: 'one', members: members(1), mode: 'relay' },
   ]);
   assert.strictEqual(three.mode, 'guarded');
-  assert.strictEqual(two.mode, 'divide');
-  for (const [enabled, expected] of [[3, 'guarded'], [2, 'divide']] as const) {
+  assert.strictEqual(two.mode, 'guarded');
+  assert.strictEqual(one.mode, 'divide');
+  for (const [enabled, expected] of [[3, 'guarded'], [2, 'guarded'], [1, 'divide']] as const) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-relay-migrate-'));
     try {
-      const agents = [agent('a'), agent('b'), agent('c', { enabled: enabled === 3 })];
+      const agents = [agent('a'), agent('b', { enabled: enabled >= 2 }), agent('c', { enabled: enabled === 3 })];
       fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ agents, settings: { mode: 'relay' } }));
       assert.strictEqual(new Store(dir).get().settings.mode, expected);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }

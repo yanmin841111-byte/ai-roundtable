@@ -7,6 +7,7 @@ import { copilotArgs, createCopilotAdapter, parseCopilotModels } from '../src/ad
 import { builtinAdapters } from '../src/adapters/builtin';
 import type { AgentConfig, Activity } from '../src/ipc-types';
 import type { RunContext } from '../src/adapters/types';
+import { liveRunPassed } from './harness/scenarios/copilot-live';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-copilot-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -44,6 +45,17 @@ async function run(events: unknown[], options: { code?: number; stderr?: string;
   const invocation = JSON.parse(fs.readFileSync(path.join(cwd, 'invocation.json'), 'utf8'));
   return { result, invocation, texts, thoughts, activities, sessions };
 }
+
+test('live acceptance requires approved guard, members, tests and unchanged Git history', () => {
+  const value = { guard: { status: 'passed' }, verify: 'passed', errors: [], members: [{ outcome: 'approved' }] };
+  assert.equal(liveRunPassed(value, true, true, true), true);
+  for (const invalid of [undefined, {}, { ...value, guard: { status: 'blocked' } }, { ...value, verify: 'failed' }, { ...value, errors: ['timeout'] }, { ...value, members: [] }, { ...value, members: [{ outcome: 'unresolved' }] }]) {
+    assert.equal(liveRunPassed(invalid, true, true, true), false);
+  }
+  assert.equal(liveRunPassed(value, false, true, true), false);
+  assert.equal(liveRunPassed(value, true, false, true), false);
+  assert.equal(liveRunPassed(value, true, true, false), false);
+});
 
 test('registered as a built-in with safe attachment paths and a default model', () => {
   const adapter = builtinAdapters.find(entry => entry.id === 'copilot')!;
@@ -113,12 +125,13 @@ test('streamed messages and reasoning replace deltas by ID; child replies stay o
   assert.equal(invocation.allowAll, 'false');
 });
 
-test('editing members cannot git commit or push unless the user allows it', () => {
-  const deny = ['--deny-tool=shell(git commit)', '--deny-tool=shell(git push)'];
-  const editing = copilotArgs({ canEdit: true, model: '', effort: '' }, {});
-  assert.ok(editing.includes('--allow-all-tools') && deny.every((flag) => editing.includes(flag)));
-  const allowed = copilotArgs({ canEdit: true, model: '', effort: '' }, { allowGit: true });
-  assert.ok(allowed.includes('--allow-all-tools') && deny.every((flag) => !allowed.includes(flag)));
+test('commits and pushes require separate explicit permissions', () => {
+  for (const allowGit of [undefined, false, true]) for (const allowGitPush of [undefined, false, true]) {
+    const args = copilotArgs({ canEdit: true, model: '', effort: '' }, { allowGit, allowGitPush });
+    assert.ok(args.includes('--allow-all-tools'));
+    assert.equal(args.includes('--deny-tool=shell(git commit)'), allowGit !== true);
+    assert.equal(args.includes('--deny-tool=shell(git push)'), allowGitPush !== true);
+  }
   assert.ok(copilotArgs({ canEdit: false, model: '', effort: '' }, {}).includes('--deny-tool=shell'));
 });
 

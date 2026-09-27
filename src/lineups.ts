@@ -14,22 +14,22 @@ const ROUNDS_MAX = 10; // 與設定視窗「最大討論回合」的上限一致
 export interface SuggestedMembers {
   leadId: string;
   authorId: string;
-  reviewerId: string;
+  reviewerId: string | null;
 }
 
 export function suggestLineupMembers(config: AppConfig, readyIds: string[], writableIds: string[], workStyle: 'code' | 'general'): SuggestedMembers | { reason: 'members' | 'writer' } {
   const ready = new Set(readyIds);
   const writable = new Set(writableIds);
-  const members = config.agents.filter((agent) => ready.has(agent.id));
+  const members = [...new Map(config.agents.filter((agent) => ready.has(agent.id)).map((agent) => [agent.id, agent])).values()];
   members.sort((first, second) => Number(second.enabled !== false) - Number(first.enabled !== false));
-  if (new Set(members.map((agent) => agent.id)).size < 3) return { reason: 'members' };
+  if (members.length < 2) return { reason: 'members' };
   const preferredLead = members.find((agent) => agent.id === effectiveLead(config));
   const authors = members.filter((agent) => workStyle === 'general' || (agent.canEdit && writable.has(agent.id)));
   const author = authors.find((agent) => agent !== preferredLead) || authors[0];
   if (!author) return { reason: 'writer' };
   const lead = preferredLead && preferredLead !== author ? preferredLead : members.find((agent) => agent.id !== author.id)!;
-  const reviewer = members.find((agent) => agent.id !== lead.id && agent.id !== author.id)!;
-  return { leadId: lead.id, authorId: author.id, reviewerId: reviewer.id };
+  const reviewer = members.find((agent) => agent.id !== lead.id && agent.id !== author.id);
+  return { leadId: lead.id, authorId: author.id, reviewerId: reviewer?.id ?? null };
 }
 
 // 實際的主持人:沒指定、或指定的人沒啟用時,由第一位啟用的成員主持(與介面、流程的判斷相同)
@@ -120,7 +120,7 @@ export function sanitizeLineups(raw: unknown): Lineup[] {
       name,
       members,
       leadAgentId: typeof l.leadAgentId === 'string' && members.some((m: { id: string }) => m.id === l.leadAgentId) ? l.leadAgentId : null,
-      mode: l.mode === 'relay' ? (members.length >= 3 ? 'guarded' : 'divide') : MODES.has(l.mode) ? l.mode : 'divide',
+      mode: l.mode === 'relay' ? (members.length >= 2 ? 'guarded' : 'divide') : MODES.has(l.mode) ? l.mode : 'divide',
       maxRounds: clampRounds(l.maxRounds),
       discussionMode: normalizeDiscussionMode(l.discussionMode),
       workStyle: l.workStyle === 'general' ? 'general' : 'code',
