@@ -5,9 +5,10 @@ import path from 'node:path';
 import { after, test } from 'node:test';
 import { copilotArgs, createCopilotAdapter, parseCopilotModels } from '../src/adapters/copilot';
 import { builtinAdapters } from '../src/adapters/builtin';
-import type { AgentConfig, Activity } from '../src/ipc-types';
+import type { AgentConfig, Activity, ChatMessage } from '../src/ipc-types';
 import type { RunContext } from '../src/adapters/types';
-import { liveRunPassed } from './harness/scenarios/copilot-live';
+import { liveRunPassed, saveLiveEvidence, unresolvedLiveErrors } from './harness/scenarios/copilot-live';
+import { batchPlan, batchPassed, type BatchRecord } from './harness/scenarios/copilot-batch';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-copilot-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -55,6 +56,66 @@ test('live acceptance requires approved guard, members, tests and unchanged Git 
   assert.equal(liveRunPassed(value, false, true, true), false);
   assert.equal(liveRunPassed(value, true, false, true), false);
   assert.equal(liveRunPassed(value, true, true, false), false);
+});
+
+test('live acceptance retains history but recognizes only same-pair recovered review errors', () => {
+  const failed: Partial<ChatMessage> = {
+    kind: 'agent', agentId: 'reviewer', agentName: 'Reviewer', status: 'error', error: 'timeout',
+    phase: { code: 'review' }, review: { target: 'Author', targetId: 'author', access: 'open', scope: 'listed', files: [], more: 0, omitted: [], unreadable: [] },
+  };
+  const recovered: Partial<ChatMessage> = { ...failed, status: 'done', error: undefined, text: '[NO_ISSUES]' };
+  const messages = [failed, recovered];
+  assert.deepEqual(unresolvedLiveErrors(messages), []);
+  assert.equal(messages[0].error, 'timeout');
+  const value = { guard: { status: 'passed' }, verify: 'passed', errors: ['historical timeout'], members: [{ outcome: 'approved' }], messages };
+  assert.equal(liveRunPassed(value, true, true, true), true);
+  for (const unresolved of [
+    [failed],
+    [failed, { ...recovered, agentId: 'other' }],
+    [failed, { ...recovered, review: { ...failed.review!, targetId: 'other' } }],
+    [failed, { ...recovered, text: '' }],
+    [failed, recovered, failed],
+    [{ ...failed, phase: { code: 'execute' } }, recovered],
+    [{ ...failed, phase: { code: 'discuss' } }, recovered],
+  ] as Array<Array<Partial<ChatMessage>>>) {
+    assert.ok(unresolvedLiveErrors(unresolved).length);
+    assert.equal(liveRunPassed({ ...value, messages: unresolved }, true, true, true), false);
+  }
+});
+
+test('live evidence archives failed runs without overwriting history or copying user data', () => {
+  const source = fs.mkdtempSync(path.join(tmp, 'evidence-'));
+  const workDir = path.join(source, 'work');
+  fs.mkdirSync(path.join(workDir, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(workDir, 'result.js'), 'incomplete');
+  fs.writeFileSync(path.join(source, 'private-config.json'), 'not for archive');
+  const shot = path.join(source, 'screen.png');
+  fs.writeFileSync(shot, 'image fixture');
+  const destination = path.join(tmp, 'archive');
+  const result = { tmp: source, workDir, shots: { screen: shot } };
+  const evidence = { passed: false, errors: ['review failed'] };
+  saveLiveEvidence(result, 'live-evidence.json', evidence, destination);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(destination, 'live-evidence.json'), 'utf8')), evidence);
+  assert.equal(fs.readFileSync(path.join(destination, 'work/result.js'), 'utf8'), 'incomplete');
+  assert.equal(fs.existsSync(path.join(destination, 'work/.git')), false);
+  assert.equal(fs.existsSync(path.join(destination, 'private-config.json')), false);
+  assert.equal(fs.existsSync(path.join(destination, 'shots/screen.png')), true);
+  assert.throws(() => saveLiveEvidence(result, 'live-evidence.json', { passed: true }, destination), /already exists/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'live-evidence.json'), 'utf8')), evidence);
+});
+
+test('live batch requires all 30 fixed attempts without omissions, duplicates or mixed versions', () => {
+  const plan = batchPlan();
+  assert.equal(plan.length, 30);
+  for (const kind of ['pair', 'trio', 'complex']) assert.equal(plan.filter(attempt => attempt.kind === kind).length, 10);
+  const records: BatchRecord[] = plan.map(attempt => ({ ...attempt, passed: true, evidencePassed: true, exitCode: 0, elapsedMs: 1, sourceHash: 'fixed' }));
+  assert.equal(batchPassed(records, 'fixed'), true);
+  assert.equal(batchPassed(records.slice(1), 'fixed'), false);
+  assert.equal(batchPassed([...records, records[0]], 'fixed'), false);
+  for (const changed of [
+    { passed: false }, { evidencePassed: false }, { exitCode: 1 }, { exitCode: null },
+    { sourceHash: 'changed' }, { id: records[1].id }, { kind: 'trio' as const },
+  ]) assert.equal(batchPassed([{ ...records[0], ...changed }, ...records.slice(1)], 'fixed'), false);
 });
 
 test('registered as a built-in with safe attachment paths and a default model', () => {

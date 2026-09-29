@@ -344,6 +344,7 @@ export interface ChatMessage {
   unreviewed?: boolean;
   // 失敗的 @ 指定回覆可以重試。由 orchestrator 決定並寫進訊息,介面只照旗標顯示按鈕。
   retryable?: boolean;
+  planResumable?: boolean;
   // 這次失敗如果是環境問題(沒登入、沒裝、連不上…),照做就能修好的下一步。
   // 由 runTurn 在回合失敗時補上;不寫進歷史紀錄(環境會變,重新開啟時要重新判斷)。
   fix?: EnvFix;
@@ -388,9 +389,10 @@ export interface TaskVerificationStatus {
 export interface TaskCounterexample {
   title: string;
   reviewer: string;
-  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable';
+  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected';
   afterRepair?: 'passed' | 'failed' | 'unusable';
   output: string;
+  rejection?: string[];
   repairOutput?: string;
 }
 
@@ -455,6 +457,7 @@ export type ReviewVerdict = 'pass' | 'issues' | 'failed';
 
 export interface ReviewInfo {
   target: string;      // 被審者的名字
+  targetId?: string;
   access: ReviewAccess;
   scope: ReviewScope;
   files: string[];     // 列給審查者的檔案(相對於工作目錄,最多 20 個)

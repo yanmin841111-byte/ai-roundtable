@@ -579,7 +579,7 @@ app.whenReady().then(async () => {
     const o = job.orchestrator;
     if (busy(job)) return { ok: false, error: o.text('sys.retryBusy') };
     const msg = o.messages.find((m) => m.id === messageId);
-    const res = await jobResources(job, jobConfig(job).agents.filter((a) => a.id === msg?.agentId));
+    const res = await jobResources(job, msg?.planResumable ? jobConfig(job).agents : jobConfig(job).agents.filter((a) => a.id === msg?.agentId));
     if (busy(job) || !jobs.has(job.id)) return { ok: false, error: o.text('sys.retryBusy') };
     const blocker = scheduler.tryHold(job.id, res, true);
     if (blocker) return { ok: false, error: blockedText(blocker) };

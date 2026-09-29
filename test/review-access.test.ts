@@ -21,13 +21,13 @@ const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 const EDITED = 'export const answer = 42; // 審查者必須看得到這一行\n';
 
 // 執行者:改 src/a.ts 並回報工具紀錄;審查者:記下收到的提示詞與是否拿到唯讀工具
-async function runReview(reviewerAdapter: any) {
+async function runReview(reviewerAdapter: any, readOnlyTarget = false) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-review-'));
   fs.mkdirSync(path.join(workDir, 'src'));
   fs.writeFileSync(path.join(workDir, 'src', 'a.ts'), 'export const answer = 0;\n');
   const seen: { prompt?: string; readOnlyFileTools?: boolean; ephemeral?: string } = {};
   const respond = (ctx: any) => {
-    if (/【分工】/.test(ctx.prompt)) return JSON.stringify({ summary: '改 a.ts', assignments: [{ agent: 'A1', task: '修改 src/a.ts' }] });
+    if (/【分工】/.test(ctx.prompt)) return JSON.stringify({ summary: '改 a.ts', assignments: [{ agent: 'A1', task: readOnlyTarget ? '檢查 src/a.ts 並交接' : '修改 src/a.ts' }] });
     if (/【總結】/.test(ctx.prompt)) return '完成';
     return '[AGREED]';
   };
@@ -36,6 +36,7 @@ async function runReview(reviewerAdapter: any) {
       id: 'exec', supportsEdit: true, supportsResume: false,
       run: async (_a: any, ctx: any) => {
         if (/【執行】/.test(ctx.prompt)) {
+          if (readOnlyTarget) return { text: 'src/a.ts 尚待下一棒修改為 answer = 42。' };
           fs.writeFileSync(path.join(workDir, 'src', 'a.ts'), EDITED);
           return { text: '已修改 src/a.ts', toolEvents: [{ toolCallId: 'c1', name: 'replace_text', path: 'src/a.ts', ok: true, summary: 'ok', result: { path: 'src/a.ts', added: 1, removed: 1 } }] };
         }
@@ -52,7 +53,7 @@ async function runReview(reviewerAdapter: any) {
   };
   adapters.setRegistry({ get: (id: string) => byId[id] || null });
   const agents = [
-    { id: 'e', name: '執行者', cli: 'exec', enabled: true, canEdit: true, color: '#000', persona: '', model: '', effort: '', customCommand: '' },
+    { id: 'e', name: '執行者', cli: 'exec', enabled: true, canEdit: !readOnlyTarget, color: '#000', persona: '', model: '', effort: '', customCommand: '' },
     { id: 'r', name: '審查者', cli: 'reviewer', enabled: true, canEdit: false, color: '#111', persona: '', model: '', effort: '', customCommand: '' },
   ];
   const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir, maxRounds: 1, mode: 'divide', uiLocale: 'zh-Hant', leadAgentId: 'e' };
@@ -70,6 +71,24 @@ test('能自己讀檔的審查者(CLI):照舊請它打開檔案,並列出改了�
   assert.match(seen.prompt!, /請實際打開相關檔案確認/);
   assert.match(seen.prompt!, /- src\/a\.ts/, '要列出改動的檔案');
   assert.ok(!seen.readOnlyFileTools, '本身就能讀檔,不需要另給工具');
+  assert.match(seen.prompt!, /區分回報當時與目前成果/);
+  assert.match(seen.prompt!, /目前仍未滿足的要求或有證據的錯誤仍須指出/);
+});
+
+test('唯讀交接報告:所有讀檔方式都標示角色與時間背景,不免除真實錯誤', async () => {
+  for (const adapter of [
+    { capabilities: { attachments: ['filePath'] } },
+    { type: 'openai', supportsEdit: true, capabilities: { attachments: ['textInline'] } },
+    { type: 'openai', supportsEdit: false, capabilities: { attachments: ['textInline'] } },
+  ]) {
+    const seen = await runReview(adapter, true);
+    assert.match(seen.prompt!, /這次沒有修改檔案的權限/);
+    assert.match(seen.prompt!, /完成自己工作時的回報/);
+    assert.match(seen.prompt!, /不能只因現在已完成就判定早期回報失實/);
+    assert.match(seen.prompt!, /不要要求它親自實作原本分配給其他成員的工作/);
+    assert.match(seen.prompt!, /仍須指出有證據的錯誤/);
+    assert.doesNotMatch(seen.prompt!, /每一條都對照實際的檔案內容確認有沒有做到/);
+  }
 });
 
 test('支援工具呼叫的 API 審查者:給唯讀的 read_file,內容也照樣附上', async () => {

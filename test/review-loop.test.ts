@@ -21,8 +21,8 @@ type Member = { id: string; name: string; task?: string; writes?: Record<string,
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
   expectFiles?: Record<string, string>; execBarrier?: () => Promise<void>; discussion?: string; planReview?: string[];
-  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string };
-async function run(team: Member[]) {
+  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string; counterexampleReview?: string };
+async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
   const workers = team.filter((m) => m.task);
@@ -41,11 +41,15 @@ async function run(team: Member[]) {
     return { id, type: m.api ? 'openai' : 'cli', supportsEdit: true, supportsResume: false, capabilities: { attachments: ['textInline'] },
       run: async (_a: any, ctx: any) => {
         (prompts[m.name] ||= []).push(ctx.prompt);
-        const phase = /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
+        const phase = /【反例有效性】/.test(ctx.prompt) ? 'ce-validation' : /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
         turns.push({ who: m.name, phase, sessionId: ctx.sessionId ?? null, lockedPaths: ctx.lockedPaths || [] });
         gitAllowed.push(ctx.allowGit === true);
         pushAllowed.push(ctx.allowGitPush === true);
         if (_a.canEdit) editableTurns.push(/【計畫審核】/.test(ctx.prompt) ? 'plan' : /【分工】/.test(ctx.prompt) ? 'divide' : /【總結】/.test(ctx.prompt) ? 'summary' : phase === 'other' ? 'discuss' : phase);
+        if (phase === 'ce-validation') {
+          const text = m.counterexampleReview || '{"decision":"retain_counterexample"}';
+          return text.startsWith('ERROR:') ? { text: '', error: text.slice(6) } : { text };
+        }
         if (/【分工】/.test(ctx.prompt)) return { text: team[0].planOutput ?? JSON.stringify(plan) };
         if (/【計畫審核】/.test(ctx.prompt)) {
           if (m.stopOnPlan) orc.stop();
@@ -98,6 +102,7 @@ async function run(team: Member[]) {
   const done = new Promise<void>((r) => { const f = (st: any) => { if (!st.running && st.phase && st.phase.code === 'idle') { orc.off('state', f); r(); } }; orc.on('state', f); });
   await orc.userMessage('分工', team.find((m) => m.mode)?.mode || 'divide');
   await done;
+  if (after) await after(orc);
   const retained: string[] = [];
   for (const message of orc.messages.filter((message: any) => message.tag === 'conflict')) {
     const root = /`([^`]*ai-roundtable-lanes-[^`]*)`/.exec(message.text)?.[1];
@@ -120,15 +125,139 @@ async function run(team: Member[]) {
   walk();
   fs.rmSync(dir, { recursive: true, force: true });
   const read = (file: string) => (files.has(file) ? files.get(file)! : null);
-  const card = orc.messages.find((m: any) => m.tag === 'task-summary')?.taskSummary;
+  const card = [...orc.messages].reverse().find((m: any) => m.tag === 'task-summary')?.taskSummary;
   const outcome = Object.fromEntries((card?.members || []).map((m: any) => [m.name, m.outcome]));
   const reviews = orc.messages.filter((m: any) => m.review);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
   return { outcome, card, reviews, prompts, summaryPrompt, turns, editableTurns, gitAllowed, pushAllowed, orc, read, retained };
 }
 
+test('計畫修訂:新上下文仍收到上版計畫及具名意見,不從零開始', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', maxRounds: 2, canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審核者', canEdit: false, planReview: ['REQ-DEFAULT: 必須保留合法輸入的預設值', '[AGREED]'] },
+  ]);
+  const approvals = result.prompts['審核者'].filter((prompt) => /【計畫審核】/.test(prompt));
+  assert.strictEqual(approvals.length, 2);
+  assert.match(approvals[1], /REQ-DEFAULT/);
+  assert.match(approvals[1], /審核者/);
+  assert.match(approvals[1], /上版計畫/);
+  const drafts = result.prompts['主持人'].filter((prompt) => /【分工】/.test(prompt));
+  assert.match(drafts[1], /只修訂/);
+  assert.strictEqual(result.card.guard.status, 'passed');
+});
+
+test('計畫續訂:保留草稿與意見,不重跑討論且不能重複啟動', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審核者', canEdit: false, planReview: ['REQ-DEFAULT: 請保留預設值', '[AGREED]'] },
+  ], async (orc) => {
+    const message = orc.messages.find((item: any) => item.planResumable);
+    assert.ok(message);
+    const discussions = () => orc.messages.filter((item: any) => item.phase?.code === 'discuss' && !item.group).length;
+    const before = discussions();
+    const idle = new Promise<void>((resolve) => {
+      const finish = (state: any) => { if (!state.running && state.phase.code === 'idle') { orc.off('state', finish); resolve(); } };
+      orc.on('state', finish);
+    });
+    assert.strictEqual((await orc.retry(message.id)).ok, true);
+    assert.strictEqual((await orc.retry(message.id)).ok, false);
+    await idle;
+    assert.strictEqual(discussions(), before);
+    assert.strictEqual(message.planResumable, false);
+  });
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.match(result.prompts['主持人'].filter((prompt) => /【分工】/.test(prompt))[1], /REQ-DEFAULT/);
+});
+
+test('計畫續訂:設定變動或載入歷史後拒絕舊計畫', async () => {
+  for (const invalidate of [
+    (orc: any) => { orc.config.settings.language = 'English'; },
+    (orc: any) => { orc.config.agents[0].canEdit = true; },
+    (orc: any) => { orc.config.settings.workDir = path.join(orc.config.settings.workDir, 'missing'); },
+    (orc: any) => { orc.stop(); },
+    (orc: any) => { orc.loadConversation(orc.snapshot()); },
+  ]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, planReview: ['請修改'] },
+    ], async (orc) => {
+      const message = orc.messages.find((item: any) => item.planResumable);
+      assert.ok(message);
+      invalidate(orc);
+      assert.strictEqual((await orc.retry(message.id)).ok, false);
+      assert.strictEqual(orc.running, false);
+    });
+    assert.strictEqual(result.read('a.txt'), null);
+  }
+});
+
+test('多 AI 把關:格式澄清保留原票,不把格式問題當成修復工作', async () => {
+  for (const text of ['無阻塞問題，結論：[NO_ISSUES]', 'No blocking issues. [NO_ISSUES]', '`[NO_ISSUES]`']) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [text, '[NO_ISSUES]'] },
+    ]);
+    assert.strictEqual(result.card.guard.status, 'passed');
+    assert.strictEqual(result.card.guard.repairRounds, 0);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '主持人').length, 1);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length, 2);
+    assert.ok(result.reviews.some((message: any) => message.text === text && message.review.verdict === 'issues'));
+    assert.ok(result.turns.filter((turn) => turn.phase === 'review').every((turn) => turn.sessionId === null));
+    assert.ok(!result.editableTurns.includes('review'));
+    assert.match(result.prompts['審查者'][result.prompts['審查者'].length - 1], /格式澄清/);
+  }
+});
+
+test('多 AI 把關:格式澄清不自動批准否定意見,每次審查最多重試一次', async () => {
+  const negative = '仍有缺陷，不能標記 [NO_ISSUES]';
+  for (const correction of ['仍有缺陷', negative, 'ERROR:timeout']) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: Array.from({ length: 4 }, () => [negative, correction]).flat() },
+    ]);
+    assert.strictEqual(result.card.guard.status, 'blocked');
+    assert.notStrictEqual(result.outcome['作者'], 'approved');
+    assert.ok(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length <= 8);
+    if (correction.startsWith('ERROR:')) assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length, 2);
+  }
+});
+
+test('多 AI 把關:失敗審查獨立重試一次,保留失敗紀錄且不重跑成功票', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: ['ERROR:timeout', '[NO_ISSUES]'] },
+  ]);
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.strictEqual(result.outcome['作者'], 'approved');
+  assert.strictEqual(result.card.guard.repairRounds, 0);
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '主持人').length, 1);
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length, 2);
+  assert.ok(result.reviews.some((message: any) => message.error === 'timeout'));
+  assert.ok(result.turns.filter((turn) => turn.phase === 'review').every((turn) => turn.sessionId === null));
+});
+
+test('多 AI 把關:重試發現問題後照常修復,複查失敗也能獨立重試', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'draft' }, fixWrites: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: ['ERROR:timeout', '請修正草稿', 'ERROR:timeout', '[NO_ISSUES]'] },
+  ]);
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.strictEqual(result.card.guard.repairRounds, 1);
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '主持人').length, 2);
+  assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length, 4);
+});
+
 test('多 AI 把關:一票通過不能蓋過另一票失敗,且不沿用修改前的通過票', async () => {
-  for (const votes of [['ERROR:timeout'], ['有問題', 'ERROR:timeout'], ['有問題', '仍有問題', '仍有問題', '仍有問題']]) {
+  for (const votes of [['ERROR:timeout', 'ERROR:timeout'], ['有問題', 'ERROR:timeout', 'ERROR:timeout'], ['有問題', '仍有問題', '仍有問題', '仍有問題']]) {
     const result = await run([
       { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
       { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
@@ -137,6 +266,7 @@ test('多 AI 把關:一票通過不能蓋過另一票失敗,且不沿用修改�
     assert.notStrictEqual(result.outcome['作者'], 'approved');
     assert.strictEqual(result.card.guard.status, 'blocked');
     assert.ok(result.turns.filter((turn) => turn.phase === 'repair').length <= 3);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'review' && turn.who === '審查者').length, votes.length);
     assert.ok(result.turns.filter((turn) => turn.phase === 'review').every((turn) => turn.sessionId === null));
   }
 });
@@ -162,6 +292,45 @@ test('多 AI 把關:其中一份成果修正後,其他成果也要重新送審',
   ]);
   assert.strictEqual(result.reviews.length, 8);
   assert.ok(result.card.members.every((member: any) => member.outcome === 'approved'));
+});
+
+test('多 AI 把關:格式澄清不能遺失可執行反例,兩人團隊不能自行撤回', async () => {
+  const counterexample = '```counterexample retained evidence\nrequire("assert").strictEqual(1, 2);\n```\n不能宣告 [NO_ISSUES]';
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, review: [counterexample] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+  ]);
+  assert.strictEqual(result.card.guard.status, 'blocked');
+  assert.strictEqual(result.card.counterexamples[0].confirmation, 'confirmed');
+  assert.strictEqual(result.card.counterexamples[0].afterRepair, 'failed');
+  assert.ok(!result.orc.messages.some((message: any) => message.tag === 'review-format'));
+  assert.ok(!result.turns.some((turn) => turn.phase === 'ce-validation'));
+});
+
+test('多 AI 把關:撤回錯誤反例需提出者與非被審作者一致,紀錄保留但不入庫', async () => {
+  const reject = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: '分工', reason: 'The assertion expects an unrelated constant to change.' });
+  const counterexample = '```counterexample invalid expectation\nrequire("assert").strictEqual(1, 2);\n```';
+  for (const vote of [reject, '{"decision":"retain_counterexample"}', 'ERROR:timeout']) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReview: vote },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, counterexampleReview: reject },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [counterexample], counterexampleReview: reject },
+    ]);
+    const withdrawn = vote === reject;
+    assert.strictEqual(result.card.guard.status, withdrawn ? 'passed' : 'blocked');
+    assert.strictEqual(result.card.counterexamples[0].confirmation, withdrawn ? 'rejected' : 'confirmed');
+    assert.match(result.card.counterexamples[0].output, /AssertionError/);
+    assert.strictEqual(result.card.counterexamples[0].rejection?.length, withdrawn ? 2 : undefined);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'ce-validation').length, 2);
+    assert.ok(result.turns.filter((turn) => turn.phase === 'ce-validation').every((turn) => turn.who !== '作者' && turn.sessionId === null));
+    assert.ok(!result.editableTurns.includes('ce-validation'));
+    if (withdrawn) {
+      assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
+      assert.strictEqual(result.card.counterexamples[0].afterRepair, undefined);
+      assert.ok(result.orc.messages.some((message: any) => message.text.includes('一致撤回')));
+      assert.match(result.prompts['作者'].find((prompt) => prompt.includes('【修復】')) || '', /已因預期行為不符合需求而撤回/);
+    }
+  }
 });
 
 test('多 AI 把關:複查新增的反例確實執行,全員同意也不能覆蓋失敗證據', async () => {

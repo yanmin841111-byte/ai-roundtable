@@ -58,16 +58,21 @@ async function once(locale: 'zh-Hant' | 'en') {
   return r;
 }
 
-async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'review') {
+async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'review' | 'retry' | 'retry-blocked' | 'continue' | 'format' | 'counterexample' | 'counterexample-kept') {
   const zh = locale === 'zh-Hant';
+  const passes = ['passed', 'retry', 'continue', 'format', 'counterexample'].includes(outcome);
+  const counterexample = outcome.startsWith('counterexample');
+  const rejection = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: 'Write project notes', reason: 'The assertion compares unrelated constants, not the requested notes.' });
+  const expectedRounds = { passed: 1, plan: 0, review: 3, retry: 1, 'retry-blocked': 0, continue: 1, format: 0, counterexample: 1, 'counterexample-kept': 3 }[outcome];
+  const expectedReviews = { passed: 4, plan: 0, review: 8, retry: 5, 'retry-blocked': 3, continue: 4, format: 3, counterexample: 4, 'counterexample-kept': 8 }[outcome];
   const result = await runApp({
     members: [
-      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }], acceptance: ['notes.txt exists'] } }),
+      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }], acceptance: ['notes.txt exists'] }, counterexampleReview: outcome === 'counterexample-kept' ? '{"decision":"retain_counterexample"}' : rejection }),
       scriptedMember({ id: 'author', name: 'Bob', canEdit: true, writes: { 'notes.txt': 'Draft' }, fixWrites: { 'notes.txt': 'Revised' }, report: 'Draft ready', fixReport: 'Revised notes' }),
-      scriptedMember({ id: 'reviewer', name: 'Carol', planReview: outcome === 'plan' ? 'Acceptance criteria missing' : '[AGREED]', review: 'Please revise the notes', recheck: outcome === 'review' ? 'Still incomplete' : '[NO_ISSUES]' }),
+      scriptedMember({ id: 'reviewer', name: 'Carol', planReview: outcome === 'plan' ? 'Acceptance criteria missing' : '[AGREED]', planReviews: outcome === 'continue' ? ['Acceptance criteria missing', '[AGREED]'] : undefined, review: outcome === 'format' ? '`[NO_ISSUES]`' : counterexample ? '```counterexample Invalid expectation\nrequire("node:assert/strict").equal(1, 2);\n```' : 'Please revise the notes', recheck: outcome === 'review' ? 'Still incomplete' : '[NO_ISSUES]', reviewFailures: outcome === 'retry' ? 1 : outcome === 'retry-blocked' ? 2 : 0, reviewClarification: '[NO_ISSUES]', counterexampleReview: rejection }),
     ],
-    settings: { leadAgentId: 'lead', maxRounds: 1, mode: 'guarded', workStyle: 'general', uiLocale: locale, language: zh ? '繁體中文' : 'English' },
-    constants: { zh, outcome },
+    settings: { leadAgentId: 'lead', maxRounds: 1, mode: 'guarded', workStyle: counterexample ? 'code' : 'general', verifyCommand: counterexample ? 'node -e "require(\'node:fs\').accessSync(\'notes.txt\')"' : '', uiLocale: locale, language: zh ? '繁體中文' : 'English' },
+    constants: { zh, outcome, passes, expectedRounds, expectedReviews, counterexample },
     scenario: async (context: any) => {
       const app: any = globalThis;
       await app.ready();
@@ -75,19 +80,62 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
       app.check(mode.value === 'guarded', '新模式可從已保存設定載入');
       app.check(mode.selectedOptions[0].textContent === (context.zh ? '多 AI 把關' : 'Multi-AI checks'), '模式名稱跟隨介面語言');
       app.check(!!document.querySelector('#default-mode option[value="guarded"]'), '設定頁也能選擇新模式');
-      const messages = await app.send('Write project notes', 'guarded');
-      const message = messages.find((item: any) => item.taskSummary);
+      let messages = await app.send('Write project notes', 'guarded');
+      if (context.outcome === 'continue') {
+        const blocked = messages.find((item: any) => item.planResumable);
+        app.check(!!blocked && blocked.taskSummary.guard.status === 'blocked', '計畫阻擋後提供續訂入口');
+        const button = document.querySelector(`#timeline [data-msg-id="${blocked.id}"] .ts-plan-resume`) as HTMLButtonElement;
+        app.check(!!button && button.textContent?.includes(context.zh ? '繼續修訂計畫' : 'Continue plan revision'), '續訂按鈕使用目前語言');
+        button.scrollIntoView({ block: 'center' });
+        await app.shot(`guarded-continue-before-${context.zh ? 'zh' : 'en'}`);
+        const discussions = messages.filter((item: any) => item.phase?.code === 'discuss' && !item.group).length;
+        button.click();
+        await app.waitFor(() => !button.isConnected, 30000, '續訂入口已消耗');
+        await app.waitIdle(60000);
+        messages = (await app.snapshot()).messages;
+        app.check(messages.filter((item: any) => item.phase?.code === 'discuss' && !item.group).length === discussions, '續訂沒有重跑討論');
+        app.check(messages.filter((item: any) => item.taskSummary).length === 2, '舊的阻擋結果與新的交付結果都保留');
+        app.check(!messages.some((item: any) => item.planResumable), '已使用的草稿不可再啟動');
+      }
+      const message = [...messages].reverse().find((item: any) => item.taskSummary);
       app.check(!!message, '每種結束狀態都有結果卡');
       const summary = message.taskSummary;
-      app.check(summary.guard.status === (context.outcome === 'passed' ? 'passed' : 'blocked'), '結果卡狀態與實際關卡一致');
-      app.check(summary.guard.repairRounds === (context.outcome === 'plan' ? 0 : context.outcome === 'passed' ? 1 : 3), '結果卡保存實際修正輪數');
+      app.check(summary.guard.status === (context.passes ? 'passed' : 'blocked'), '結果卡狀態與實際關卡一致');
+      app.check(summary.guard.repairRounds === context.expectedRounds, '結果卡保存實際修正輪數');
       const reviews = messages.filter((item: any) => item.review);
-      app.check(reviews.length === (context.outcome === 'plan' ? 0 : context.outcome === 'passed' ? 4 : 8), '每輪皆由兩位非作者審查');
+      app.check(reviews.length === context.expectedReviews, '審查與有限次重試的回合數正確');
+      if (context.outcome === 'format') {
+        app.check(messages.filter((item: any) => item.tag === 'review-format').length === 1, '只要求一次格式澄清');
+        app.check(reviews.some((item: any) => item.text === '`[NO_ISSUES]`' && item.review.verdict === 'issues'), '格式錯誤的原票保留');
+      }
+      if (context.counterexample) {
+        const evidence = summary.counterexamples?.[0];
+        app.check(evidence?.confirmation === (context.passes ? 'rejected' : 'confirmed'), '反例撤回必須一致同意');
+        app.check(evidence?.output.includes('AssertionError'), '原始失敗輸出仍保留');
+        app.check(context.passes ? evidence.rejection?.length === 2 && !evidence.afterRepair : !evidence.rejection, '撤回理由與修復後狀態沒有混淆');
+      }
+      if (context.outcome === 'retry' || context.outcome === 'retry-blocked') {
+        const notices = messages.filter((item: any) => item.tag === 'review-retry');
+        app.check(notices.length === 1, '只通知一次自動重試');
+        const notice = document.querySelector(`#timeline [data-msg-id="${notices[0].id}"]`) as HTMLElement;
+        app.check(!!notice && new RegExp(context.zh ? '全新上下文重試一次' : 'Retrying once with a fresh context').test(notice.textContent || ''), '重試通知跟隨介面語言');
+        const failures = reviews.filter((item: any) => item.review.verdict === 'failed');
+        app.check(failures.length === (context.outcome === 'retry' ? 1 : 2), '原失敗紀錄沒有被覆蓋');
+        app.check(reviews.filter((item: any) => item.agentId === 'lead').length === (context.passes ? 2 : 1), '成功票不因另一位失敗而重跑');
+        const failed = document.querySelector(`#timeline [data-msg-id="${failures[0].id}"]`) as HTMLElement;
+        app.check(!!failed && !(failed.querySelector('.retry-btn') as HTMLElement | null)?.checkVisibility(), '失敗紀錄仍在且不能手動繞過把關重試');
+        notice.scrollIntoView({ block: 'center' });
+        await app.shot(`guarded-${context.outcome}-notice-${context.zh ? 'zh' : 'en'}`);
+      }
       const card = document.querySelector(`#timeline [data-msg-id="${message.id}"]`) as HTMLElement;
       app.check(!!card.querySelector('.task-summary'), '結果卡已渲染');
+      if (context.outcome === 'counterexample') {
+        app.check(card.textContent?.includes(context.zh ? '已撤回' : 'Withdrawn'), '結果卡顯示撤回狀態');
+        app.check(card.textContent?.includes('unrelated constants'), '結果卡保存具體撤回理由');
+      }
       const expected = context.outcome === 'plan'
         ? (context.zh ? '計畫未通過' : 'Plan not approved')
-        : context.outcome === 'passed' ? (context.zh ? '全員審查通過' : 'All reviewers approved') : (context.zh ? '多 AI 把關未通過' : 'Multi-AI checks not passed');
+        : context.passes ? (context.zh ? '全員審查通過' : 'All reviewers approved') : (context.zh ? '多 AI 把關未通過' : 'Multi-AI checks not passed');
       app.check(card.textContent?.includes(expected), '通過與阻擋狀態清楚顯示');
       app.check(card.scrollWidth <= card.clientWidth + 1, '結果卡沒有水平溢出');
       card.scrollIntoView({ block: 'center' });
@@ -96,18 +144,22 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
     },
   });
   report(`多 AI 把關 ${outcome} ${locale}`, result);
-  if (result.ok && outcome !== 'plan' && result.read('notes.txt') !== 'Revised') throw new Error('Repaired content missing on disk');
+  if (result.ok && outcome !== 'plan' && result.read('notes.txt') !== (outcome === 'retry-blocked' || outcome === 'format' ? 'Draft' : 'Revised')) throw new Error('Content on disk does not match the repair outcome');
   if (result.ok && outcome === 'plan' && result.read('notes.txt') !== null) throw new Error('Blocked plan changed files');
+  if (result.ok && counterexample && (result.read('.roundtable/counterexamples.json') !== null) !== (outcome === 'counterexample-kept')) throw new Error('Counterexample corpus does not match the withdrawal outcome');
   result.cleanup();
   return result.ok;
 }
 
 async function main() {
   let guardedOk = true;
+  const retryOnly = process.argv.includes('--retry-only');
+  const continueOnly = process.argv.includes('--continue-only');
+  const evidenceOnly = process.argv.includes('--evidence-only');
   for (const locale of ['zh-Hant', 'en'] as const) {
-    for (const outcome of ['passed', 'plan', 'review'] as const) guardedOk = await guarded(locale, outcome) && guardedOk;
+    for (const outcome of evidenceOnly ? ['format', 'counterexample', 'counterexample-kept'] as const : continueOnly ? ['continue'] as const : retryOnly ? ['retry', 'retry-blocked'] as const : ['passed', 'plan', 'review', 'retry', 'retry-blocked', 'continue', 'format', 'counterexample', 'counterexample-kept'] as const) guardedOk = await guarded(locale, outcome) && guardedOk;
   }
-  if (process.argv.includes('--guarded-only')) {
+  if (retryOnly || continueOnly || evidenceOnly || process.argv.includes('--guarded-only')) {
     if (!guardedOk) process.exitCode = 1;
     return;
   }

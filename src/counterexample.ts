@@ -52,6 +52,7 @@ export interface Counterexample {
   targetId: string;
   title: string;
   source: string;
+  rejection?: string[];
 }
 
 export interface CounterexampleRun extends Counterexample {
@@ -182,9 +183,27 @@ export async function runCounterexamples(
 //   confirmed    跑出問題(非零結束):這一條是真的,拿去當關卡。
 //   unsubstantiated 竟然通過:審查者說得出問題,卻舉不出可重現的例子。不拿去逼人修,但要說出來。
 //   unusable     腳本本身沒跑成:兩邊都不算。
-export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' {
+export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' {
+  if (run.rejection?.length) return 'rejected';
   if (run.unusable) return 'unusable';
   return run.passed ? 'unsubstantiated' : 'confirmed';
+}
+
+export function counterexampleRejection(task: string, reviewers: string[], votes: Array<{ reviewerId: string; text: string; error?: string | null }>): string[] | undefined {
+  if (new Set(reviewers).size < 2 || new Set(reviewers).size !== reviewers.length) return;
+  const reasons: string[] = [];
+  for (const reviewer of reviewers) {
+    const matches = votes.filter((vote) => vote.reviewerId === reviewer);
+    if (matches.length !== 1 || matches[0].error) return;
+    let value: unknown;
+    try { value = JSON.parse(matches[0].text); } catch { return; }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const { decision, expectationContradictsRequirement, requirement, reason } = value as Record<string, unknown>;
+    if (decision !== 'withdraw_counterexample' || expectationContradictsRequirement !== true || typeof requirement !== 'string' || !requirement.trim() || !task.includes(requirement.trim())
+      || typeof reason !== 'string' || !reason.trim()) return;
+    reasons.push(`${reviewer}: ${requirement.trim()} - ${reason.trim()}`);
+  }
+  return reasons;
 }
 
 // 給模型看的一段文字:修復回合拿到的是「這段腳本現在會這樣壞」,不是「審查者覺得哪裡不對」。
@@ -206,8 +225,8 @@ export function counterexampleNotes(runs: CounterexampleRun[], locale: TextLocal
 export function counterexampleStatus(runs: CounterexampleRun[], locale: TextLocale = 'zh-Hant'): string | null {
   if (!runs.length) return null;
   const items = runs.map((run) => {
-    const key = run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
-    return tx(locale, key, { title: run.title || tx(locale, 'ce.untitled'), output: run.output || tx(locale, 'ce.noOutput') });
+    const key = run.rejection?.length ? 'ce.statusRejected' : run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
+    return tx(locale, key, { title: run.title || tx(locale, 'ce.untitled'), output: run.rejection?.join('\n') || run.output || tx(locale, 'ce.noOutput') });
   });
   return tx(locale, 'ce.status', { list: items.join('\n') });
 }

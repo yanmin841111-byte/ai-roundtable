@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseCounterexamples, stripCounterexamples, runCounterexample, runCounterexamples,
-  classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexamplePath,
+  classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexamplePath, counterexampleRejection,
   CE_SOURCE_MAX, CE_PREFIX,
 } = require('../src/counterexample');
 const { snapshotDir } = require('../src/snapshot');
@@ -31,6 +31,37 @@ function dirWith(files: Record<string, string>): string {
 
 const ce = (source: string, extra: Record<string, unknown> = {}) => ({
   id: 'r1-t1-1', reviewerId: 'r1', reviewerName: '審查者', targetId: 't1', title: '測試用', source, ...extra,
+});
+
+test('rejection requires distinct unanimous reviewers and an actual requirement quote', () => {
+  const task = 'Reject requests above total capacity.';
+  const text = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: task, reason: 'The example expects an oversized request to run.' });
+  const votes = [{ reviewerId: 'one', text }, { reviewerId: 'two', text }];
+  assert.strictEqual(counterexampleRejection(task, ['one', 'two'], votes)?.length, 2);
+  for (const invalid of [
+    votes.slice(0, 1), [...votes, votes[0]],
+    [votes[0], { reviewerId: 'two', text, error: 'timeout' }],
+    [votes[0], { reviewerId: 'two', text: '{}' }],
+    [votes[0], { reviewerId: 'two', text: 'not JSON' }],
+    [votes[0], { reviewerId: 'two', text: text.replace('withdraw_counterexample', 'retain_counterexample') }],
+    [votes[0], { reviewerId: 'two', text: text.replace('withdraw_counterexample', 'reject') }],
+    [votes[0], { reviewerId: 'two', text: text.replace('true', 'false') }],
+    [votes[0], { reviewerId: 'two', text: text.replace('"expectationContradictsRequirement":true,', '') }],
+    [votes[0], { reviewerId: 'two', text: text.replace(task, 'Invented requirement') }],
+    [votes[0], { reviewerId: 'two', text: JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: task, reason: '' }) }],
+  ]) assert.strictEqual(counterexampleRejection(task, ['one', 'two'], invalid), undefined);
+  assert.strictEqual(counterexampleRejection(task, ['one'], votes), undefined);
+  assert.strictEqual(counterexampleRejection(task, ['one', 'one'], votes), undefined);
+});
+
+test('rejected examples retain failures but cannot become repair gates or corpus entries', () => {
+  const run = { ...ce('throw new Error("bad expectation")'), passed: false, code: 1, output: 'original failure', timedOut: false, rejection: ['one: reason', 'two: reason'] };
+  assert.strictEqual(classifyConfirmation(run), 'rejected');
+  assert.strictEqual(counterexampleNotes([run]), null);
+  assert.deepStrictEqual(require('../src/ratchet').gatesFromCounterexamples([run]), []);
+  assert.deepStrictEqual(require('../src/corpus').additions([run], 'task', []), []);
+  assert.strictEqual(run.output, 'original failure');
+  assert.strictEqual(run.passed, false);
 });
 
 test('解析:取出反例區塊、保留標題,並把過長、空的、沒收尾的丟掉並回報', () => {

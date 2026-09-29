@@ -1928,7 +1928,7 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   else delete el.dataset.agentId;
   if (m.kind === 'agent') renderAgentMessage(el, m);
   else if (m.kind === 'user') renderUserMessage(el, m);
-  else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary, m.id);
+  else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary, m.id, m.planResumable === true);
   else { el.innerHTML = systemHtml(m); bindEnvFix(el); }
   if (isNew && placed!.isNewNode) insertTimelineMarkers(placed!.node, m);
   if (el.parentElement && el.parentElement.classList.contains('msg-group')) el.classList.remove('msg-continue');

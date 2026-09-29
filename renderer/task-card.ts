@@ -95,8 +95,9 @@ function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary
   }
   for (const item of summary.counterexamples) {
     const title = item.title || t('task.counterexamples.untitled');
-    const after = item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
+    const after = item.confirmation === 'rejected' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
     const detail = [
+      item.rejection?.join('\n') || '',
       item.output ? `${t('task.counterexamples.initialOutput')}\n${item.output}` : '',
       item.repairOutput ? `${t('task.counterexamples.repairOutput')}\n${item.repairOutput}` : '',
     ].filter(Boolean).join('\n\n');
@@ -141,7 +142,7 @@ function acceptanceEvidence(summary: TaskSummary): HTMLElement {
   return section;
 }
 
-export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: string): void {
+export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: string, planResumable = false): void {
   const state = taskState(s);
   const card = document.createElement('div');
   card.className = `bubble task-summary tone-${state.tone}`;
@@ -162,6 +163,26 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: strin
   status.className = 'ts-state';
   status.textContent = state.label;
   titleRow.append(icon, title, status);
+  if (planResumable && s.guard?.stage === 'plan') {
+    const resume = document.createElement('button');
+    resume.type = 'button';
+    resume.className = 'ts-open ts-plan-resume';
+    controlLabel(resume, 'retry', t('task.plan.continue'));
+    const error = document.createElement('div');
+    error.className = 'ts-partial';
+    error.setAttribute('role', 'status');
+    resume.onclick = async () => {
+      resume.disabled = true;
+      error.textContent = '';
+      try {
+        const result = await window.api.retry(taskId);
+        if (!result.ok) error.textContent = result.error || t('task.plan.unavailable');
+      } catch (reason) { error.textContent = String(reason); }
+      if (error.textContent) resume.disabled = false;
+    };
+    titleRow.append(resume);
+    head.append(error);
+  }
   if (s.guard?.status === 'passed') {
     const approval = document.createElement('span');
     approval.className = 'badge verdict pass';

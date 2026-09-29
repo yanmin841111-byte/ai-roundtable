@@ -295,6 +295,14 @@ test('反例證據會保留確認與修復後狀態,並進入中英文匯出', (
   assert.match(taskSummaryText(restored, 'zh-Hant'), /反例證據[\s\S]*Reviewer[\s\S]*空輸入會崩潰[\s\S]*已確認[\s\S]*修復後通過[\s\S]*TypeError: boom/);
   assert.match(taskSummaryText(restored, 'en'), /Counterexample evidence[\s\S]*Reviewer[\s\S]*Empty input crashes|Counterexample evidence[\s\S]*Reviewer[\s\S]*空輸入會崩潰[\s\S]*Confirmed[\s\S]*Passed after repair/);
   assert.strictEqual(restoreTaskSummary(base).counterexamples, undefined, '舊紀錄沒有此欄位,不能當成零個反例');
+  const rejected = restoreTaskSummary({ ...base, counterexamples: [{
+    title: 'invalid expectation', reviewer: 'Reviewer', confirmation: 'rejected', afterRepair: 'passed',
+    output: 'AssertionError: original failure', rejection: ['reviewer: requirement - reason', 'lead: requirement - reason', null],
+  }] });
+  assert.strictEqual(rejected.counterexamples[0].afterRepair, undefined);
+  assert.deepStrictEqual(rejected.counterexamples[0].rejection, ['reviewer: requirement - reason', 'lead: requirement - reason']);
+  assert.match(taskSummaryText(rejected, 'zh-Hant'), /已撤回[\s\S]*不列入修復門檻[\s\S]*requirement - reason[\s\S]*AssertionError/);
+  assert.match(taskSummaryText(rejected, 'en'), /Withdrawn[\s\S]*Excluded from repair gates[\s\S]*requirement - reason[\s\S]*AssertionError/);
 });
 
 (async () => {

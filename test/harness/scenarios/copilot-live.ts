@@ -5,7 +5,10 @@
 
 import { execFileSync } from 'child_process';
 import path from 'path';
-import { runApp, report } from '../app';
+import fs from 'fs';
+import type { ChatMessage } from '../../../src/ipc-types';
+import { reviewVerdict } from '../../../src/flow/review';
+import { runApp, report, type HarnessResult } from '../app';
 
 const MODELS = (process.env.COPILOT_MODELS || 'gpt-5-mini,claude-haiku-4.5,gpt-5.4-mini').split(',').map((model) => model.trim()).filter(Boolean);
 
@@ -14,11 +17,40 @@ const FILES = {
   'sum.test.js': "const assert = require('assert');\nconst { sum } = require('./sum');\nassert.strictEqual(sum([1, 2, 3]), 6);\nassert.strictEqual(sum([]), 0);\nconsole.log('sum ok');\n",
 };
 
-export function liveRunPassed(value: { guard?: { status: string }; verify?: string; members?: Array<{ outcome: string }>; errors?: string[] } | undefined, testPassed: boolean, testUnchanged: boolean, headUnchanged: boolean): boolean {
+export function unresolvedLiveErrors(messages: Array<Partial<ChatMessage>>): string[] {
+  return messages.flatMap((message, index) => {
+    if (message.kind !== 'agent' || (!message.error && message.status !== 'error')) return [];
+    if (typeof message.phase === 'object' && message.phase?.code === 'review' && message.agentId && message.review?.targetId) {
+      const latest = messages.slice(index + 1).reverse().find((next) => typeof next.phase === 'object' && next.phase?.code === 'review'
+        && next.agentId === message.agentId && next.review?.targetId === message.review?.targetId);
+      if (latest?.status === 'done' && reviewVerdict(latest.text, latest.error) !== 'failed') return [];
+    }
+    return [`${message.agentName}: ${message.error || 'Turn failed'}`];
+  });
+}
+
+export function liveRunPassed(value: { guard?: { status: string }; verify?: string; members?: Array<{ outcome: string }>; errors?: string[]; messages?: Array<Partial<ChatMessage>> } | undefined, testPassed: boolean, testUnchanged: boolean, headUnchanged: boolean): boolean {
+  const errors = value?.messages ? unresolvedLiveErrors(value.messages) : value?.errors;
   return value?.guard?.status === 'passed' && value.verify === 'passed'
-    && value.errors?.length === 0 && !!value.members?.length
+    && errors?.length === 0 && !!value.members?.length
     && value.members.every((member) => member.outcome === 'approved')
     && testPassed && testUnchanged && headUnchanged;
+}
+
+export function saveLiveEvidence(result: Pick<HarnessResult, 'tmp' | 'workDir' | 'shots'>, filename: string, evidence: unknown, destination = process.env.COPILOT_EVIDENCE_DIR): void {
+  const source = path.join(result.tmp, filename);
+  if (destination && fs.existsSync(path.join(destination, filename))) throw new Error('Evidence already exists');
+  fs.writeFileSync(source, JSON.stringify(evidence, null, 2));
+  if (!destination) return;
+  fs.mkdirSync(destination, { recursive: true });
+  fs.copyFileSync(source, path.join(destination, filename), fs.constants.COPYFILE_EXCL);
+  fs.cpSync(result.workDir, path.join(destination, 'work'), {
+    recursive: true, force: false, errorOnExist: true, filter: (entry) => path.basename(entry) !== '.git',
+  });
+  const hidden = path.join(result.tmp, 'held-out.test.cjs');
+  if (fs.existsSync(hidden)) fs.copyFileSync(hidden, path.join(destination, 'held-out.test.cjs'), fs.constants.COPYFILE_EXCL);
+  fs.mkdirSync(path.join(destination, 'shots'), { recursive: true });
+  for (const file of Object.values(result.shots)) fs.copyFileSync(file, path.join(destination, 'shots', path.basename(file)), fs.constants.COPYFILE_EXCL);
 }
 
 async function main() {
@@ -52,6 +84,7 @@ async function main() {
       app.check(!!summary, '產生結果卡');
       await app.shot('copilot-live');
       return {
+        messages,
         errors: turns.filter((message: any) => message.error).map((message: any) => `${message.agentName}: ${String(message.error).slice(0, 200)}`),
         phases: turns.map((message: any) => `${message.agentName}:${message.phase?.code || '-'}`),
         guard: summary?.guard,
@@ -60,7 +93,8 @@ async function main() {
       };
     },
   });
-  const ok = report(`Copilot 真機 · ${(pair ? MODELS.slice(0, 2) : MODELS).join(' / ')}`, result);
+  const { messages, ...summary } = result.value || {};
+  const ok = report(`Copilot 真機 · ${(pair ? MODELS.slice(0, 2) : MODELS).join(' / ')}`, { ...result, value: summary });
   let testPassed = false;
   try {
     execFileSync(process.execPath, ['sum.test.js'], { cwd: result.workDir, stdio: 'pipe' });
@@ -73,9 +107,11 @@ async function main() {
   console.log('  測試檔未被修改:', testFile === FILES['sum.test.js'] ? '是' : '否');
   console.log('  Git HEAD unchanged:', headUnchanged);
   console.log('  git numstat:', result.numstat() || '(無變更)');
-  console.log('  結果:', JSON.stringify(result.value, null, 2));
+  console.log('  結果:', JSON.stringify({ ...summary, unresolvedErrors: unresolvedLiveErrors(messages || []) }, null, 2));
   console.log('  暫存目錄:', path.relative(process.cwd(), result.tmp) || result.tmp);
-  if (!ok || !liveRunPassed(result.value, testPassed, testFile === FILES['sum.test.js'], headUnchanged)) process.exitCode = 1;
+  const passed = ok && liveRunPassed(result.value, testPassed, testFile === FILES['sum.test.js'], headUnchanged);
+  saveLiveEvidence(result, 'live-evidence.json', { passed, elapsedMs: result.elapsedMs, result: result.value, testPassed, testUnchanged: testFile === FILES['sum.test.js'], headUnchanged, stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut, error: result.error });
+  if (!passed) process.exitCode = 1;
 }
 
 if (require.main === module) main().catch((error) => { console.error(error); process.exitCode = 1; });

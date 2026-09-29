@@ -16,7 +16,7 @@ import { snapshotDir, diffSnapshots } from './snapshot';
 import { captureBaseline, changesSince, directoryIdentity, revertToBaseline } from './task-changes';
 import { verificationRevision, verifyChanges, verifyNotes } from './verify';
 // 反例與棘輪:把審查從「意見」變成可執行的證據,再用它守住「不准變糟」(見 counterexample.ts / ratchet.ts)
-import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, type Counterexample, type CounterexampleRun } from './counterexample';
+import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexampleRejection, type Counterexample, type CounterexampleRun } from './counterexample';
 import { gateState, decideRatchet, describeChanges, type GateState } from './ratchet';
 import { loadCorpus, additions, saveCorpus, corpusCounterexamples } from './corpus';
 import { readProjectRules } from './project-rules';
@@ -74,6 +74,7 @@ class Orchestrator extends EventEmitter {
   phase: PhaseInfo;
   taskStartIndex: number;
   taskCwd: string | null;
+  planDraft: { task: string; plan: Plan; notes: string; context: string; messageId?: string } | null = null;
   directedQueue: Array<{ msg: LiveMessage; agentIds: string[] }>;
   emitTimers: Map<string, NodeJS.Timeout>;
   // ---------- 選項式提問 ----------
@@ -178,6 +179,7 @@ class Orchestrator extends EventEmitter {
   // ---------- 對外操作 ----------
   async userMessage(text: string, mode: string, attachments: AttachmentMeta[] = []) {
     if (this.maintenance) throw new Error(this.text('sys.reverifyBusy'));
+    this.clearPlanDraft();
     // 有了新訊息,之前失敗的回合就不再是「最近一次」,前情與附件也不同了,不再提供重試
     this.clearRetryable();
     const list = Array.isArray(attachments) ? attachments : [];
@@ -221,6 +223,17 @@ class Orchestrator extends EventEmitter {
     if (this.running || this.maintenance) return { ok: false, error: this.text('sys.retryBusy') };
     const idx = this.messages.findIndex((m) => m.id === messageId);
     const msg = this.messages[idx];
+    if (msg?.planResumable) {
+      const draft = this.planDraft;
+      let matches = false;
+      try { matches = !!draft && draft.messageId === messageId && draft.context === this.planContext(); } catch {}
+      this.clearPlanDraft();
+      if (!matches || !draft) return { ok: false, error: this.text('sys.guardPlanUnavailable') };
+      this.pushMessage({ kind: 'user', text: `${this.text('sys.guardPlanContinue')}\n\n${draft.task}` });
+      const run = this.runTask(draft.task, 'guarded', draft);
+      run.catch((error: unknown) => this.system(this.text('sys.error', { message: String(error) }), { level: 'error' }));
+      return { ok: true };
+    }
     const agent = msg && this.agents.find((a) => a.id === msg.agentId);
     if (!msg || !msg.retryable || !agent) return { ok: false, error: this.text('sys.retryNotAllowed') };
     let lastUser = -1;
@@ -242,6 +255,17 @@ class Orchestrator extends EventEmitter {
   // 這筆更新就被丟掉,畫面上舊訊息的重試鍵永遠不會收起來。
   clearRetryable() {
     for (const m of this.messages) if (m.retryable) this.updateMessage(m, { retryable: false }, true);
+  }
+
+  planContext() {
+    const root = fs.realpathSync(this.config.settings.workDir);
+    const { dev, ino } = fs.statSync(root);
+    return JSON.stringify({ config: this.config, root, dev, ino });
+  }
+
+  clearPlanDraft() {
+    this.planDraft = null;
+    for (const message of this.messages) if (message.planResumable) this.updateMessage(message, { planResumable: false }, true);
   }
 
   // ---------- 選項式提問 ----------
@@ -460,8 +484,9 @@ class Orchestrator extends EventEmitter {
         title: run.title,
         reviewer: run.reviewerName,
         confirmation: classifyConfirmation(run),
-        ...(repaired ? { afterRepair: repaired.unusable ? 'unusable' as const : repaired.passed ? 'passed' as const : 'failed' as const } : {}),
+        ...(repaired && !run.rejection?.length ? { afterRepair: repaired.unusable ? 'unusable' as const : repaired.passed ? 'passed' as const : 'failed' as const } : {}),
         output: run.output,
+        ...(run.rejection?.length ? { rejection: run.rejection } : {}),
         ...(repaired ? { repairOutput: repaired.output } : {}),
       };
     });
@@ -490,6 +515,7 @@ class Orchestrator extends EventEmitter {
     }
     const message = this.system(taskSummaryText(summary, this.locale), { tag: 'task-summary', taskSummary: summary });
     this.verificationTarget = baseline && verify ? { message, baseline } : null;
+    return message;
   }
 
   answerText(question: PendingQuestion, answer: QuestionAnswer) {
@@ -513,6 +539,7 @@ class Orchestrator extends EventEmitter {
 
   stop() {
     this.stopped = true;
+    this.clearPlanDraft();
     // 卡在等回答的流程一定要先放行,否則 runExclusive 會永遠停在 await,使用者只能重開 app
     this.settleQuestion({ id: this.pendingQuestion?.id || '', decision: 'defer' });
     for (const p of this.procs) { try { p.kill('SIGTERM'); } catch {} }
@@ -545,6 +572,7 @@ class Orchestrator extends EventEmitter {
   // 會收到(依上限截斷的)完整對話紀錄,而不是只有新訊息。
   loadConversation({ messages, conversationId }: { messages?: unknown; conversationId?: string | null } = {}) {
     if (this.running) throw new Error('目前仍在進行中,請先停止再載入歷史對話');
+    this.clearPlanDraft();
     this.verificationTarget = null;
     // 待答問題不寫進 session,載入歷史對話時一律當成已經 defer
     this.clearAsk();
@@ -565,14 +593,14 @@ class Orchestrator extends EventEmitter {
   }
 
   // ---------- 主流程 ----------
-  async runTask(task: string, mode: string) {
+  async runTask(task: string, mode: string, previous?: { plan: Plan; notes: string }) {
     return this.runExclusive(async (agents, cwd) => {
       const guarded = mode === 'guarded';
       if (guarded && new Set(agents.map((agent) => agent.id)).size < 2) {
         await this.guardPlanStopped('sys.guardMembers');
         return;
       }
-      const agreed = await this.discussPhase(agents, task);
+      const agreed = previous ? true : await this.discussPhase(agents, task);
       if (this.stopped) return;
       if (guarded && !agreed) {
         await this.guardPlanStopped('sys.guardDiscussion');
@@ -582,7 +610,7 @@ class Orchestrator extends EventEmitter {
         if (!agreed) this.system(this.text('sys.maxRoundsDivide', { max: this.config.settings.maxRounds }));
         // 多 AI 把關依計畫順序一棒接一棒:有先後依賴的工作才不會讀到正在被改的檔案
         const relay = mode === 'relay' || guarded;
-        const plan = guarded ? await this.approvePlanPhase(agents, task) : await this.assignPhase(agents, task, relay);
+        const plan = guarded ? await this.approvePlanPhase(agents, task, previous) : await this.assignPhase(agents, task, relay);
         if (this.stopped) return;
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
@@ -640,14 +668,14 @@ class Orchestrator extends EventEmitter {
         // 測試鎖:任務開始前就存在的測試檔被動到,要說出來;修復回合則直接擋下(見 src/test-lock.ts)
         const touchedTests = coding ? lockedTests(snapBefore, changed) : [];
         if (touchedTests.length) this.system(this.text('sys.testsTouched', { list: touchedTests.map((f) => `- \`${f}\``).join('\n') }), { level: 'warn', tag: 'test-lock' });
-        const reviews = await this.reviewPhase(agents, reviewed, changed, failed, guarded ? pickReviewPairs(agents, reviewed, true) : undefined, verify, touchedTests, conflicts);
+        const reviews = await this.reviewPhase(agents, reviewed, changed, failed, guarded ? pickReviewPairs(agents, reviewed, true) : undefined, verify, touchedTests, conflicts, guarded);
         if (this.stopped) return;
         this.markUnreviewed(reviewed, reviews);
         // 審查者舉出的反例:app 自己跑一次,確認得了的才拿去當修復回合的關卡
-        const counterexamples = coding ? await this.counterexamplePhase(reviews, cwd, before?.runs || []) : [];
+        const counterexamples = coding ? await this.counterexamplePhase(reviews, cwd, before?.runs || [], '', guarded ? { agents, task } : undefined) : [];
         if (this.stopped) return;
         const fix = guarded
-          ? await this.guardedFixPhase(agents, reviews, reviewed, verify, touchedTests, cwd, counterexamples, snapBefore, coding, failed, conflicts)
+          ? await this.guardedFixPhase(agents, reviews, reviewed, verify, touchedTests, cwd, counterexamples, snapBefore, coding, failed, conflicts, task)
           : await this.fixPhase(reviews, reviewed, verify, touchedTests, cwd, counterexamples);
         if (this.stopped) return;
         if (!guarded) await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding, counterexamples);
@@ -704,6 +732,7 @@ class Orchestrator extends EventEmitter {
   // body(agents, cwd) 是實際流程(完整圓桌或 @ 指定回覆)。
   async runExclusive(body: (agents: AgentConfig[], cwd: string) => Promise<void>) {
     if (this.maintenance) return;
+    this.clearPlanDraft();
     this.verificationTarget = null;
     const agents = this.agents;
     if (agents.length === 0) { this.system(this.text('sys.noAgents'), { level: 'error' }); return; }
@@ -828,7 +857,7 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段二:主持人產生分工 JSON(用 A1/A2 短代號,避免模型抄錯 UUID 或名稱)
-  async assignPhase(agents: AgentConfig[], task: string, relay = false, acceptance = false): Promise<Plan | null> {
+  async assignPhase(agents: AgentConfig[], task: string, relay = false, acceptance = false, previous?: { plan: Plan; notes: string }): Promise<Plan | null> {
     this.setPhase({ code: 'divide' });
     const lead = this.lead;
     const codes = new Map<string, AgentConfig>();
@@ -840,6 +869,8 @@ class Orchestrator extends EventEmitter {
       this.text('prompt.assign'),
       roster,
       '',
+      acceptance ? this.text('prompt.reviewTask', { task }) : null,
+      previous ? this.text('prompt.guardPlanRevision', { plan: JSON.stringify(previous.plan), notes: previous.notes }) : null,
       this.text(relay ? 'prompt.assignRelay' : 'prompt.assignNoOverlap'),
       this.text('prompt.assignCodes', { codes: joinNames(this.locale, [...codes.keys()]) }),
       acceptance ? this.text('prompt.assignAcceptance') : null,
@@ -848,7 +879,7 @@ class Orchestrator extends EventEmitter {
     ].filter((line): line is string => line !== null).join('\n');
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const { text, error, id } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true });
+      const { text, error, id } = await this.turn(lead, prompt, { phase: { code: 'divide' }, hideAgreed: true, freshContext: !!previous });
       if (this.stopped) return null;
       // 主持人整個回合就失敗(CLI 沒安裝、key 失效、逾時)時,輸出必然是空的。
       // 這種情況下報「格式無法解析」是誤診,會讓使用者去調整提示詞而不是去修設定。
@@ -901,28 +932,37 @@ class Orchestrator extends EventEmitter {
     this.taskBaseline = null;
     this.fixBaseline = null;
     this.system(this.text(reason), { level: 'warn', tag: 'guarded-stop' });
-    await this.pushTaskSummary({
+    const message = await this.pushTaskSummary({
       startedAt: Number(this.messages[this.taskStartIndex]?.ts) || Date.now(), startIndex: this.taskStartIndex,
       reports: [], failed: [], reviews: [], fix: { unresolved: [], reviewFailed: [], fixFailed: [] },
       baseline: null, guarded: true, guardStage: 'plan',
     });
+    if (this.planDraft && !this.stopped) {
+      this.planDraft.messageId = message.id;
+      this.updateMessage(message, { planResumable: true }, true);
+    }
   }
 
-  async approvePlanPhase(agents: AgentConfig[], task: string): Promise<Plan | null> {
+  async approvePlanPhase(agents: AgentConfig[], task: string, previous?: { plan: Plan; notes: string }): Promise<Plan | null> {
     const maxRounds = Math.min(10, Math.max(1, Number(this.config.settings.maxRounds) || 3));
     const reviewers = agents.filter((agent) => agent.id !== this.lead.id);
+    const context = this.planContext();
     for (let round = 1; round <= maxRounds; round++) {
-      const plan = await this.assignPhase(agents, task, true, true);
+      const plan = await this.assignPhase(agents, task, true, true, previous);
       if (this.stopped) return null;
       if (!plan) break;
       if (!plan.acceptance?.length) {
         this.system(this.text('sys.guardPlanNoAcceptance'), { level: 'warn', tag: 'plan-review' });
+        previous = { plan, notes: this.text('sys.guardPlanNoAcceptance') };
         continue;
       }
       this.setPhase({ code: 'discuss', round, maxRounds });
       this.system(this.text('sys.guardPlanRound', { round, max: maxRounds }), { tag: 'plan-review' });
       const group = crypto.randomUUID();
-      const prompt = this.text('prompt.guardPlan', { task, plan: JSON.stringify(plan), mark: MARK(AGREED) });
+      const prompt = [
+        this.text('prompt.guardPlan', { task, plan: JSON.stringify(plan), mark: MARK(AGREED) }),
+        previous ? this.text('prompt.guardPlanHistory', { plan: JSON.stringify(previous.plan), notes: previous.notes }) : '',
+      ].filter(Boolean).join('\n\n');
       const votes = await Promise.all(reviewers.map((agent) => this.turn(agent, prompt, {
         phase: { code: 'discuss', round, maxRounds }, freshContext: true, hideAgreed: true, group,
       })));
@@ -931,7 +971,14 @@ class Orchestrator extends EventEmitter {
         this.system(this.text('sys.guardPlanPassed'), { tag: 'plan-approved' });
         return plan;
       }
+      previous = {
+        plan,
+        notes: votes.map((vote, index) => this.text('prompt.reviewNote', {
+          reviewer: reviewers[index].name, text: vote.error || vote.text || this.text('sys.noReviewText'),
+        })).join('\n\n'),
+      };
     }
+    if (previous && !this.stopped) this.planDraft = { task, ...previous, context };
     await this.guardPlanStopped('sys.guardPlanBlocked');
     return null;
   }
@@ -1169,7 +1216,7 @@ class Orchestrator extends EventEmitter {
   // 這是把審查從「意見」換成「證據」的那一步。實驗 7 的現場顯示診斷品質本來就夠好,
   // 損失發生在傳輸——診斷寫成文字,再由一顆比較弱的模型照著文字動手。反例讓那段路
   // 不再需要理解:要修的人拿到的是一段會跑出錯的程式,修好沒有也由 app 自己跑,不由誰宣告。
-  async counterexamplePhase(reviews: Review[], cwd: string, carry: Counterexample[] = [], prefix = ''): Promise<CounterexampleRun[]> {
+  async counterexamplePhase(reviews: Review[], cwd: string, carry: CounterexampleRun[] = [], prefix = '', assessment?: { agents: AgentConfig[]; task: string }): Promise<CounterexampleRun[]> {
     // carry 是語料庫那幾道:基準線已經量過一次,執行之後要再量一次,棘輪才比得出來。
     // 它們不參與下面的「確認 / 不成立」判定——那是針對這次審查新舉出來的反例。
     const list: Counterexample[] = [...carry];
@@ -1200,7 +1247,24 @@ class Orchestrator extends EventEmitter {
     if (dropped.length) this.system(this.text('sys.ceDropped', { list: dropped.join('\n') }), { level: 'warn', tag: 'counterexample' });
     if (!list.length || this.stopped) return [];
     this.setPhase({ code: 'verify' });
-    const runs = await runCounterexamples(cwd, list, this.locale, this.trackProc, () => this.stopped);
+    const retained = carry.filter((run) => run.rejection?.length);
+    const runs = await runCounterexamples(cwd, list.filter((item) => !item.rejection?.length), this.locale, this.trackProc, () => this.stopped);
+    runs.push(...retained);
+    const carried = new Set(carry.map((run) => run.id));
+    if (assessment) for (const run of runs) {
+      if (this.stopped || carried.has(run.id) || run.id.startsWith('corpus-') || classifyConfirmation(run) !== 'confirmed') continue;
+      const reviewers = [...new Map(assessment.agents.filter((agent) => agent.id !== run.targetId).map((agent) => [agent.id, agent])).values()];
+      if (reviewers.length < 2 || !reviewers.some((agent) => agent.id === run.reviewerId)) continue;
+      this.system(this.text('sys.ceValidation', { title: run.title || this.text('ce.untitled') }), { tag: 'counterexample' });
+      const prompt = this.text('prompt.ceValidate', { task: assessment.task, source: run.source, output: run.output, title: run.title || this.text('ce.untitled') });
+      const group = crypto.randomUUID();
+      const votes = await Promise.all(reviewers.map(async (reviewer) => {
+        const outcome = await this.turn(reviewer, prompt, { phase: { code: 'review' }, group, freshContext: true, readOnlyFileTools: reviewAccess(getAdapter(reviewer.cli), reviewer) === 'tool' });
+        return { reviewerId: reviewer.id, text: outcome.text, error: outcome.error };
+      }));
+      if (!this.stopped) run.rejection = counterexampleRejection(assessment.task, reviewers.map((agent) => agent.id), votes);
+      if (run.rejection) this.system(this.text('sys.ceRejected', { title: run.title || this.text('ce.untitled'), reasons: run.rejection.join('\n'), output: run.output }), { tag: 'counterexample' });
+    }
     this.reportCounterexamples(runs.filter((run) => !run.id.startsWith('corpus-')));
     return runs;
   }
@@ -1245,9 +1309,10 @@ class Orchestrator extends EventEmitter {
 
   // 修復之後把同一批反例再跑一次。id 不變,棘輪才對得起來。
   async recheckCounterexamples(cwd: string, runs: CounterexampleRun[]): Promise<CounterexampleRun[]> {
-    const again = runs.filter((run) => classifyConfirmation(run) !== 'unusable');
+    const again = runs.filter((run) => !run.rejection?.length && classifyConfirmation(run) !== 'unusable');
     if (!again.length || this.stopped) return runs;
-    return runCounterexamples(cwd, again, this.locale, this.trackProc, () => this.stopped);
+    const checked = new Map((await runCounterexamples(cwd, again, this.locale, this.trackProc, () => this.stopped)).map((run) => [run.id, run]));
+    return runs.map((run) => checked.get(run.id) || run);
   }
 
   // 確認過的反例留進專案的語料庫,成為它永久的關卡(見 corpus.ts)。
@@ -1340,7 +1405,7 @@ class Orchestrator extends EventEmitter {
   // 階段四:交叉審查
   // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
   // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
-  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = [], override?: ReviewPair[], verify?: VerifyResult, touchedTests: string[] = [], conflicts: Array<{ file: string; names: string[] }> = []): Promise<Review[]> {
+  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = [], override?: ReviewPair[], verify?: VerifyResult, touchedTests: string[] = [], conflicts: Array<{ file: string; names: string[] }> = [], retryFailed = false): Promise<Review[]> {
     const pairs = override || pickReviewPairs(agents, reports);
     if (pairs.length === 0) {
       if (reports.length >= 1) this.system(this.text('sys.noReviewer'), { level: 'warn' });
@@ -1353,7 +1418,7 @@ class Orchestrator extends EventEmitter {
     // 以及真的用工具改過檔的 API 成員。唯讀成員、沒改任何檔的 API 成員不算。
     const writers = [...reports, ...failed].filter((r) => effectiveCanEdit(r.agent)
       && (getAdapter(r.agent.cli)?.type !== 'openai' || ownPaths(r).size > 0));
-    const jobs = pairs.map(({ reviewer, target }) => {
+    const jobs = pairs.map(async ({ reviewer, target }) => {
       // 審查的核心是「看到實際改動」。以前對每位審查者都說「請打開檔案確認」,但 API 與本機
       // 模型在審查時沒有任何工具,只看得到一行稽核摘要——它們只能審執行者自己寫的報告,
       // 或者像實際發生過的那樣,把工具呼叫當成文字寫出來假裝讀了檔。依審查者的能力給它
@@ -1375,7 +1440,7 @@ class Orchestrator extends EventEmitter {
       const files = all.slice(0, REVIEW_FILES_MAX);
       const more = all.length - files.length;
       const state = readOnlyTarget ? 'readonly' : files.length > 0 ? 'listed' : tracked ? 'untouched' : changed === null ? 'unknown' : 'none';
-      const opening = access === 'open' ? 'prompt.review' : ({
+      const opening = readOnlyTarget ? 'prompt.reviewReadOnly' : access === 'open' ? 'prompt.review' : ({
         readonly: 'prompt.reviewReadOnly',
         listed: access === 'inline' ? 'prompt.reviewInline' : 'prompt.reviewAttached',
         untouched: 'prompt.reviewUntouched',
@@ -1419,18 +1484,27 @@ class Orchestrator extends EventEmitter {
         // 判定規則放在最後:前面可能附了上萬字的檔案內容,規則寫在內容之前,模型讀完內容就忘了——
         // 實測本機模型會在指出錯誤之後照樣寫上 [NO_ISSUES],或把它接在句尾而不是單獨一行。
         '',
-        this.text('prompt.reviewWhat'),
+        this.text('prompt.reviewSnapshot'),
+        this.text(readOnlyTarget ? 'prompt.reviewReadOnlyWhat' : 'prompt.reviewWhat'),
         // 反例:把「我覺得這裡不對」換成「這段跑起來會錯」。只對改得動檔案的目標要求——
         // 唯讀成員的工作不會改動檔案,對它舉反例沒有對象。
         readOnlyTarget ? null : this.text('prompt.reviewCounterexample'),
         this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
       ];
       const prompt = lines.filter((line): line is string => line !== null).join('\n');
-      const review: ReviewInfo = { target: target.agent.name, access, scope: state, files, more, omitted, unreadable, ...(target.previousNotes ? { recheck: true } : {}) };
+      const review: ReviewInfo = { target: target.agent.name, targetId: target.agent.id, access, scope: state, files, more, omitted, unreadable, ...(target.previousNotes ? { recheck: true } : {}) };
       // 乾淨 context:審查者只看需求、回報、實際改動與自動驗證,不看討論與執行過程。
       // 實驗 3 量到的誤判,多半是審查者照著執行者的說法複誦(見 eval/EXPERIMENTS.md)。
-      return this.turn(reviewer, prompt, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined, review, freshContext: true })
-        .then(({ text, error }) => ({ reviewer, target, text, error }));
+      const runReview = (clarification = '') => this.turn(reviewer, prompt + clarification, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined, review, freshContext: true });
+      let outcome = await runReview();
+      if (retryFailed && !this.stopped && reviewVerdict(outcome.text, outcome.error) === 'failed') {
+        this.system(this.text('sys.reviewRetry', { reviewer: reviewer.name, target: target.agent.name }), { level: 'warn', tag: 'review-retry' });
+        outcome = await runReview();
+      } else if (retryFailed && !this.stopped && reviewVerdict(outcome.text, outcome.error) === 'issues' && outcome.text.includes(MARK(NO_ISSUES)) && !parseCounterexamples(outcome.text).blocks.length) {
+        this.system(this.text('sys.reviewFormatRetry', { reviewer: reviewer.name, target: target.agent.name }), { level: 'warn', tag: 'review-format' });
+        outcome = await runReview('\n\n' + this.text('prompt.reviewFormatRetry', { previous: outcome.text, mark: MARK(NO_ISSUES) }));
+      }
+      return { reviewer, target, text: outcome.text, error: outcome.error };
     });
     return Promise.all(jobs);
   }
@@ -1526,7 +1600,7 @@ class Orchestrator extends EventEmitter {
 
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
-  async guardedFixPhase(agents: AgentConfig[], reviews: Review[], reports: ExecReport[], verify: VerifyResult | undefined, touchedTests: string[], cwd: string, counterexamples: CounterexampleRun[], snapBefore: Awaited<ReturnType<typeof snapshotDir>>, coding: boolean, failed: ExecReport[], conflicts: Array<{ file: string; names: string[] }>): Promise<FixOutcome> {
+  async guardedFixPhase(agents: AgentConfig[], reviews: Review[], reports: ExecReport[], verify: VerifyResult | undefined, touchedTests: string[], cwd: string, counterexamples: CounterexampleRun[], snapBefore: Awaited<ReturnType<typeof snapshotDir>>, coding: boolean, failed: ExecReport[], conflicts: Array<{ file: string; names: string[] }>, task = ''): Promise<FixOutcome> {
     let latestReviews = reviews;
     let latestReports = reports;
     let latestVerify = verify;
@@ -1552,7 +1626,7 @@ class Orchestrator extends EventEmitter {
       latestCounterexamples = next.counterexamples as CounterexampleRun[] || latestCounterexamples;
       if (coding && !this.stopped) {
         const known = new Set(latestCounterexamples.map((run) => run.id));
-        latestCounterexamples = await this.counterexamplePhase(latestReviews, cwd, latestCounterexamples, `repair-${round}-`);
+        latestCounterexamples = await this.counterexamplePhase(latestReviews, cwd, latestCounterexamples, `repair-${round}-`, { agents, task });
         discovered.push(...latestCounterexamples.filter((run) => !known.has(run.id)));
         next.counterexamples = latestCounterexamples;
       }
@@ -1656,6 +1730,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.fixTask', { task: it.task }),
         '',
         this.text('prompt.fixNotes', { notes: it.notes.join('\n\n') }),
+        counterexampleStatus(counterexamples.filter((run) => run.rejection?.length), this.locale),
       ].filter((line): line is string => line !== null).join('\n');
       // 修復回合一樣要給檔案工具,閘門與執行回合相同(能改檔 + 有人能審查)。
       // 少了這一行的後果實測過:API 成員在修復回合只能「說」怎麼修——模型正確診斷出
@@ -1750,7 +1825,7 @@ class Orchestrator extends EventEmitter {
     // 複查者拿到的是 app 跑出來的反例狀態,不是修復者說的
     const ceStatus = counterexampleStatus(afterCe, this.locale);
     if (ceStatus) for (const pair of pairs) pair.target.previousNotes = [...(pair.target.previousNotes || []), ceStatus];
-    const rereviews = await this.reviewPhase(agents, pairs.map((p) => p.target), changed, failed, pairs, verify, afterTests, conflicts);
+    const rereviews = await this.reviewPhase(agents, pairs.map((p) => p.target), changed, failed, pairs, verify, afterTests, conflicts, !!allReports);
     fix.rereviews = rereviews;
     const still = rereviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'issues');
     for (const rv of still) {

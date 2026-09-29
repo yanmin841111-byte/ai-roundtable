@@ -142,13 +142,22 @@ After you send a task, depending on the mode:
 
 - **Multi-AI checks (two or more members)**: discussion needs unanimous
   agreement; the lead's plan must list acceptance criteria and receive every
-  other member's approval before execution. Steps run in plan order, each
+  other member's approval before execution. Plan reviews distinguish concrete
+  blockers from optional suggestions; revisions and re-reviews include the
+  previous plan and named feedback. After the round limit, the result card can
+  continue plan revision using the original request without repeating discussion,
+  but unanimous approval is still required. New tasks, changed settings or working
+  directory, stopping, and loading history invalidate the in-memory draft.
+  Steps run in plan order, each
   receiving the previous handoffs. Every result is reviewed in a clean context
   by all non-authors against each acceptance criterion; with only two members,
-  the author reviews again in a fresh context as the second reviewer. Anything
-  short of unanimous approval goes back to the original author, up to three
-  rounds, each re-verified and re-reviewed in full. Unanimous AI approval is not
-  human acceptance or a deployment guarantee.
+  the author reviews again in a fresh context as the second reviewer. A failed
+  review is retried once in a fresh context without rerunning successful votes;
+  the failed attempt is retained, and another failure keeps delivery blocked.
+  Findings go back to the original author for up to three repair rounds, each
+  re-verified and re-reviewed in full. Review prompts distinguish handoff-time
+  reports from the current files. Unanimous AI approval is not human acceptance
+  or a deployment guarantee.
 - **Discuss → Write tests → Implement → Cross-review**: the same as the flow
   below with one step added after the division of work: each member first turns
   its own acceptance criteria into tests. Those tests are locked during

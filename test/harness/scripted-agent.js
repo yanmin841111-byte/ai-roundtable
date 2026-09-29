@@ -28,7 +28,30 @@ process.stdin.on('end', () => {
   // 只認階段標籤。修復提示裡的審查意見以「[Alice]:」開頭,以前會被當成最後一個標籤,
   // 修復回合就回了討論用的「同意分工」。
   const tags = [...input.matchAll(/【([^】]+)】|^\[([A-Za-z -]+)\]/gm)].map((m) => m[1] || m[2]).filter((t) => PHASES[t]);
-  const key = PHASES[tags[tags.length - 1]] || 'discuss';
+  const key = /【反例有效性】|^Counterexample validity assessment\./m.test(input) ? 'counterexampleValidation' : PHASES[tags[tags.length - 1]] || 'discuss';
+  if (key === 'review' && /【格式澄清】|^Verdict format clarification\./m.test(input) && config.reviewClarification) config.review = config.reviewClarification;
+
+  if (key === 'planReview' && config.planReviews) {
+    const fs = require('fs');
+    const path = require('path');
+    const marker = path.resolve('..', '.plan-reviews-' + Buffer.from(config.id || 'scripted').toString('hex'));
+    const attempts = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) : 0;
+    fs.writeFileSync(marker, String(attempts + 1));
+    config.planReview = config.planReviews[Math.min(attempts, config.planReviews.length - 1)];
+  }
+
+  if (key === 'review' && config.reviewFailures) {
+    const fs = require('fs');
+    const path = require('path');
+    const marker = path.resolve('..', '.review-failures-' + Buffer.from(config.id || 'scripted').toString('hex'));
+    const attempts = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) : 0;
+    fs.writeFileSync(marker, String(attempts + 1));
+    if (attempts < config.reviewFailures) {
+      process.stderr.write('Simulated review failure\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   // 執行回合寫 writes,修復回合寫 fixWrites:要驗「修復反而把東西改壞」就靠後者
   const toWrite = key === 'execute' ? config.writes : key === 'fix' ? config.fixWrites : null;
@@ -49,6 +72,7 @@ process.stdin.on('end', () => {
     summary: '總結:流程已跑完',
     discuss: config.discuss,
     planReview: config.planReview || '[AGREED]',
+    counterexampleValidation: config.counterexampleReview || '{"decision":"retain_counterexample"}',
   }[key];
   setTimeout(() => process.stdout.write(out + '\n'), Number(config.delayMs) || 0);
 });

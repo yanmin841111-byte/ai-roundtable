@@ -21,7 +21,11 @@ export function scriptedMember(opts: {
   plan?: { summary: string; assignments: Array<{ agent: string; task: string }>; acceptance?: string[] };
   discuss?: string;
   planReview?: string;
+  planReviews?: string[];
   review?: string;
+  reviewFailures?: number;
+  reviewClarification?: string;
+  counterexampleReview?: string;
   /** 修復後複查時的回覆(沒給就沿用 review) */
   recheck?: string;
   canEdit?: boolean;
@@ -37,10 +41,15 @@ export function scriptedMember(opts: {
   delayMs?: number;
 }): HarnessMember {
   const payload = Buffer.from(JSON.stringify({
+    id: opts.id || 'scripted',
     plan: opts.plan || null,
     discuss: opts.discuss || '同意直接進入分工\n[AGREED]',
     planReview: opts.planReview || '[AGREED]',
+    planReviews: opts.planReviews,
     review: opts.review || '看過了,沒問題\n[NO_ISSUES]',
+    reviewFailures: opts.reviewFailures || 0,
+    reviewClarification: opts.reviewClarification,
+    counterexampleReview: opts.counterexampleReview,
     recheck: opts.recheck || null,
     writes: opts.writes || null,
     report: opts.report || null,

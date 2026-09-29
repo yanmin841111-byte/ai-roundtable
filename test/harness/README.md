@@ -80,7 +80,7 @@ npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑
                         #   waiting            長回合時有沒有顯示階段、經過時間與停滯警示
                         #   retry              失敗的 @ 指定回覆能重試;分工流程裡失敗的回合不行
                         #   review-visibility  審查訊息顯示結論徽章與「看了哪些檔案」,點檔名跳到檔案改動(中英各一次)
-                        #   plan-output        分工原文收起來;多 AI 把關的計畫阻擋、修正通過、三輪未通過(中英文)
+                        #   plan-output        分工原文收起來;多 AI 把關的計畫阻擋、修正通過、三輪未通過、審查重試成功與耗盡上限(中英文)
                         #   model-capability   API 成員的模型能力顯示在卡片與編輯視窗;按「測試」才送請求(假端點,中英各一次)
                         #   diff-without-git   工作目錄不是 git repo 時,檔案改動照樣列出紅綠對照(中英各一次)
                         #   task-summary       分工任務結束時的結果卡:每位成員的結論、改動的檔案、點檔名跳到檔案改動(中英各一次)
@@ -99,6 +99,57 @@ npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上�
 
 快速組隊可在 build 後單獨跑 `node --import tsx test/harness/scenarios/lineups.ts --quick-only`。
 使用假成員及隔離設定,檢查套用不啟動任務、不提升權限、保留舊陣容,以及窄側欄沒有水平溢出。
+
+審查重試可在 build 後單獨跑 `node --import tsx test/harness/scenarios/plan-output.ts --retry-only`。
+四個中英文隔離情境使用固定失敗的假成員,驗證單次重試、原失敗紀錄保留、修復恢復與重試耗盡時仍阻擋;不消耗模型額度。
+
+審查格式與反例判定可在 build 後跑 `node --import tsx test/harness/scenarios/plan-output.ts --evidence-only`。
+六個中英文情境驗證格式澄清不消耗修復輪數,以及反例一致撤回或有反對票時的結果卡、原始失敗輸出與入庫狀態。
+格式澄清與失敗重試共用每次審查最多一次的額外回合;不放寬標記解析,也不自動把否定票改為通過。
+新反例只有在提出者及至少另一位非被審作者都引用原始需求並明確同意撤回時,才移出修復門檻。
+這仍是模型判斷,不是正確性的證明。缺票、格式不完整、反對、停止或呼叫失敗都不撤回;兩人團隊及既有反例庫不自動撤回。
+
+計畫續訂可在 build 後單獨跑 `node --import tsx test/harness/scenarios/plan-output.ts --continue-only`。
+中英文各一次實際點擊結果卡按鈕,驗證草稿續訂不重跑討論、重新審核後才改檔,並保留原本的阻擋結果。
+
+經使用者同意後,`COPILOT_LIVE=1 caffeinate -i node --import tsx test/harness/scenarios/copilot-complex.ts --continue-plan`
+會執行複雜排程器的真實 Copilot 任務;只有計畫被阻擋時才點一次續訂,不無限重跑。
+先用 `--dry-run` 檢查題目而不消耗額度。原始訊息、失敗歷史、公開與隱藏測試結果保存在隔離目錄,
+成功重試的審查錯誤仍保留,但驗收只把未解決的錯誤當成阻擋。
+
+2026-09-28 的新版複雜任務隱藏驗收由 17 項增至 22 項,加入非普通資源物件及 `__proto__`、`constructor`、`toString` 資源名稱的容量與 CLI 檢查。
+這些追加檢查已在舊產物重現漏網缺陷,但不改寫舊批次分數。新版本必須使用新的證據目錄,不能接續舊的 30 場批次。
+
+30 場重複驗證在 build 後先跑 `node --import tsx test/harness/scenarios/copilot-batch.ts --dry-run`。
+取得額度授權後執行 `COPILOT_LIVE=1 caffeinate -i node --import tsx test/harness/scenarios/copilot-batch.ts --output .eval-local/copilot-30-2026-09-27`。
+固定交錯執行兩人修正、三人修正與複雜排程器各 10 場;每場皆為新隔離目錄,最多 30 分鐘。
+`manifest.json` 預先記錄清單、模型與程式雜湊,`summary.json` 逐場更新,完整證據與產物保存在各場目錄。
+只有 30/30 同版本通過才會標記 `readyToPush`;批次程式本身不提交或推送。
+中斷後可加 `--resume` 接續同一輸出目錄,但中斷場次記失敗、不重抽;程式或建置變更時拒絕接續。
+這是兩個固定任務的重複功能驗證,不代表所有程式任務的普遍成功率。
+
+### 換機測試交接
+
+2026-09-29 的完整批次為 17/30 通過;同版本重跑在使用者要求下停止,已完成 5 場中 4 場通過、1 場失敗,第 6 場人工中斷。
+這次提交供換機測試,不代表達成 30/30 驗收。原始證據在本機 `.eval-local/`,不隨 Git 推送;不覆寫或合併不同批次的成績。
+已知未修問題:外層逾時可能留下獨立 CLI 程序;反例判定格式錯誤沒有再次澄清;重複認證連線失敗仍跑完討論輪數;部分逾時缺少途中訊息且逾時分類不一致。
+
+另一台電腦需有桌面環境、Node.js >= 20.6.0、已登入的 GitHub Copilot CLI,以及這三個模型的使用權限。
+在 repo 根目錄執行以下命令(POSIX shell),最後一行會使用真實模型額度:
+
+```sh
+git pull --ff-only
+npm install
+npm run typecheck
+npm test
+npm run build
+node -e 'require("node:fs").mkdirSync(".eval-local", { recursive: true })'
+node --import tsx test/harness/scenarios/copilot-batch.ts --dry-run
+COPILOT_LIVE=1 node --import tsx test/harness/scenarios/copilot-batch.ts --output .eval-local/copilot-30-new-machine
+```
+
+輸出目錄必須不存在;換機後開新批次,不要用 `--resume` 接續舊機的批次。macOS 可在 `node` 前加 `caffeinate -i` 避免閒置睡眠。
+CLI 版本檢查或公開 GitHub API 可達不等於模型認證成功。中止時需確認該次測試的 Electron 與獨立 CLI 程序均已停止,不可只關閉終端就假定清理完成。
 
 ### 證據保存回歸
 
