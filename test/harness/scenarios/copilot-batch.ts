@@ -17,13 +17,14 @@ export interface BatchRecord extends BatchAttempt {
 
 const MODELS = ['gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini'];
 
-export function batchPlan(): BatchAttempt[] {
-  return Array.from({ length: 10 }, (_, round) => (['pair', 'trio', 'complex'] as const)
-    .map((kind, offset) => ({ id: String(round * 3 + offset + 1).padStart(2, '0'), kind }))).flat();
+export function batchPlan(count = 30): BatchAttempt[] {
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error('Batch count must be a positive safe integer');
+  const kinds = ['pair', 'trio', 'complex'] as const;
+  return Array.from({ length: count }, (_, index) => ({ id: String(index + 1).padStart(2, '0'), kind: kinds[index % kinds.length] }));
 }
 
-export function batchPassed(records: BatchRecord[], sourceHash: string): boolean {
-  const plan = batchPlan();
+export function batchPassed(records: BatchRecord[], sourceHash: string, count = 30): boolean {
+  const plan = batchPlan(count);
   return records.length === plan.length && plan.every((attempt, index) => {
     const record = records[index];
     return record.id === attempt.id && record.kind === attempt.kind && record.passed === true
@@ -85,11 +86,13 @@ async function execute(attempt: BatchAttempt, directory: string, sourceHash: str
 }
 
 async function main() {
-  const plan = batchPlan();
+  const countIndex = process.argv.indexOf('--count');
+  const count = countIndex === -1 ? 30 : Number(process.argv[countIndex + 1]);
+  const plan = batchPlan(count);
   const sourceHash = sourceFingerprint();
   const policy = {
     models: MODELS, plan, sourceHash,
-    acceptance: 'All 30 scheduled attempts must pass the unchanged scenario acceptance gates. Failures and interrupted attempts count; no replacement runs.',
+    acceptance: `All ${count} scheduled attempts must pass the unchanged scenario acceptance gates. Failures and interrupted attempts count; no replacement runs.`,
     continuation: 'Complex tasks may use the existing plan continuation button once. All approval gates remain required.',
     scope: 'Repeated functional validation of two fixed tasks, not a general model-quality estimate.',
   };
@@ -111,7 +114,7 @@ async function main() {
   const summarize = () => writeJson(path.join(output, 'summary.json'), {
     planned: plan.length, completed: records.length, passed: records.filter(record => record.passed).length,
     failed: records.filter(record => !record.passed).length, sourceChanged,
-    readyToPush: !sourceChanged && batchPassed(records, sourceHash), records,
+    readyToPush: !sourceChanged && batchPassed(records, sourceHash, count), records,
   });
   summarize();
   for (const attempt of plan) {
@@ -131,17 +134,17 @@ async function main() {
     }
     if (sourceFingerprint() !== sourceHash) { sourceChanged = true; summarize(); break; }
     fs.mkdirSync(directory);
-    console.log(`[${attempt.id}/30] START ${attempt.kind} ${new Date().toISOString()}`);
+    console.log(`[${attempt.id}/${count}] START ${attempt.kind} ${new Date().toISOString()}`);
     const record = await execute(attempt, directory, sourceHash);
     records.push(record);
     writeJson(recordFile, record);
     sourceChanged = record.sourceHash !== sourceHash;
     summarize();
-    console.log(`[${attempt.id}/30] ${record.passed ? 'PASS' : 'FAIL'} ${attempt.kind} ${Math.round(record.elapsedMs / 1000)}s; total ${records.filter(item => item.passed).length}/${records.length}`);
+    console.log(`[${attempt.id}/${count}] ${record.passed ? 'PASS' : 'FAIL'} ${attempt.kind} ${Math.round(record.elapsedMs / 1000)}s; total ${records.filter(item => item.passed).length}/${records.length}`);
     if (sourceChanged) break;
   }
   console.log(`Evidence: ${output}`);
-  if (sourceChanged || !batchPassed(records, sourceHash)) process.exitCode = 1;
+  if (sourceChanged || !batchPassed(records, sourceHash, count)) process.exitCode = 1;
 }
 
 if (require.main === module) main().catch((error) => { console.error(error); process.exitCode = 1; });

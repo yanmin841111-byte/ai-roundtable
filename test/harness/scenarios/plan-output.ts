@@ -58,16 +58,18 @@ async function once(locale: 'zh-Hant' | 'en') {
   return r;
 }
 
-async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'review' | 'retry' | 'retry-blocked' | 'continue' | 'format' | 'counterexample' | 'counterexample-kept') {
+async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'review' | 'retry' | 'retry-blocked' | 'continue' | 'format' | 'counterexample' | 'counterexample-kept' | 'counterexample-retry' | 'counterexample-pending') {
   const zh = locale === 'zh-Hant';
-  const passes = ['passed', 'retry', 'continue', 'format', 'counterexample'].includes(outcome);
+  const passes = ['passed', 'retry', 'continue', 'format', 'counterexample', 'counterexample-retry'].includes(outcome);
   const counterexample = outcome.startsWith('counterexample');
   const rejection = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: 'Write project notes', reason: 'The assertion compares unrelated constants, not the requested notes.' });
-  const expectedRounds = { passed: 1, plan: 0, review: 3, retry: 1, 'retry-blocked': 0, continue: 1, format: 0, counterexample: 1, 'counterexample-kept': 3 }[outcome];
-  const expectedReviews = { passed: 4, plan: 0, review: 8, retry: 5, 'retry-blocked': 3, continue: 4, format: 3, counterexample: 4, 'counterexample-kept': 8 }[outcome];
+  const expectedRounds = { passed: 1, plan: 0, review: 3, retry: 1, 'retry-blocked': 0, continue: 1, format: 0, counterexample: 0, 'counterexample-kept': 0, 'counterexample-retry': 0, 'counterexample-pending': 0 }[outcome];
+  const expectedReviews = { passed: 4, plan: 0, review: 8, retry: 5, 'retry-blocked': 3, continue: 4, format: 3, counterexample: 3, 'counterexample-kept': 2, 'counterexample-retry': 3, 'counterexample-pending': 2 }[outcome];
+  const malformed = outcome === 'counterexample-retry' || outcome === 'counterexample-pending';
+  const retain = JSON.stringify({ decision: 'retain_counterexample', expectationContradictsRequirement: false, requirement: 'Write project notes', reason: 'This expectation is required.' });
   const result = await runApp({
     members: [
-      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }], acceptance: ['notes.txt exists'] }, counterexampleReview: outcome === 'counterexample-kept' ? '{"decision":"retain_counterexample"}' : rejection }),
+      scriptedMember({ id: 'lead', name: 'Alice', plan: { summary: 'Write notes', assignments: [{ agent: 'A2', task: 'Write notes.txt' }], acceptance: ['notes.txt exists'] }, counterexampleReview: malformed ? 'not JSON' : outcome === 'counterexample-kept' ? retain : `\`\`\`json\n${rejection}\n\`\`\``, counterexampleClarification: outcome === 'counterexample-retry' ? rejection : 'still not JSON' }),
       scriptedMember({ id: 'author', name: 'Bob', canEdit: true, writes: { 'notes.txt': 'Draft' }, fixWrites: { 'notes.txt': 'Revised' }, report: 'Draft ready', fixReport: 'Revised notes' }),
       scriptedMember({ id: 'reviewer', name: 'Carol', planReview: outcome === 'plan' ? 'Acceptance criteria missing' : '[AGREED]', planReviews: outcome === 'continue' ? ['Acceptance criteria missing', '[AGREED]'] : undefined, review: outcome === 'format' ? '`[NO_ISSUES]`' : counterexample ? '```counterexample Invalid expectation\nrequire("node:assert/strict").equal(1, 2);\n```' : 'Please revise the notes', recheck: outcome === 'review' ? 'Still incomplete' : '[NO_ISSUES]', reviewFailures: outcome === 'retry' ? 1 : outcome === 'retry-blocked' ? 2 : 0, reviewClarification: '[NO_ISSUES]', counterexampleReview: rejection }),
     ],
@@ -110,9 +112,14 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
       }
       if (context.counterexample) {
         const evidence = summary.counterexamples?.[0];
-        app.check(evidence?.confirmation === (context.passes ? 'rejected' : 'confirmed'), '反例撤回必須一致同意');
+        app.check(evidence?.confirmation === (context.passes ? 'rejected' : 'pending'), '反例撤回必須一致同意,未釐清時不當成確認缺陷');
         app.check(evidence?.output.includes('AssertionError'), '原始失敗輸出仍保留');
         app.check(context.passes ? evidence.rejection?.length === 2 && !evidence.afterRepair : !evidence.rejection, '撤回理由與修復後狀態沒有混淆');
+        const assessments = messages.filter((item: any) => item.kind === 'agent' && item.phase?.code === 'review' && !item.review);
+        const clarified = context.outcome === 'counterexample-retry' || context.outcome === 'counterexample-pending';
+        app.check(assessments.length === (clarified ? 3 : 2), '格式澄清最多一次,有效票不重跑');
+        if (clarified) app.check(assessments.some((item: any) => item.text.trim() === 'not JSON'), '原始格式錯誤仍保留');
+        app.check(!messages.some((item: any) => item.kind === 'agent' && item.phase?.code === 'fix'), '證據澄清不觸發修復');
       }
       if (context.outcome === 'retry' || context.outcome === 'retry-blocked') {
         const notices = messages.filter((item: any) => item.tag === 'review-retry');
@@ -129,9 +136,12 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
       }
       const card = document.querySelector(`#timeline [data-msg-id="${message.id}"]`) as HTMLElement;
       app.check(!!card.querySelector('.task-summary'), '結果卡已渲染');
-      if (context.outcome === 'counterexample') {
+      if (context.counterexample && context.passes) {
         app.check(card.textContent?.includes(context.zh ? '已撤回' : 'Withdrawn'), '結果卡顯示撤回狀態');
         app.check(card.textContent?.includes('unrelated constants'), '結果卡保存具體撤回理由');
+      }
+      if (context.counterexample && !context.passes) {
+        app.check(card.textContent?.includes(context.zh ? '需求判定待釐清' : 'Requirement assessment unresolved'), '結果卡呈現待釐清,不是缺陷確認或通過');
       }
       const expected = context.outcome === 'plan'
         ? (context.zh ? '計畫未通過' : 'Plan not approved')
@@ -144,9 +154,9 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
     },
   });
   report(`多 AI 把關 ${outcome} ${locale}`, result);
-  if (result.ok && outcome !== 'plan' && result.read('notes.txt') !== (outcome === 'retry-blocked' || outcome === 'format' ? 'Draft' : 'Revised')) throw new Error('Content on disk does not match the repair outcome');
+  if (result.ok && outcome !== 'plan' && result.read('notes.txt') !== (expectedRounds === 0 ? 'Draft' : 'Revised')) throw new Error('Content on disk does not match the repair outcome');
   if (result.ok && outcome === 'plan' && result.read('notes.txt') !== null) throw new Error('Blocked plan changed files');
-  if (result.ok && counterexample && (result.read('.roundtable/counterexamples.json') !== null) !== (outcome === 'counterexample-kept')) throw new Error('Counterexample corpus does not match the withdrawal outcome');
+  if (result.ok && counterexample && result.read('.roundtable/counterexamples.json') !== null) throw new Error('Withdrawn or pending counterexamples entered the corpus');
   result.cleanup();
   return result.ok;
 }
@@ -157,7 +167,7 @@ async function main() {
   const continueOnly = process.argv.includes('--continue-only');
   const evidenceOnly = process.argv.includes('--evidence-only');
   for (const locale of ['zh-Hant', 'en'] as const) {
-    for (const outcome of evidenceOnly ? ['format', 'counterexample', 'counterexample-kept'] as const : continueOnly ? ['continue'] as const : retryOnly ? ['retry', 'retry-blocked'] as const : ['passed', 'plan', 'review', 'retry', 'retry-blocked', 'continue', 'format', 'counterexample', 'counterexample-kept'] as const) guardedOk = await guarded(locale, outcome) && guardedOk;
+    for (const outcome of evidenceOnly ? ['format', 'counterexample', 'counterexample-kept', 'counterexample-retry', 'counterexample-pending'] as const : continueOnly ? ['continue'] as const : retryOnly ? ['retry', 'retry-blocked'] as const : ['passed', 'plan', 'review', 'retry', 'retry-blocked', 'continue', 'format', 'counterexample', 'counterexample-kept', 'counterexample-retry', 'counterexample-pending'] as const) guardedOk = await guarded(locale, outcome) && guardedOk;
   }
   if (retryOnly || continueOnly || evidenceOnly || process.argv.includes('--guarded-only')) {
     if (!guardedOk) process.exitCode = 1;

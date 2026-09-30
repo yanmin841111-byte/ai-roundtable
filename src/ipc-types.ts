@@ -389,7 +389,7 @@ export interface TaskVerificationStatus {
 export interface TaskCounterexample {
   title: string;
   reviewer: string;
-  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected';
+  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'pending';
   afterRepair?: 'passed' | 'failed' | 'unusable';
   output: string;
   rejection?: string[];

@@ -30,6 +30,15 @@ process.stdin.on('end', () => {
   const tags = [...input.matchAll(/【([^】]+)】|^\[([A-Za-z -]+)\]/gm)].map((m) => m[1] || m[2]).filter((t) => PHASES[t]);
   const key = /【反例有效性】|^Counterexample validity assessment\./m.test(input) ? 'counterexampleValidation' : PHASES[tags[tags.length - 1]] || 'discuss';
   if (key === 'review' && /【格式澄清】|^Verdict format clarification\./m.test(input) && config.reviewClarification) config.review = config.reviewClarification;
+  if (key === 'counterexampleValidation' && /這是唯一一次格式澄清|This is the only format clarification/.test(input) && config.counterexampleClarification) config.counterexampleReview = config.counterexampleClarification;
+  if (key === 'counterexampleValidation' && config.counterexampleReviews?.length) {
+    const fs = require('fs');
+    const path = require('path');
+    const marker = path.resolve('..', '.counterexample-reviews-' + Buffer.from(config.id || 'scripted').toString('hex'));
+    const attempts = fs.existsSync(marker) ? Number(fs.readFileSync(marker, 'utf8')) : 0;
+    fs.writeFileSync(marker, String(attempts + 1));
+    config.counterexampleReview = config.counterexampleReviews[Math.min(attempts, config.counterexampleReviews.length - 1)];
+  }
 
   if (key === 'planReview' && config.planReviews) {
     const fs = require('fs');
@@ -67,7 +76,7 @@ process.stdin.on('end', () => {
   const out = {
     divide: config.plan ? JSON.stringify(config.plan) : '{"summary":"沒有指定分工","assignments":[]}',
     execute: config.report || '這回合沒有被指派工作',
-    review: config.recheck && /這是修復後的複查|This is the re-check after repair/.test(input) ? config.recheck : config.review,
+    review: config.recheck && /這是修復後的複查|This is the re-check after repair|自上次審查後沒有新增修復|No new repair has occurred/.test(input) ? config.recheck : config.review,
     fix: config.fixReport || '沒有需要修復的項目',
     summary: '總結:流程已跑完',
     discuss: config.discuss,

@@ -1,3 +1,4 @@
+const { tx } = require('../src/text');
 'use strict';
 
 // 給模型看的訊息跟著介面語言。
@@ -16,6 +17,20 @@ const O = require('../src/orchestrator');
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 const CJK = /[一-鿿]/;
+
+test('Git policy forbids operations but permits negative plan constraints in both locales', () => {
+  for (const [key, operation] of [['prompt.assignNoGit', 'git commit'], ['prompt.noGitPush', 'git push']]) {
+    const en = tx('en', key);
+    const zh = tx('zh-Hant', key);
+    assert.ok(en.includes(`do not run ${operation}`));
+    assert.ok(zh.includes(`不得執行 ${operation}`));
+    assert.match(en, /Plans and acceptance criteria may explicitly prohibit/);
+    assert.match(en, /do not reject a plan merely for stating these restrictions/);
+    assert.match(zh, /計畫與驗收可以明示/);
+    assert.match(zh, /不得僅因提到這些限制就退回計畫/);
+    assert.ok(!CJK.test(en));
+  }
+});
 
 test('檔案工具的錯誤訊息:英文設定是英文,沒指定照舊是中文', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-ftloc-'));

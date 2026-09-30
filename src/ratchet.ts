@@ -96,7 +96,7 @@ export function gatesFromVerify(verify: VerifyResult | null | undefined, kinds: 
 // 語料庫來的(id 以 corpus- 開頭)權重較低,理由見 GateWeight。
 export function gatesFromCounterexamples(runs: CounterexampleRun[] | null | undefined): GateEntry[] {
   return (runs || [])
-    .filter((run) => !run.rejection?.length && classifyConfirmation(run) !== 'unusable')
+    .filter((run) => ['confirmed', 'unsubstantiated'].includes(classifyConfirmation(run)))
     .map((run) => ({
       kind: 'counterexample' as const,
       key: run.id,

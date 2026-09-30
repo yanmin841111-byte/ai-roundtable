@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseCounterexamples, stripCounterexamples, runCounterexample, runCounterexamples,
-  classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexamplePath, counterexampleRejection,
+  classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexamplePath, counterexampleRejection, parseCounterexampleVote,
   CE_SOURCE_MAX, CE_PREFIX,
 } = require('../src/counterexample');
 const { snapshotDir } = require('../src/snapshot');
@@ -54,6 +54,26 @@ test('rejection requires distinct unanimous reviewers and an actual requirement 
   assert.strictEqual(counterexampleRejection(task, ['one', 'one'], votes), undefined);
 });
 
+test('counterexample votes accept one JSON envelope but reject ambiguous or unsupported decisions', () => {
+  const task = 'Reject invalid input.';
+  const vote = { decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: task, reason: 'The probe expects invalid input to succeed.' };
+  const text = JSON.stringify(vote);
+  for (const envelope of [text, `\n\`\`\`json\n${text}\n\`\`\`\n`, `\`\`\`\r\n${text}\r\n\`\`\``]) {
+    assert.deepStrictEqual(parseCounterexampleVote(task, envelope), vote);
+    assert.strictEqual(counterexampleRejection(task, ['one', 'two'], [{ reviewerId: 'one', text }, { reviewerId: 'two', text: envelope }])?.length, 2);
+  }
+  for (const invalid of [
+    `Explanation\n\`\`\`json\n${text}\n\`\`\``, `${text}\n${text}`,
+    `\`\`\`json\n${text}\n\`\`\`\n\`\`\`json\n${text}\n\`\`\``,
+    'null', '[]', '{}', JSON.stringify({ ...vote, requirement: 'Invented requirement' }),
+    JSON.stringify({ ...vote, expectationContradictsRequirement: 'true' }),
+    JSON.stringify({ ...vote, decision: 'retain_counterexample' }),
+  ]) assert.strictEqual(parseCounterexampleVote(task, invalid), undefined);
+  assert.ok(parseCounterexampleVote(task, JSON.stringify({ ...vote, decision: 'retain_counterexample', expectationContradictsRequirement: false })));
+  assert.strictEqual(parseCounterexampleVote(task, JSON.stringify({ ...vote, decision: 'retain_counterexample', expectationContradictsRequirement: false, requirement: '' })), undefined);
+  assert.ok(parseCounterexampleVote(task, JSON.stringify({ ...vote, decision: 'uncertain_counterexample', expectationContradictsRequirement: false, requirement: '' })));
+});
+
 test('rejected examples retain failures but cannot become repair gates or corpus entries', () => {
   const run = { ...ce('throw new Error("bad expectation")'), passed: false, code: 1, output: 'original failure', timedOut: false, rejection: ['one: reason', 'two: reason'] };
   assert.strictEqual(classifyConfirmation(run), 'rejected');
@@ -62,6 +82,21 @@ test('rejected examples retain failures but cannot become repair gates or corpus
   assert.deepStrictEqual(require('../src/corpus').additions([run], 'task', []), []);
   assert.strictEqual(run.output, 'original failure');
   assert.strictEqual(run.passed, false);
+});
+
+test('pending assessments preserve evidence but never become repair gates or corpus entries', () => {
+  const run = { ...ce('throw new Error("disputed")'), passed: false, code: 1, output: 'original failure', timedOut: false, assessmentPending: true };
+  assert.strictEqual(classifyConfirmation(run), 'pending');
+  assert.strictEqual(counterexampleNotes([run]), null);
+  assert.deepStrictEqual(require('../src/ratchet').gatesFromCounterexamples([run]), []);
+  assert.deepStrictEqual(require('../src/corpus').additions([run], 'task', []), []);
+  assert.match(counterexampleStatus([run], 'en'), /unresolved requirement assessment/);
+  assert.strictEqual(run.output, 'original failure');
+  const { restoreTaskSummary, taskSummaryText } = require('../src/flow/task-summary');
+  const summary = restoreTaskSummary({ members: [], files: [], usage: {}, counterexamples: [{ title: 'disputed', reviewer: 'Reviewer', confirmation: 'pending', output: run.output, afterRepair: 'failed' }] });
+  assert.strictEqual(summary.counterexamples[0].confirmation, 'pending');
+  assert.strictEqual(summary.counterexamples[0].afterRepair, undefined);
+  assert.match(taskSummaryText(summary, 'en'), /Requirement assessment unresolved/);
 });
 
 test('解析:取出反例區塊、保留標題,並把過長、空的、沒收尾的丟掉並回報', () => {
@@ -147,13 +182,32 @@ test('執行:跑完一定把腳本刪掉,而且快照本來就看不到它', asy
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('執行:語法壞掉的反例算「跑不成」還是「確認」——照實當成非零失敗,但逾時不算', async () => {
+test('invalid counterexample syntax is unusable, not a repair gate or corpus entry', async () => {
   const dir = dirWith({ 'a.js': 'module.exports = 1;\n' });
-  // 語法錯誤的腳本的確會以非零結束。這裡只固定行為:它不會被當成 unusable 而靜默消失,
-  // 使用者在訊息裡看得到輸出,自己判斷得出來是反例寫壞了還是程式真的有問題。
-  const broken = await runCounterexample(dir, ce('const x = (;\n'));
-  assert.strictEqual(broken.passed, false);
-  assert.ok(broken.output.length > 0, '輸出要留著,不然看不出是反例自己壞了');
+  for (const source of ['const broken = (;\n', '檢查 completedDeps 未使用\n', 'import assert from "node:assert";\nconst broken = (;\n']) {
+    const item = ce(source);
+    const broken = await runCounterexample(dir, item);
+    assert.strictEqual(broken.passed, false);
+    assert.strictEqual(classifyConfirmation(broken), 'unusable');
+    assert.match(broken.output, /SyntaxError/);
+    assert.strictEqual(counterexampleNotes([broken]), null);
+    assert.deepStrictEqual(require('../src/ratchet').gatesFromCounterexamples([broken]), []);
+    assert.deepStrictEqual(require('../src/corpus').additions([broken], 'task', []), []);
+    assert.ok(!fs.existsSync(counterexamplePath(dir, item)));
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('syntax checking does not execute the probe or hide syntax errors in the project', async () => {
+  const dir = dirWith({ 'broken.cjs': 'const broken = (;\n', 'broken.mjs': 'export const broken = (;\n' });
+  const once = await runCounterexample(dir, ce('require("node:fs").appendFileSync("executions.txt", "once\\n");'));
+  assert.strictEqual(once.passed, true);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'executions.txt'), 'utf8'), 'once\n');
+  for (const source of ['require("./broken.cjs");', 'import "./broken.mjs";']) {
+    const broken = await runCounterexample(dir, ce(source));
+    assert.strictEqual(classifyConfirmation(broken), 'confirmed');
+    assert.match(broken.output, /SyntaxError/);
+  }
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

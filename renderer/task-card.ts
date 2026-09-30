@@ -95,13 +95,13 @@ function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary
   }
   for (const item of summary.counterexamples) {
     const title = item.title || t('task.counterexamples.untitled');
-    const after = item.confirmation === 'rejected' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
+    const after = item.confirmation === 'rejected' || item.confirmation === 'pending' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
     const detail = [
       item.rejection?.join('\n') || '',
       item.output ? `${t('task.counterexamples.initialOutput')}\n${item.output}` : '',
       item.repairOutput ? `${t('task.counterexamples.repairOutput')}\n${item.repairOutput}` : '',
     ].filter(Boolean).join('\n\n');
-    const tone = item.confirmation === 'unusable' || (item.confirmation === 'confirmed' && item.afterRepair !== 'passed') ? 'warn' : '';
+    const tone = item.confirmation === 'pending' || item.confirmation === 'unusable' || (item.confirmation === 'confirmed' && item.afterRepair !== 'passed') ? 'warn' : '';
     section.appendChild(evidenceRow(`${item.reviewer} · ${title}: ${t(`task.counterexamples.${item.confirmation}`)} · ${after}`, detail, tone));
   }
 }

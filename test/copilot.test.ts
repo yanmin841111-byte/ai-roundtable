@@ -118,6 +118,26 @@ test('live batch requires all 30 fixed attempts without omissions, duplicates or
   ]) assert.equal(batchPassed([{ ...records[0], ...changed }, ...records.slice(1)], 'fixed'), false);
 });
 
+test('live batch supports 50 attempts without accepting a shorter or altered batch', () => {
+  const plan = batchPlan(50);
+  assert.equal(plan.length, 50);
+  assert.deepEqual(plan.slice(0, 30), batchPlan());
+  assert.deepEqual(['pair', 'trio', 'complex'].map(kind => plan.filter(attempt => attempt.kind === kind).length), [17, 17, 16]);
+  assert.deepEqual(plan.at(-1), { id: '50', kind: 'trio' });
+  const records: BatchRecord[] = plan.map(attempt => ({ ...attempt, passed: true, evidencePassed: true, exitCode: 0, elapsedMs: 1, sourceHash: 'fixed' }));
+  assert.equal(batchPassed(records, 'fixed', 50), true);
+  assert.equal(batchPassed(records.slice(0, 30), 'fixed', 50), false);
+  assert.equal(batchPassed(records, 'fixed'), false);
+  assert.equal(batchPassed([...records, records[0]], 'fixed', 50), false);
+  for (const changed of [
+    { passed: false }, { evidencePassed: false }, { exitCode: 1 }, { exitCode: null },
+    { sourceHash: 'changed' }, { id: records[1].id }, { kind: 'trio' as const },
+  ]) assert.equal(batchPassed([{ ...records[0], ...changed }, ...records.slice(1)], 'fixed', 50), false);
+  for (const count of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => batchPlan(count), /positive safe integer/);
+  }
+});
+
 test('registered as a built-in with safe attachment paths and a default model', () => {
   const adapter = builtinAdapters.find(entry => entry.id === 'copilot')!;
   assert.ok(adapter);

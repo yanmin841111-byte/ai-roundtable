@@ -26,6 +26,8 @@ export function scriptedMember(opts: {
   reviewFailures?: number;
   reviewClarification?: string;
   counterexampleReview?: string;
+  counterexampleReviews?: string[];
+  counterexampleClarification?: string;
   /** 修復後複查時的回覆(沒給就沿用 review) */
   recheck?: string;
   canEdit?: boolean;
@@ -50,6 +52,8 @@ export function scriptedMember(opts: {
     reviewFailures: opts.reviewFailures || 0,
     reviewClarification: opts.reviewClarification,
     counterexampleReview: opts.counterexampleReview,
+    counterexampleReviews: opts.counterexampleReviews,
+    counterexampleClarification: opts.counterexampleClarification,
     recheck: opts.recheck || null,
     writes: opts.writes || null,
     report: opts.report || null,

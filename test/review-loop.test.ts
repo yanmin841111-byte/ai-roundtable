@@ -16,12 +16,12 @@ const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 
 // review:當審查者時依序的回覆(第一次審查、複查);api:用 OpenAI 相容型(看工具紀錄)
-type Member = { id: string; name: string; task?: string; writes?: Record<string, string>; fixWrites?: Record<string, string>; execError?: string; fixError?: string; review?: string[]; api?: boolean; canEdit?: boolean; verifyCommand?: string; workStyle?: 'general' | 'code'; mode?: string;
+type Member = { id: string; name: string; task?: string; writes?: Record<string, string>; fixWrites?: Record<string, string>; fixReport?: string; execError?: string; fixError?: string; review?: string[]; api?: boolean; canEdit?: boolean; verifyCommand?: string; workStyle?: 'general' | 'code'; mode?: string;
   /** 寫測試回合要寫的檔案 */ testWrites?: Record<string, string>;
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
   expectFiles?: Record<string, string>; execBarrier?: () => Promise<void>; discussion?: string; planReview?: string[];
-  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string; counterexampleReview?: string };
+  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string; counterexampleReview?: string; counterexampleReviews?: string[] };
 async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
@@ -35,6 +35,7 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const reviewsGiven: Record<string, number> = {};
   const plansReviewed: Record<string, number> = {};
   const repairsMade: Record<string, number> = {};
+  const assessmentsMade: Record<string, number> = {};
   adapters.setRegistry({ get: (id: string) => {
     const m = team.find((x) => x.id === id);
     if (!m) return null;
@@ -47,7 +48,8 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
         pushAllowed.push(ctx.allowGitPush === true);
         if (_a.canEdit) editableTurns.push(/【計畫審核】/.test(ctx.prompt) ? 'plan' : /【分工】/.test(ctx.prompt) ? 'divide' : /【總結】/.test(ctx.prompt) ? 'summary' : phase === 'other' ? 'discuss' : phase);
         if (phase === 'ce-validation') {
-          const text = m.counterexampleReview || '{"decision":"retain_counterexample"}';
+          const index = assessmentsMade[m.name] = (assessmentsMade[m.name] || 0) + 1;
+          const text = m.counterexampleReviews?.[index - 1] ?? m.counterexampleReview ?? '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The assertion follows the task."}';
           return text.startsWith('ERROR:') ? { text: '', error: text.slice(6) } : { text };
         }
         if (/【分工】/.test(ctx.prompt)) return { text: team[0].planOutput ?? JSON.stringify(plan) };
@@ -90,7 +92,7 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
               toolEvents.push({ name: 'write_file', ok: r.ok, path: f, result: r });
             }
           }
-          return { text: m.fixError ? '' : '已修正', error: m.fixError, toolEvents };
+          return { text: m.fixError ? '' : m.fixReport ?? '已修正', error: m.fixError, toolEvents };
         }
         if (/【總結】/.test(ctx.prompt)) return { text: '總結' };
         return { text: m.discussion || '[AGREED]' };
@@ -310,26 +312,175 @@ test('多 AI 把關:格式澄清不能遺失可執行反例,兩人團隊不能�
 test('多 AI 把關:撤回錯誤反例需提出者與非被審作者一致,紀錄保留但不入庫', async () => {
   const reject = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: '分工', reason: 'The assertion expects an unrelated constant to change.' });
   const counterexample = '```counterexample invalid expectation\nrequire("assert").strictEqual(1, 2);\n```';
-  for (const vote of [reject, '{"decision":"retain_counterexample"}', 'ERROR:timeout']) {
+  const retain = JSON.stringify({ decision: 'retain_counterexample', expectationContradictsRequirement: false, requirement: '分工', reason: 'This assertion is required.' });
+  const fenced = `\`\`\`json\n${reject}\n\`\`\``;
+  for (const vote of [reject, fenced, retain, '{"decision":"retain_counterexample"}', 'ERROR:timeout']) {
     const result = await run([
       { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReview: vote },
       { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, counterexampleReview: reject },
       { id: 'reviewer', name: '審查者', canEdit: false, review: [counterexample], counterexampleReview: reject },
     ]);
-    const withdrawn = vote === reject;
+    const withdrawn = vote === reject || vote === fenced;
     assert.strictEqual(result.card.guard.status, withdrawn ? 'passed' : 'blocked');
-    assert.strictEqual(result.card.counterexamples[0].confirmation, withdrawn ? 'rejected' : 'confirmed');
+    assert.strictEqual(result.card.counterexamples[0].confirmation, withdrawn ? 'rejected' : 'pending');
     assert.match(result.card.counterexamples[0].output, /AssertionError/);
     assert.strictEqual(result.card.counterexamples[0].rejection?.length, withdrawn ? 2 : undefined);
-    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'ce-validation').length, 2);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'ce-validation').length, vote === '{"decision":"retain_counterexample"}' ? 3 : 2);
     assert.ok(result.turns.filter((turn) => turn.phase === 'ce-validation').every((turn) => turn.who !== '作者' && turn.sessionId === null));
     assert.ok(!result.editableTurns.includes('ce-validation'));
     if (withdrawn) {
       assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
       assert.strictEqual(result.card.counterexamples[0].afterRepair, undefined);
       assert.ok(result.orc.messages.some((message: any) => message.text.includes('一致撤回')));
-      assert.match(result.prompts['作者'].find((prompt) => prompt.includes('【修復】')) || '', /已因預期行為不符合需求而撤回/);
+      assert.strictEqual(result.card.guard.repairRounds, 0);
+      assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+      assert.match(result.prompts['審查者'].find((prompt) => prompt.includes('這是證據核對')) || '', /已因預期行為不符合需求而撤回/);
+    } else {
+      assert.strictEqual(result.card.guard.repairRounds, 0);
+      assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+      assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
+      assert.strictEqual(result.card.counterexamples[0].afterRepair, undefined);
     }
+  }
+});
+
+test('assessment clarification is bounded, read-only and cannot turn uncertainty into approval', async () => {
+  const reject = JSON.stringify({ decision: 'withdraw_counterexample', expectationContradictsRequirement: true, requirement: '分工', reason: 'The constant assertion is unrelated to the task.' });
+  const uncertain = JSON.stringify({ decision: 'uncertain_counterexample', expectationContradictsRequirement: false, requirement: '', reason: 'No defined expectation for this case.' });
+  const counterexample = '```counterexample disputed claim\nrequire("assert").strictEqual(1, 2);\n```\n[NO_ISSUES]';
+  for (const answers of [['not JSON', reject], ['not JSON', 'still not JSON', reject], [uncertain]]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: answers },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'original' }, fixWrites: { 'a.txt': 'must not write' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [counterexample], counterexampleReview: reject },
+    ]);
+    const recovered = answers[1] === reject;
+    assert.strictEqual(result.card.guard.status, recovered ? 'passed' : 'blocked');
+    assert.strictEqual(result.card.counterexamples[0].confirmation, recovered ? 'rejected' : 'pending');
+    assert.strictEqual(result.card.guard.repairRounds, 0);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'ce-validation' && turn.who === '主持人').length, Math.min(2, answers.length));
+    assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+    assert.ok(!result.editableTurns.includes('ce-validation'));
+    assert.ok(result.turns.filter((turn) => turn.phase === 'ce-validation').every((turn) => turn.sessionId === null));
+    assert.strictEqual(result.read('a.txt'), 'original');
+    assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
+    assert.match(result.card.counterexamples[0].output, /AssertionError/);
+    assert.strictEqual(result.orc.messages.filter((message: any) => message.text === 'not JSON').length, answers.length > 1 ? 1 : 0);
+  }
+});
+
+test('confirmed evidence can be repaired alongside pending evidence without forwarding disputed repair instructions', async () => {
+  const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The required output is incorrect."}';
+  const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"This behavior is not specified."}';
+  const review = 'DISPUTED_REPAIR_INSTRUCTION: change b.txt to disputed.\n```counterexample required output\nrequire("assert").strictEqual(require("fs").readFileSync("a.txt", "utf8"), "repaired");\n```\n```counterexample unspecified behavior\nrequire("fs").appendFileSync("probe-count.txt", "ran\\n");\nrequire("assert").strictEqual(require("fs").readFileSync("b.txt", "utf8"), "disputed");\n```';
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
+    { id: 'author', name: '作者', task: '寫 a.txt 與 b.txt', writes: { 'a.txt': 'original', 'b.txt': 'preserved' }, fixWrites: { 'a.txt': 'repaired' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [review, '[NO_ISSUES]'], counterexampleReviews: [retained, uncertain] },
+  ]);
+  assert.strictEqual(result.card.guard.repairRounds, 1);
+  assert.strictEqual(result.card.guard.status, 'blocked');
+  assert.strictEqual(result.outcome['作者'], 'unresolved');
+  assert.strictEqual(result.read('a.txt'), 'repaired');
+  assert.strictEqual(result.read('b.txt'), 'preserved');
+  assert.strictEqual(result.read('probe-count.txt'), 'ran\n');
+  assert.ok(result.turns.filter((turn) => turn.phase === 'repair').every((turn) => turn.sessionId === null));
+  assert.strictEqual(result.card.counterexamples.find((item: any) => item.title === 'required output').afterRepair, 'passed');
+  assert.strictEqual(result.card.counterexamples.find((item: any) => item.title === 'unspecified behavior').confirmation, 'pending');
+  const repair = result.prompts['作者'].filter((prompt) => prompt.includes('【修復】'));
+  assert.strictEqual(repair.length, 1);
+  assert.match(repair[0], /required output/);
+  assert.doesNotMatch(repair[0], /DISPUTED_REPAIR_INSTRUCTION|"disputed"/);
+  const corpus = JSON.parse(result.read('.roundtable/counterexamples.json')!);
+  assert.strictEqual(corpus.length, 1);
+  assert.strictEqual(corpus[0].title, 'required output');
+});
+
+test('restricted repairs honor deferral while still verifying writes and preserving rollback gates', async () => {
+  const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The exported value is required."}';
+  const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"Not specified."}';
+  const review = '```counterexample required value\nrequire("assert").strictEqual(require("./value.js"), 2);\n```\n```counterexample ambiguous claim\nthrow new Error("unspecified");\n```';
+  for (const corrupt of [false, true]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
+      { id: 'author', name: '作者', task: '寫 value.js', writes: { 'value.js': 'module.exports = 1;' }, fixWrites: corrupt ? { 'value.js': 'module.exports = ;' } : {}, fixReport: 'Cannot isolate this safely.\n[REPAIR_DEFERRED]' },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [review], counterexampleReviews: [retained, uncertain] },
+    ]);
+    assert.strictEqual(result.card.guard.repairRounds, 1);
+    assert.strictEqual(result.turns.filter((turn) => turn.phase === 'repair').length, 1);
+    assert.strictEqual(result.card.guard.status, 'blocked');
+    assert.strictEqual(result.read('value.js'), 'module.exports = 1;');
+    assert.ok(result.card.counterexamples.some((item: any) => item.confirmation === 'pending'));
+    if (corrupt) assert.strictEqual(result.card.rollback?.scope, 'repair');
+    else assert.strictEqual(result.card.rollback, undefined);
+  }
+});
+
+test('restricted repair evidence stays with its owner across a multi-author task', async () => {
+  const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The output is required."}';
+  const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"Not specified."}';
+  const first = '```counterexample first owner output\nrequire("assert").strictEqual(require("fs").readFileSync("first.txt", "utf8"), "first fixed");\n```\n```counterexample uncertain first claim\nthrow new Error("not specified");\n```';
+  const second = '```counterexample second owner output\nrequire("assert").strictEqual(require("fs").readFileSync("second.txt", "utf8"), "second fixed");\n```';
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain, retained] },
+    { id: 'first', name: '第一位作者', task: '寫 first.txt', writes: { 'first.txt': 'first original' }, fixWrites: { 'first.txt': 'first fixed' } },
+    { id: 'second', name: '第二位作者', task: '寫 second.txt', writes: { 'second.txt': 'second original' }, fixWrites: { 'second.txt': 'second fixed' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [first, second] },
+  ]);
+  assert.strictEqual(result.card.guard.status, 'blocked');
+  assert.strictEqual(result.card.guard.repairRounds, 1);
+  assert.strictEqual(result.read('first.txt'), 'first fixed');
+  assert.strictEqual(result.read('second.txt'), 'second fixed');
+  assert.strictEqual(result.outcome['第一位作者'], 'unresolved');
+  assert.strictEqual(result.outcome['第二位作者'], 'approved');
+  const firstRepair = result.prompts['第一位作者'].find((prompt) => prompt.includes('【修復】')) || '';
+  const secondRepair = result.prompts['第二位作者'].find((prompt) => prompt.includes('【修復】')) || '';
+  assert.match(firstRepair, /first owner output/);
+  assert.doesNotMatch(firstRepair, /second owner output|uncertain first claim/);
+  assert.match(secondRepair, /second owner output/);
+  assert.doesNotMatch(secondRepair, /first owner output|uncertain first claim/);
+});
+
+test('passing probes trigger read-only reconciliation without overruling other defects or new evidence', async () => {
+  const passing = 'The input is wrong.\n```counterexample input claim\nrequire("assert").strictEqual(1, 1);\n```\n```counterexample second input claim\nrequire("assert").strictEqual(2, 2);\n```';
+  const failing = '```counterexample new evidence\nrequire("assert").strictEqual(1, 2);\n```\n[NO_ISSUES]';
+  for (const next of ['[NO_ISSUES]', 'A separate required field is still missing.', failing, 'ERROR:timeout']) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'original' }, fixWrites: { 'a.txt': 'repaired' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [passing, next, next, next, next, next] },
+    ]);
+    const approved = next === '[NO_ISSUES]';
+    const unavailable = next.startsWith('ERROR:');
+    assert.strictEqual(result.card.guard.status, approved ? 'passed' : 'blocked');
+    assert.strictEqual(result.card.guard.repairRounds, approved || unavailable ? 0 : 3);
+    assert.strictEqual(result.read('a.txt'), approved || unavailable ? 'original' : 'repaired');
+    assert.strictEqual(result.orc.messages.filter((message: any) => message.text === passing).length, 1);
+    assert.strictEqual(result.orc.messages.filter((message: any) => message.text.includes('先請原審查者唯讀核對')).length, 1);
+    const reconciliation = result.prompts['審查者'].find((prompt) => prompt.includes('這是證據核對')) || '';
+    assert.match(reconciliation, /現在通過了/);
+    assert.doesNotMatch(reconciliation, /這是修復後的複查/);
+    if (next === failing) assert.ok(result.card.counterexamples.some((item: any) => item.title === 'new evidence' && item.confirmation === 'confirmed'));
+  }
+});
+
+test('post-repair evidence reconciliation clears stale review issues but retains new pending assessments', async () => {
+  const initiallyFailing = '```counterexample file content\nrequire("assert").strictEqual(require("fs").readFileSync("a.txt", "utf8"), "repaired");\n```';
+  for (const pending of [false, true]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [
+        '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The file content is required."}',
+        '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"Not specified."}',
+      ] },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'original' }, fixWrites: { 'a.txt': 'repaired' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [initiallyFailing, 'The previous file content defect remains.', pending ? '```counterexample new ambiguity\nthrow new Error("ambiguous");\n```\n[NO_ISSUES]' : '[NO_ISSUES]'] },
+    ]);
+    assert.strictEqual(result.card.guard.repairRounds, 1);
+    assert.strictEqual(result.card.guard.status, pending ? 'blocked' : 'passed');
+    assert.strictEqual(result.outcome['作者'], pending ? 'unresolved' : 'approved');
+    assert.strictEqual(result.card.counterexamples[0].afterRepair, 'passed');
+    assert.strictEqual(result.read('a.txt'), 'repaired');
+    if (pending) assert.ok(result.card.counterexamples.some((item: any) => item.title === 'new ambiguity' && item.confirmation === 'pending' && !item.afterRepair));
   }
 });
 

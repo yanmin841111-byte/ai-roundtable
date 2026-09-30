@@ -53,6 +53,7 @@ export interface Counterexample {
   title: string;
   source: string;
   rejection?: string[];
+  assessmentPending?: boolean;
 }
 
 export interface CounterexampleRun extends Counterexample {
@@ -144,6 +145,15 @@ export async function runCounterexample(
   try { await fs.promises.writeFile(file, ce.source, 'utf8'); }
   catch (error) { return { ...base, unusable: true, output: truncate(String((error as Error).message || error), CE_OUTPUT_MAX) }; }
   try {
+    const syntax = await runProcess(process.execPath, ['--check', file], { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: CE_ENV }, {
+      onProc: (child) => stop && stop(child),
+    });
+    if (cancelled()) return { ...base, unusable: true, output: tx(locale, 'ce.stopped') };
+    if (syntax.code !== 0 || syntax.spawnError || syntax.timedOut) {
+      const text = (syntax.stderr || String(syntax.spawnError || '')).trim();
+      return { ...base, unusable: true, code: syntax.code, timedOut: syntax.timedOut === true,
+        output: truncate(text.split(file).join(path.basename(file)), CE_OUTPUT_MAX) };
+    }
     let stdout = '';
     const r = await runProcess(process.execPath, [file], { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: CE_ENV }, {
       onProc: (child) => stop && stop(child),
@@ -183,10 +193,29 @@ export async function runCounterexamples(
 //   confirmed    跑出問題(非零結束):這一條是真的,拿去當關卡。
 //   unsubstantiated 竟然通過:審查者說得出問題,卻舉不出可重現的例子。不拿去逼人修,但要說出來。
 //   unusable     腳本本身沒跑成:兩邊都不算。
-export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' {
+export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'pending' {
   if (run.rejection?.length) return 'rejected';
+  if (run.assessmentPending) return 'pending';
   if (run.unusable) return 'unusable';
   return run.passed ? 'unsubstantiated' : 'confirmed';
+}
+
+export function parseCounterexampleVote(task: string, text: string): {
+  decision: 'retain_counterexample' | 'withdraw_counterexample' | 'uncertain_counterexample';
+  expectationContradictsRequirement: boolean;
+  requirement: string;
+  reason: string;
+} | undefined {
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(text.trim());
+  let value: unknown;
+  try { value = JSON.parse(fenced ? fenced[1] : text); } catch { return; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const { decision, expectationContradictsRequirement, requirement, reason } = value as Record<string, unknown>;
+  if (decision !== 'retain_counterexample' && decision !== 'withdraw_counterexample' && decision !== 'uncertain_counterexample') return;
+  if (expectationContradictsRequirement !== (decision === 'withdraw_counterexample')
+    || typeof requirement !== 'string' || typeof reason !== 'string' || !reason.trim()) return;
+  if ((decision !== 'uncertain_counterexample' && !requirement.trim()) || (requirement.trim() && !task.includes(requirement.trim()))) return;
+  return { decision, expectationContradictsRequirement, requirement: requirement.trim(), reason: reason.trim() };
 }
 
 export function counterexampleRejection(task: string, reviewers: string[], votes: Array<{ reviewerId: string; text: string; error?: string | null }>): string[] | undefined {
@@ -195,13 +224,9 @@ export function counterexampleRejection(task: string, reviewers: string[], votes
   for (const reviewer of reviewers) {
     const matches = votes.filter((vote) => vote.reviewerId === reviewer);
     if (matches.length !== 1 || matches[0].error) return;
-    let value: unknown;
-    try { value = JSON.parse(matches[0].text); } catch { return; }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-    const { decision, expectationContradictsRequirement, requirement, reason } = value as Record<string, unknown>;
-    if (decision !== 'withdraw_counterexample' || expectationContradictsRequirement !== true || typeof requirement !== 'string' || !requirement.trim() || !task.includes(requirement.trim())
-      || typeof reason !== 'string' || !reason.trim()) return;
-    reasons.push(`${reviewer}: ${requirement.trim()} - ${reason.trim()}`);
+    const vote = parseCounterexampleVote(task, matches[0].text);
+    if (vote?.decision !== 'withdraw_counterexample') return;
+    reasons.push(`${reviewer}: ${vote.requirement} - ${vote.reason}`);
   }
   return reasons;
 }
@@ -225,7 +250,7 @@ export function counterexampleNotes(runs: CounterexampleRun[], locale: TextLocal
 export function counterexampleStatus(runs: CounterexampleRun[], locale: TextLocale = 'zh-Hant'): string | null {
   if (!runs.length) return null;
   const items = runs.map((run) => {
-    const key = run.rejection?.length ? 'ce.statusRejected' : run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
+    const key = run.rejection?.length ? 'ce.statusRejected' : run.assessmentPending ? 'ce.statusPending' : run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
     return tx(locale, key, { title: run.title || tx(locale, 'ce.untitled'), output: run.rejection?.join('\n') || run.output || tx(locale, 'ce.noOutput') });
   });
   return tx(locale, 'ce.status', { list: items.join('\n') });
