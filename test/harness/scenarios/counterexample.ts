@@ -64,7 +64,7 @@ async function main() {
       // 判定方向:會失敗的那個才算確認,不會失敗的那個要被標成「不成立」。
       // 這兩條一起過,才證明反例真的被當成 node 腳本跑了。
       g.check(/1 \+ 1 應該是 2/.test(text), `會失敗的反例要被指名(${text.slice(0, 300)})`);
-      const confirmed = ce.find((m: any) => /真的重現了問題/.test(m.text));
+      const confirmed = ce.find((m: any) => /個反例失敗且仍保留為修復門檻/.test(m.text));
       g.check(!!confirmed && /1 \+ 1 應該是 2/.test(confirmed.text), '1+1 那個要列在「確認」裡');
       g.check(!!confirmed && !/0 \+ 0 應該是 0/.test(confirmed.text), '0+0 那個不可以被算成確認');
       const unsub = ce.find((m: any) => /舉不出可重現的例子/.test(m.text));
@@ -95,7 +95,7 @@ async function main() {
       return { text: text.slice(0, 400), files };
     },
   });
-  report('反例與語料庫', r);
+  if (!report('反例與語料庫', r)) process.exitCode = 1;
 
   // 磁碟上的事實:修好了,而且確認過的反例留進了專案的語料庫
   const sum = r.read('sum.js');
@@ -108,6 +108,7 @@ async function main() {
   // 反例腳本是一次性的,不可以留在工作目錄裡被當成成員的改動
   const leftovers = fs.readdirSync(r.workDir).filter((f: string) => f.startsWith('.roundtable-ce-'));
   console.log(leftovers.length === 0 ? '  ok - 反例腳本沒有留在工作目錄' : `  失敗:留下 ${leftovers.join(', ')}`);
+  if (!/a \+ b/.test(sum || '') || !titles.includes('1 + 1 應該是 2') || titles.includes('0 + 0 應該是 0') || leftovers.length) process.exitCode = 1;
 }
 
-main();
+main().catch((e) => { console.error(e); process.exitCode = 1; });

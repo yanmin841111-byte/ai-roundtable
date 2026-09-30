@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const { claudeArgs, codexArgs } = require('../src/adapters/builtin');
 const { cursorArgs } = require('../src/adapters/cursor');
-const { copilotArgs } = require('../src/adapters/copilot');
+const { copilotArgs, isCopilotInstallShim } = require('../src/adapters/copilot');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
@@ -69,7 +69,8 @@ test('送出去的參數(含短旗標與固定選項的值),安裝的 CLI 都支
   let ran = 0;
   for (const c of CASES) {
     if (!cache.has(c.help)) cache.set(c.help, helpText(c.help));
-    const help = cache.get(c.help) || null;
+    const raw = cache.get(c.help) || null;
+    const help = raw && !isCopilotInstallShim(raw) ? raw : null;
     if (!help) { console.log(`   (沒有安裝 ${c.help.split(' ')[0]},跳過 ${c.name})`); continue; }
     ran++;
     const bad = unsupported(help, c.args);

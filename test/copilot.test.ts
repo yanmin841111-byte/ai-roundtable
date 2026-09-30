@@ -255,6 +255,23 @@ test('installation check uses the selected binary and reports missing commands',
   assert.equal((await createCopilotAdapter({ bin: path.join(tmp, 'missing') }).check!()).ok, false);
 });
 
+test('the VS Code install shim does not count as an installed CLI', async () => {
+  const shim = path.join(tmp, 'copilot-shim');
+  fs.writeFileSync(shim, `#!/bin/sh\necho 'Cannot find GitHub Copilot CLI (https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli)' >&2\nprintf "Install GitHub Copilot CLI? ['y/N'] "\n`);
+  fs.chmodSync(shim, 0o755);
+  const result = await createCopilotAdapter({ bin: shim }).check!({ locale: 'en' });
+  assert.equal(result.ok, false);
+  assert.match(result.error!, /Command not found/);
+  const vscodeDir = path.join(tmp, 'github.copilot-chat', 'copilotCli');
+  fs.mkdirSync(vscodeDir, { recursive: true });
+  const vscodeShim = path.join(vscodeDir, 'copilot');
+  fs.writeFileSync(vscodeShim, '#!/bin/sh\nsleep 30\n');
+  fs.chmodSync(vscodeShim, 0o755);
+  const started = Date.now();
+  assert.equal((await createCopilotAdapter({ bin: vscodeShim }).check!()).ok, false);
+  assert.ok(Date.now() - started < 3000, 'the VS Code shim is rejected without waiting for its prompt');
+});
+
 test('live CLI: read-only tools, session resume and editing', { skip: process.env.COPILOT_LIVE !== '1', timeout: 180000 }, async () => {
   const cwd = fs.mkdtempSync(path.join(tmp, 'live-'));
   const marker = `copilot-${path.basename(cwd)}`;

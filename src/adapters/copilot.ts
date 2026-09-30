@@ -29,6 +29,9 @@ export function parseCopilotModels(output: string): Model[] {
   return [copilotModel('auto'), ...[...cheap, ...ids.filter((id) => !cheap.includes(id as never) && id !== 'auto')].map(copilotModel)];
 }
 
+// VS Code Copilot Chat 放進終端 PATH 的 `copilot` 是安裝引導替身:結束碼 0,但沒有真的 CLI。
+export const isCopilotInstallShim = (output: string) => /Cannot find GitHub Copilot CLI|Install GitHub Copilot CLI\?/.test(output);
+
 export function copilotArgs(
   agent: Pick<AgentConfig, 'canEdit' | 'model' | 'effort'>,
   ctx: { cwd?: string; sessionId?: string | null; newSessionId?: string | null; attachments?: Array<{ path: string | null }>; allowGit?: boolean; allowGitPush?: boolean },
@@ -188,7 +191,14 @@ export function createCopilotAdapter({ bin = 'copilot' }: { bin?: string } = {})
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     listModels: () => ({ models: fetched.models || fallback, source: fetched.models ? 'cli' : 'builtin' }),
     refreshModels,
-    check: (opts) => checkCli(bin, undefined, opts?.locale),
+    check: async (opts) => {
+      const notFound = { ok: false, error: tx(opts?.locale || 'zh-Hant', 'proc.notFound', { bin }) };
+      // 替身會等 y/N 回答到檢查逾時,先依位置排除
+      const where = await checkCli(bin, null, opts?.locale);
+      if (where.ok && /[\\/]github\.copilot-chat[\\/]/.test(where.version || '')) return notFound;
+      const result = await checkCli(bin, undefined, opts?.locale);
+      return result.ok && isCopilotInstallShim(result.version || '') ? notFound : result;
+    },
     usageShape: 'unknown',
     run,
   };
