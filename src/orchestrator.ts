@@ -959,13 +959,24 @@ class Orchestrator extends EventEmitter {
       this.setPhase({ code: 'discuss', round, maxRounds });
       this.system(this.text('sys.guardPlanRound', { round, max: maxRounds }), { tag: 'plan-review' });
       const group = crypto.randomUUID();
+      // 審核者只需要成員名稱;內部代號與比對欄位曾被誤判成分工矛盾
+      const shown = (value: Plan) => JSON.stringify({
+        ...value,
+        assignments: value.assignments.map(({ agent, _agentId, _agentName, ...item }) => ({ member: _agentName || agent, ...item })),
+      });
       const prompt = [
-        this.text('prompt.guardPlan', { task, plan: JSON.stringify(plan), mark: MARK(AGREED) }),
-        previous ? this.text('prompt.guardPlanHistory', { plan: JSON.stringify(previous.plan), notes: previous.notes }) : '',
+        this.text('prompt.guardPlan', { task, plan: shown(plan), mark: MARK(AGREED) }),
+        previous ? this.text('prompt.guardPlanHistory', { plan: shown(previous.plan), notes: previous.notes }) : '',
       ].filter(Boolean).join('\n\n');
-      const votes = await Promise.all(reviewers.map((agent) => this.turn(agent, prompt, {
-        phase: { code: 'discuss', round, maxRounds }, freshContext: true, hideAgreed: true, group,
-      })));
+      const votes = await Promise.all(reviewers.map(async (agent) => {
+        const vote = (clarification = '') => this.turn(agent, prompt + clarification, {
+          phase: { code: 'discuss', round, maxRounds }, freshContext: true, hideAgreed: true, group,
+        });
+        const first = await vote();
+        if (this.stopped || first.error || hasAgreement(first.text, AGREED) || !first.text.split('\n').some((line) => line.trim() === MARK(AGREED))) return first;
+        this.system(this.text('sys.guardPlanFormatRetry', { reviewer: agent.name }), { level: 'warn', tag: 'plan-review' });
+        return vote('\n\n' + this.text('prompt.guardPlanFormatRetry', { previous: first.text, mark: MARK(AGREED) }));
+      }));
       if (this.stopped) return null;
       if (votes.every((vote) => !vote.error && hasAgreement(vote.text, AGREED))) {
         this.system(this.text('sys.guardPlanPassed'), { tag: 'plan-approved' });
@@ -1018,6 +1029,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.execute', { cwd: lane || cwd }),
         lane ? this.text('prompt.executeLane') : null,
         effectiveCanEdit(agent) ? this.text('prompt.executeCanEdit') : this.text('prompt.executeReadOnly'),
+        effectiveCanEdit(agent) ? this.text('prompt.noScratch') : null,
         // 測試先行:測試已經寫好而且鎖住了,實作要讓它們通過
         lockedPaths.length ? this.text('prompt.executeTestFirst', { list: lockedPaths.join('、') }) : null,
         this.text('prompt.executeReport'),
@@ -1090,6 +1102,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.execute', { cwd }),
         this.text('prompt.relayStep', { n: i + 1, total: steps.length }),
         effectiveCanEdit(agent) ? this.text('prompt.executeCanEdit') : this.text('prompt.executeReadOnly'),
+        ...(effectiveCanEdit(agent) ? [this.text('prompt.noScratch')] : []),
         ...(handoffs.length ? ['', this.text('prompt.relayHandoff'), ...handoffs] : []),
         '',
         this.text(i + 1 < steps.length ? 'prompt.relayReport' : 'prompt.executeReport'),
@@ -1769,7 +1782,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.fix'),
         this.text(guarded ? 'prompt.guardFix' : 'prompt.fixLast'),
         evidenceOnly ? this.text('prompt.fixConfirmedOnly') : null,
-        readOnlyRevision ? this.text('prompt.guardReviseReadOnly') : null,
+        readOnlyRevision ? this.text('prompt.guardReviseReadOnly') : this.text('prompt.noScratch'),
         repairer !== it.agent ? this.text('prompt.repairHandoff', { name: it.agent.name }) : null,
         // 既有的測試檔在修復回合鎖起來:要讓測試通過請改實作。API 成員由檔案工具直接擋下,
         // CLI 成員擋不到,所以提示裡講明,真的改了也會在複查與結果卡上標出來

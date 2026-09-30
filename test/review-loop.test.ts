@@ -591,12 +591,50 @@ test('negative and quoted plan votes never authorize execution', async () => {
   for (const vote of ['Do not output [AGREED]', '尚未同意，請勿輸出 [AGREED]', '```text\n[AGREED]\n```']) {
     const result = await run([
       { id: 'lead', name: 'Lead', mode: 'guarded', canEdit: false },
-      { id: 'author', name: 'Author', task: 'Write a.txt', writes: { 'a.txt': 'done' }, planReview: [vote] },
+      { id: 'author', name: 'Author', task: 'Write a.txt', writes: { 'a.txt': 'done' }, planReview: [vote, vote] },
     ]);
     assert.strictEqual(result.read('a.txt'), null, vote);
     assert.strictEqual(result.card.guard.status, 'blocked', vote);
     assert.ok(!result.turns.some((turn) => turn.phase === 'execute'), vote);
+    assert.ok(result.prompts.Author.filter((prompt) => /【計畫審核】/.test(prompt)).length <= 2, vote);
   }
+});
+
+test('a standalone approval marker followed by prose gets exactly one clarification and never approves by itself', async () => {
+  const vote = '沒有阻斷項目。\n[AGREED]\n\n接著開始檢查現有程式。';
+  const approved = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審核者', canEdit: false, planReview: [vote, '確認沒有阻斷項目。\n[AGREED]'] },
+  ]);
+  const approvals = approved.prompts['審核者'].filter((prompt) => /【計畫審核】/.test(prompt));
+  assert.strictEqual(approvals.length, 2);
+  assert.match(approvals[1], /【格式澄清】[\s\S]*接著開始檢查現有程式/);
+  assert.ok(approved.orc.messages.some((message: any) => message.tag === 'plan-review' && /審核者/.test(message.text) && /澄清一次/.test(message.text)));
+  assert.strictEqual(approved.read('a.txt'), 'done');
+  assert.strictEqual(approved.card.guard.status, 'passed');
+  const blocked = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審核者', canEdit: false, planReview: [vote, vote, '[AGREED]'] },
+  ]);
+  assert.strictEqual(blocked.prompts['審核者'].filter((prompt) => /【計畫審核】/.test(prompt)).length, 2);
+  assert.strictEqual(blocked.read('a.txt'), null);
+  assert.strictEqual(blocked.card.guard.status, 'blocked');
+});
+
+test('plan reviewers see member names, existing-defect guidance and no internal routing fields', async () => {
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, planOutput: JSON.stringify({ summary: 's', assignments: [{ agent: 'A2', task: '修 a.txt' }], acceptance: ['a.txt 為 done'] }) },
+    { id: 'author', name: '作者', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審核者', canEdit: false },
+  ]);
+  const approval = result.prompts['審核者'].find((prompt) => /【計畫審核】/.test(prompt))!;
+  assert.match(approval, /"member":"作者"/);
+  assert.doesNotMatch(approval, /_agentId|_agentName|"A2"/);
+  assert.match(approval, /現有缺陷就是工作內容/);
+  assert.strictEqual(result.read('a.txt'), 'done');
+  assert.match(result.prompts['作者'].find((prompt) => /【執行】/.test(prompt))!, /暫存檔/);
 });
 
 test('多 AI 把關:停止計畫或成果審查後,不能繼續執行或修正', async () => {
