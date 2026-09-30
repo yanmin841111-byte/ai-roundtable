@@ -600,6 +600,19 @@ test('negative and quoted plan votes never authorize execution', async () => {
   }
 });
 
+test('reviewers are asked to probe stated rules; passing probes on approvals stay regression checks without blocking', async () => {
+  const probe = '```counterexample 需求:a.txt 內容為 done\nrequire("assert").strictEqual(require("fs").readFileSync("./a.txt", "utf8"), "done");\n```\n[NO_ISSUES]';
+  const result = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [probe] },
+  ]);
+  assert.match(result.prompts['審查者'].find((prompt) => /【交叉審查】/.test(prompt))!, /主動用可執行的反例檢驗需求/);
+  assert.strictEqual(result.card.guard.status, 'passed');
+  assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+  assert.deepStrictEqual(result.card.counterexamples.map((item: any) => item.confirmation), ['unsubstantiated']);
+});
+
 test('a standalone approval marker followed by prose gets exactly one clarification and never approves by itself', async () => {
   const vote = '沒有阻斷項目。\n[AGREED]\n\n接著開始檢查現有程式。';
   const approved = await run([

@@ -77,7 +77,7 @@ async function main() {
       const confirmed = ce.find((m: any) => /個反例失敗且仍保留為修復門檻/.test(m.text));
       g.check(!!confirmed && /1 \+ 1 應該是 2/.test(confirmed.text), '1+1 那個要列在「確認」裡');
       g.check(!!confirmed && !/0 \+ 0 應該是 0/.test(confirmed.text), '0+0 那個不可以被算成確認');
-      const unsub = ce.find((m: any) => /舉不出可重現的例子/.test(m.text));
+      const unsub = ce.find((m: any) => /沒有重現問題/.test(m.text));
       g.check(!!unsub && /0 \+ 0 應該是 0/.test(unsub.text), '0+0 那個要被標成不成立');
       const unusable = ce.find((m: any) => /反例本身跑不起來/.test(m.text));
       g.check(!!unusable && /invalid JavaScript probe/.test(unusable.text), 'invalid probe is reported as unusable');

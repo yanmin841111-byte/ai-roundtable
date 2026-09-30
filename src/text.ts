@@ -591,7 +591,7 @@ const ZH: Record<string, Entry> = {
   'sys.ceDroppedItem': '- {reviewer} 的「{title}」:{reason}',
   'sys.ceItem': '- 「{title}」(由 {reviewer} 提出)',
   'sys.ceConfirmed': 'app 執行後有 {n} 個反例失敗且仍保留為修復門檻。失敗本身不保證預期行為符合需求:\n{list}',
-  'sys.ceUnsubstantiated': '這幾個反例在現在這份程式上跑起來是通過的——審查者指出了問題,卻舉不出可重現的例子。它們不列入必須修復的項目:\n{list}',
+  'sys.ceUnsubstantiated': '這幾個反例在現在這份程式上跑起來是通過的,沒有重現問題。它們不列入必須修復的項目,只留作回歸檢查:\n{list}',
   'sys.ceUnusable': '這幾個反例本身跑不起來(語法錯誤、寫檔失敗、逾時或無法啟動),既不算問題確認了,也不算沒問題:\n{list}',
   'sys.corpusSaved': '{n} 個確認過的反例已存進專案的反例語料庫(目前共 {total} 個),放在工作目錄的 `.roundtable/counterexamples.json`。之後每次任務開始前都會再跑一遍。',
   'sys.corpusFull': '{n} 個反例沒有存進語料庫:已達上限。',
@@ -600,7 +600,7 @@ const ZH: Record<string, Entry> = {
   'sys.ratchetInherited': '語料庫裡累積下來的反例有幾道現在不過了。它們不會觸發自動回退——舊反例也可能測錯需求,或者這次的任務本來就是要改掉那個行為——但請確認一下:\n{list}',
   'sys.ratchetImproved': '這幾道關卡從不通過變成通過了:\n{list}',
   'prompt.fixCounterexampleRule': '上面的反例就是這一回合的驗收標準,而且由 app 自己執行:說「已經修好了」不算數,要讓那些腳本真的以結束碼 0 結束。不要修改反例本身。',
-  'prompt.reviewCounterexample': '如果你找到明確的錯誤,請盡量附上可以執行的反例:用 ```counterexample 開頭的程式碼區塊(開頭那行的 ``` 後面可以接一句話當標題),裡面寫一段獨立的 Node.js 腳本——require 或 import 這次改動的檔案,用具體的輸入呼叫它,行為不正確時丟出錯誤(例如 node:assert)。腳本會放在工作目錄最上層執行,相對路徑直接寫 ./檔名 即可。它在現在這份程式上必須失敗;app 會自己跑一次確認,跑不出問題的反例不算數。最多 3 個。沒把握寫出可執行的反例時,照常用文字說明就好。',
+  'prompt.reviewCounterexample': '請主動用可執行的反例檢驗需求,不必等讀到錯誤才寫。優先檢驗需求明文規定的輸入限制、驗證與錯誤處理(要拒絕什麼、邊界、格式、型別),並選用容易騙過表面檢查的輸入:缺少或空的欄位、錯誤型別、陣列或非一般物件(例如 Map、類別實例、null 原型物件)、與內建屬性同名的鍵(例如 __proto__、constructor、toString)、極端或非有限的數值。每個反例只檢驗一項需求,預期必須有需求依據,不要自創規格;標題寫出它檢驗的需求。反例會失敗才代表有問題,其他成員確認後才要求修復;通過的反例不算問題,會留作之後的回歸檢查。格式:用 ```counterexample 開頭的程式碼區塊(開頭那行的 ``` 後面可以接一句話當標題),裡面寫一段獨立的 Node.js 腳本——require 或 import 這次改動的檔案,用具體的輸入呼叫它,行為不正確時丟出錯誤(例如 node:assert)。腳本會放在工作目錄最上層執行,相對路徑直接寫 ./檔名 即可。app 會自己執行每個反例,結果以實際執行為準。最多 3 個。沒把握寫出可執行的反例時,照常用文字說明就好。',
 };
 
 const EN: Record<string, Entry> = {
@@ -1158,7 +1158,7 @@ const EN: Record<string, Entry> = {
   'sys.ceDroppedItem': '- "{title}" from {reviewer}: {reason}',
   'sys.ceItem': '- "{title}" (raised by {reviewer})',
   'sys.ceConfirmed': 'The app observed {n} failing counterexamples retained as repair gates. Failure alone does not establish that their expectations match the requirements:\n{list}',
-  'sys.ceUnsubstantiated': 'These counterexamples pass against the current code — the reviewer pointed at a problem but could not produce a reproducible case. They are not treated as things that must be fixed:\n{list}',
+  'sys.ceUnsubstantiated': 'These counterexamples pass against the current code and reproduce no problem. They are not treated as things that must be fixed, only kept as regression checks:\n{list}',
   'sys.ceUnusable': 'These counterexamples could not be run at all (syntax error, write failed, timed out, or would not start), so they neither confirm nor clear anything:\n{list}',
   'sys.corpusSaved': 'Saved {n} confirmed counterexample(s) to this project\'s corpus ({total} in total), at `.roundtable/counterexamples.json` in the working directory. They will run again before every future task.',
   'sys.corpusFull': '{n} counterexample(s) were not saved: the corpus is full.',
@@ -1167,7 +1167,7 @@ const EN: Record<string, Entry> = {
   'sys.ratchetInherited': 'Some counterexamples carried over from the corpus now fail. They do not trigger an automatic rollback — an old counterexample can test the wrong requirement, and this task may be deliberately changing that behaviour — but please check:\n{list}',
   'sys.ratchetImproved': 'These gates went from failing to passing:\n{list}',
   'prompt.fixCounterexampleRule': 'Those counterexamples are the acceptance criteria for this round, and the app runs them itself: saying "fixed" does not count — the scripts have to actually exit with code 0. Do not modify the counterexamples themselves.',
-  'prompt.reviewCounterexample': 'If you find a definite bug, attach an executable counterexample where you can: a fenced code block opening with ```counterexample (you may put a short title after the opening ```), containing a standalone Node.js script that requires or imports the changed file, calls it with concrete input, and throws when the behaviour is wrong (node:assert works well). The script runs from the top level of the working directory, so relative paths are just ./filename. It must fail against the current code; the app runs it once to check, and a counterexample that does not reproduce anything does not count. At most 3. If you cannot write an executable counterexample, plain prose is fine as before.',
+  'prompt.reviewCounterexample': 'Actively test the request with executable counterexamples instead of waiting until you spot a bug. Prioritise input limits, validation and error handling the request states (what must be rejected, boundaries, formats, types), using inputs that slip past shallow checks: missing or empty fields, wrong types, arrays or non-plain objects (such as Map, class instances, null-prototype objects), keys named like built-in properties (such as __proto__, constructor, toString), and extreme or non-finite numbers. Each counterexample checks one requirement; its expectation must be grounded in the request, not an invented rule, and its title names the requirement it checks. Only a failing counterexample indicates a problem, and it is repaired only after other members confirm it; a passing one is not an issue and is kept as a later regression check. Format: a fenced code block opening with ```counterexample (you may put a short title after the opening ```), containing a standalone Node.js script that requires or imports the changed file, calls it with concrete input, and throws when the behaviour is wrong (node:assert works well). The script runs from the top level of the working directory, so relative paths are just ./filename. The app runs every counterexample itself; the actual result decides. At most 3. If you cannot write an executable counterexample, plain prose is fine as before.',
 };
 
 const DICTS: Record<TextLocale, Record<string, Entry>> = { 'zh-Hant': ZH, en: EN };
