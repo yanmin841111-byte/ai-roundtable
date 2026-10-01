@@ -1440,7 +1440,7 @@ class Orchestrator extends EventEmitter {
   // 階段四:交叉審查
   // 兩份以上成果沿用執行者輪替;只有一份時由其他啟用成員(即使沒被分配到工作)擔任審查者,
   // 避免「一人執行、其他人只討論」的常見分工完全沒有品質關卡。
-  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = [], override?: ReviewPair[], verify?: VerifyResult, touchedTests: string[] = [], conflicts: Array<{ file: string; names: string[] }> = [], retryFailed = false, reconcileEvidence = false): Promise<Review[]> {
+  async reviewPhase(agents: AgentConfig[], reports: ExecReport[], changed: string[] | null = null, failed: ExecReport[] = [], override?: ReviewPair[], verify?: VerifyResult, touchedTests: string[] = [], conflicts: Array<{ file: string; names: string[] }> = [], retryFailed = false, reconcileEvidence: boolean | 'coverage' = false): Promise<Review[]> {
     const pairs = override || pickReviewPairs(agents, reports);
     if (pairs.length === 0) {
       if (reports.length >= 1) this.system(this.text('sys.noReviewer'), { level: 'warn' });
@@ -1499,7 +1499,7 @@ class Orchestrator extends EventEmitter {
         openLine ? this.text(openLine, vars) : null,
         target.failedWith ? this.text('prompt.reviewExecFailed', { name: target.agent.name, error: target.failedWith }) : null,
         reviewer.id === target.agent.id ? this.text('prompt.guardSelfReview', vars) : null,
-        target.previousNotes ? this.text(reconcileEvidence ? 'prompt.reviewEvidenceRecheck' : 'prompt.rereview', { name: target.agent.name, notes: target.previousNotes.join('\n\n') }) : null,
+        target.previousNotes ? this.text(reconcileEvidence === 'coverage' ? 'prompt.reviewCoverage' : reconcileEvidence ? 'prompt.reviewEvidenceRecheck' : 'prompt.rereview', { name: target.agent.name, notes: target.previousNotes.join('\n\n') }) : null,
         // app 自己跑出來的結果:通過與否都告訴審查者,它才知道哪些部分不必自己猜
         touchedTests.length ? this.text('prompt.reviewTests', { list: touchedTests.join('、') }) : null,
         conflicts.length ? this.text('prompt.reviewConflict', { list: conflicts.map((c) => c.file).join('、') }) : null,
@@ -1528,7 +1528,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.reviewMark', { mark: MARK(NO_ISSUES) }),
       ];
       const prompt = lines.filter((line): line is string => line !== null).join('\n');
-      const review: ReviewInfo = { target: target.agent.name, targetId: target.agent.id, access, scope: state, files, more, omitted, unreadable, ...(target.previousNotes ? { recheck: true } : {}) };
+      const review: ReviewInfo = { target: target.agent.name, targetId: target.agent.id, access, scope: state, files, more, omitted, unreadable, ...(reconcileEvidence === 'coverage' ? { coverage: true } : target.previousNotes ? { recheck: true } : {}) };
       // 乾淨 context:審查者只看需求、回報、實際改動與自動驗證,不看討論與執行過程。
       // 實驗 3 量到的誤判,多半是審查者照著執行者的說法複誦(見 eval/EXPERIMENTS.md)。
       const runReview = (clarification = '') => this.turn(reviewer, prompt + clarification, { phase: { code: 'review' }, hideAgreed: true, group, readOnlyFileTools: access === 'tool', ephemeral: content || undefined, review, freshContext: true });
@@ -1646,6 +1646,7 @@ class Orchestrator extends EventEmitter {
     const discovered: CounterexampleRun[] = [];
     const reconciledEvidence = new Set<string>();
     let extend = false;
+    let coverageDone = false;
     for (let round = 1; round <= GUARD_REPAIR_LIMIT && !this.stopped; round++) {
       if (round > GUARD_REPAIR_ROUNDS && !extend) break;
       extend = false;
@@ -1681,8 +1682,18 @@ class Orchestrator extends EventEmitter {
       result.reviewFailed = latestReviews.filter((review) => reviewVerdict(review.text, review.error) === 'failed');
       if (result.reviewFailed.length) break;
       const approved = latestReports.every((report) => allReviewsPassed(agents, report.agent.id, latestReviews));
-      const counterexampleFailed = latestCounterexamples.some((run) => classifyConfirmation(run) === 'confirmed' && !run.passed);
-      if (approved && (!latestVerify?.ran || latestVerify.ok) && !counterexampleFailed) break;
+      let counterexampleFailed = latestCounterexamples.some((run) => classifyConfirmation(run) === 'confirmed' && !run.passed);
+      if (approved && (!latestVerify?.ran || latestVerify.ok) && !counterexampleFailed) {
+        // 全員放行不代表需求裡的拒絕規則都被測過:宣告通過前對照需求補一次未覆蓋的反例
+        if (coverageDone || !coding || this.stopped) break;
+        coverageDone = true;
+        const known = new Set(latestCounterexamples.map((run) => run.id));
+        latestCounterexamples = await this.coveragePhase(agents, latestReports, latestReviews, latestCounterexamples, cwd, task, snapBefore, failed, latestVerify, touchedTests, conflicts, round);
+        discovered.push(...latestCounterexamples.filter((run) => !known.has(run.id)));
+        result.counterexamples = latestCounterexamples;
+        counterexampleFailed = latestCounterexamples.some((run) => classifyConfirmation(run) === 'confirmed' && !run.passed);
+        if (this.stopped || !counterexampleFailed) break;
+      }
       const failingBefore = latestCounterexamples.filter((run) => classifyConfirmation(run) === 'confirmed' && !run.passed).map((run) => run.id);
       if (round > GUARD_REPAIR_ROUNDS) this.system(this.text('sys.guardRepairExtend', { max: GUARD_REPAIR_LIMIT }), { tag: 'repair' });
       this.system(this.text('sys.guardRepairRound', { round, max: round > GUARD_REPAIR_ROUNDS ? GUARD_REPAIR_LIMIT : GUARD_REPAIR_ROUNDS }), { tag: 'repair' });
@@ -1724,6 +1735,24 @@ class Orchestrator extends EventEmitter {
       }
     }
     return result;
+  }
+
+  async coveragePhase(agents: AgentConfig[], reports: ExecReport[], reviews: Review[], runs: CounterexampleRun[], cwd: string, task: string, snapBefore: Awaited<ReturnType<typeof snapshotDir>>, failed: ExecReport[], verify: VerifyResult | undefined, touchedTests: string[], conflicts: Array<{ file: string; names: string[] }>, round: number): Promise<CounterexampleRun[]> {
+    const pairs: ReviewPair[] = [];
+    for (const target of reports.filter((report) => effectiveCanEdit(report.agent))) {
+      const candidates = reviews.filter((review) => review.target.agent.id === target.agent.id && review.reviewer.id !== target.agent.id);
+      const reviewer = candidates[(round - 1) % Math.max(1, candidates.length)]?.reviewer;
+      if (!reviewer) continue;
+      const probes = runs.filter((run) => run.targetId === target.agent.id && !run.unusable).slice(-20)
+        .map((run) => `- ${run.title || this.text('ce.untitled')} (${classifyConfirmation(run)}${run.passed ? ', passed' : ''})\n${run.source.slice(0, 400)}`);
+      pairs.push({ reviewer, target: { ...target, previousNotes: [probes.join('\n') || this.text('ce.noneRun')] } });
+    }
+    if (!pairs.length) return runs;
+    this.system(this.text('sys.guardCoverage'), { tag: 'counterexample' });
+    const changed = diffSnapshots(snapBefore, snapBefore && await snapshotDir(cwd));
+    const checked = await this.reviewPhase(agents, reports, changed, failed, pairs, verify, touchedTests, conflicts, false, 'coverage');
+    if (this.stopped) return runs;
+    return this.counterexamplePhase(checked, cwd, runs, `coverage-${round}-`, { agents, task });
   }
 
   async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string, counterexamples: CounterexampleRun[] = [], guarded = false): Promise<FixOutcome> {

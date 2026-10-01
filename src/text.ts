@@ -340,6 +340,9 @@ const ZH: Record<string, Entry> = {
   'prompt.executeReadOnly': '注意:你目前沒有修改檔案的權限,請把要做的內容以完整程式碼或步驟寫出來。',
   'prompt.executeReport': '完成後請簡潔回報:做了什麼、建立或修改了哪些檔案、有什麼未完成或需要別人配合的地方。',
   'prompt.noScratch': '為檢查而建立的暫存檔或輸出檔(例如重導向的錯誤輸出),結束前請刪除;不要留下需求以外的檔案。',
+  'ce.noneRun': '(尚未執行任何反例)',
+  'sys.guardCoverage': '各份成果已獲審查通過。宣告通過前,先請審查者對照需求,為還沒有反例檢驗過的規則補上反例。只做一次;補上的反例照常執行與評估。',
+  'prompt.reviewCoverage': '【覆蓋檢查】「{name}」的成果已獲審查通過,這是宣告通過前的最後一次覆蓋檢查。先逐條列出原始需求明文規定的輸入限制、驗證與拒絕規則、邊界與錯誤處理,再對照下列已實際執行過的反例,找出還沒有任何反例檢驗的規則,為它們各寫一個可執行反例。不要重寫已檢驗過的規則,也不要只用文字主張缺陷。全部規則都已覆蓋,或剩下的無法用腳本檢驗時,簡短說明即可。\n已執行的反例:\n{notes}',
   'prompt.failedItem': '- **{name}**:{error}',
 
   'prompt.review': '【交叉審查】請檢查「{name}」剛完成的工作。請實際打開相關檔案確認,不要只看回報。',
@@ -927,6 +930,9 @@ const EN: Record<string, Entry> = {
   'prompt.executeReadOnly': 'Note: you currently cannot edit files. Write out the full code or the steps for what needs to be done.',
   'prompt.executeReport': 'When done, report briefly: what you did, which files you created or changed, and anything unfinished or needing someone else.',
   'prompt.noScratch': 'Delete any scratch or output files you create for checks (such as redirected error output) before finishing; do not leave files the request does not call for.',
+  'ce.noneRun': '(no counterexamples run yet)',
+  'sys.guardCoverage': 'Every result has been approved. Before declaring the checks passed, reviewers compare the request against the counterexamples already run and add counterexamples for rules none has tested. This happens once; new counterexamples are run and assessed as usual.',
+  'prompt.reviewCoverage': 'Coverage check. The work of "{name}" has been approved; this is the last coverage check before the checks pass. First list each input limit, validation or rejection rule, boundary and error-handling rule the original request states, then compare them with the counterexamples already executed below and write one executable counterexample for each rule none of them tests. Do not repeat rules already tested, and do not claim defects in prose only. If every rule is covered, or the rest cannot be checked by a script, say so briefly.\nCounterexamples already executed:\n{notes}',
   'prompt.failedItem': '- **{name}**: {error}',
 
   'prompt.review': '[Cross-review] Check the work "{name}" just completed. Open the relevant files and verify; do not rely on the report alone.',

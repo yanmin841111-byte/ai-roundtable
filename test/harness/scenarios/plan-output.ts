@@ -104,8 +104,9 @@ async function guarded(locale: 'zh-Hant' | 'en', outcome: 'passed' | 'plan' | 'r
       const summary = message.taskSummary;
       app.check(summary.guard.status === (context.passes ? 'passed' : 'blocked'), '結果卡狀態與實際關卡一致');
       app.check(summary.guard.repairRounds === context.expectedRounds, '結果卡保存實際修正輪數');
-      const reviews = messages.filter((item: any) => item.review);
+      const reviews = messages.filter((item: any) => item.review && !item.review.coverage);
       app.check(reviews.length === context.expectedReviews, '審查與有限次重試的回合數正確');
+      app.check(messages.filter((item: any) => item.review?.coverage).length === (context.counterexample && context.passes ? 1 : 0), '只在宣告通過前做一次覆蓋檢查');
       if (context.outcome === 'format') {
         app.check(messages.filter((item: any) => item.tag === 'review-format').length === 1, '只要求一次格式澄清');
         app.check(reviews.some((item: any) => item.text === '`[NO_ISSUES]`' && item.review.verdict === 'issues'), '格式錯誤的原票保留');

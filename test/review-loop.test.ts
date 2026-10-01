@@ -21,7 +21,7 @@ type Member = { id: string; name: string; task?: string; writes?: Record<string,
   /** 任務開始前就存在的檔案 */ before?: Record<string, string>;
   /** 修復回合改用檔案工具寫(測試鎖擋的就是這條路);值是 { 路徑: 內容 } */ fixViaTools?: Record<string, string>;
   expectFiles?: Record<string, string>; execBarrier?: () => Promise<void>; discussion?: string; planReview?: string[];
-  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string; counterexampleReview?: string; counterexampleReviews?: string[] };
+  maxRounds?: number; stopOnPlan?: boolean; stopOnReview?: boolean; fixSequence?: Array<Record<string, string>>; acceptance?: string[]; allowGit?: boolean; planOutput?: string; counterexampleReview?: string; counterexampleReviews?: string[]; coverage?: string[] };
 async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-loop-'));
   for (const m of team) for (const [f, c] of Object.entries(m.before || {})) fs.writeFileSync(path.join(dir, f), c);
@@ -36,13 +36,14 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const plansReviewed: Record<string, number> = {};
   const repairsMade: Record<string, number> = {};
   const assessmentsMade: Record<string, number> = {};
+  const coverageGiven: Record<string, number> = {};
   adapters.setRegistry({ get: (id: string) => {
     const m = team.find((x) => x.id === id);
     if (!m) return null;
     return { id, type: m.api ? 'openai' : 'cli', supportsEdit: true, supportsResume: false, capabilities: { attachments: ['textInline'] },
       run: async (_a: any, ctx: any) => {
         (prompts[m.name] ||= []).push(ctx.prompt);
-        const phase = /【反例有效性】/.test(ctx.prompt) ? 'ce-validation' : /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
+        const phase = /【反例有效性】/.test(ctx.prompt) ? 'ce-validation' : /【覆蓋檢查】/.test(ctx.prompt) ? 'coverage' : /【寫測試】/.test(ctx.prompt) ? 'tests' : /【執行】/.test(ctx.prompt) ? 'execute' : /【交叉審查】/.test(ctx.prompt) ? 'review' : /【修復】/.test(ctx.prompt) ? 'repair' : 'other';
         turns.push({ who: m.name, phase, sessionId: ctx.sessionId ?? null, lockedPaths: ctx.lockedPaths || [] });
         gitAllowed.push(ctx.allowGit === true);
         pushAllowed.push(ctx.allowGitPush === true);
@@ -51,6 +52,10 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
           const index = assessmentsMade[m.name] = (assessmentsMade[m.name] || 0) + 1;
           const text = m.counterexampleReviews?.[index - 1] ?? m.counterexampleReview ?? '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The assertion follows the task."}';
           return text.startsWith('ERROR:') ? { text: '', error: text.slice(6) } : { text };
+        }
+        if (phase === 'coverage') {
+          const index = coverageGiven[m.name] = (coverageGiven[m.name] || 0) + 1;
+          return { text: m.coverage?.[index - 1] ?? '需求規則都已有反例檢驗。' };
         }
         if (/【分工】/.test(ctx.prompt)) return { text: team[0].planOutput ?? JSON.stringify(plan) };
         if (/【計畫審核】/.test(ctx.prompt)) {
@@ -129,7 +134,7 @@ async function run(team: Member[], after?: (orc: any) => Promise<void>) {
   const read = (file: string) => (files.has(file) ? files.get(file)! : null);
   const card = [...orc.messages].reverse().find((m: any) => m.tag === 'task-summary')?.taskSummary;
   const outcome = Object.fromEntries((card?.members || []).map((m: any) => [m.name, m.outcome]));
-  const reviews = orc.messages.filter((m: any) => m.review);
+  const reviews = orc.messages.filter((m: any) => m.review && !m.review.coverage);
   const summaryPrompt = (prompts[team[0].name] || []).find((p) => /【總結】/.test(p)) || '';
   return { outcome, card, reviews, prompts, summaryPrompt, turns, editableTurns, gitAllowed, pushAllowed, orc, read, retained };
 }
@@ -633,6 +638,48 @@ test('guarded coding tasks review file work only; read-only reports are advisory
     assert.strictEqual(Object.values(result.prompts).flat().some((prompt) => /【交叉審查】/.test(prompt) && prompt.includes('「規劃者」剛完成')), !coding);
     assert.strictEqual(result.read('a.txt'), 'done');
   }
+});
+
+test('coverage check runs once before guarded approval, repairs confirmed gaps and stays out of other paths', async () => {
+  const gap = '```counterexample 需求:a.txt 內容為 done\nrequire("assert").strictEqual(require("fs").readFileSync("./a.txt", "utf8"), "done");\n```';
+  const coverageTurns = (result: any) => result.turns.filter((turn: any) => turn.phase === 'coverage').length;
+
+  const found = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, coverage: [gap] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'draft' }, fixWrites: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, coverage: [gap] },
+  ]);
+  assert.strictEqual(coverageTurns(found), 1);
+  assert.ok(found.orc.messages.some((message: any) => message.tag === 'counterexample' && /補上反例/.test(message.text)));
+  assert.ok(found.card.counterexamples.some((item: any) => item.confirmation === 'confirmed' && item.afterRepair === 'passed'));
+  assert.strictEqual(found.card.guard.repairRounds, 1);
+  assert.strictEqual(found.card.guard.status, 'passed');
+  assert.strictEqual(found.read('a.txt'), 'done');
+
+  const covered = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, coverage: [gap] },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, coverage: [gap] },
+  ]);
+  assert.strictEqual(coverageTurns(covered), 1);
+  assert.strictEqual(covered.card.guard.status, 'passed');
+  assert.strictEqual(covered.card.guard.repairRounds, 0);
+  assert.deepStrictEqual(covered.card.counterexamples.map((item: any) => item.confirmation), ['unsubstantiated']);
+
+  const general = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, workStyle: 'general' },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, coverage: [gap] },
+  ]);
+  assert.strictEqual(coverageTurns(general), 0);
+
+  const blocked = await run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' } },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: Array(6).fill('仍有問題'), coverage: [gap] },
+  ]);
+  assert.strictEqual(coverageTurns(blocked), 0);
+  assert.strictEqual(blocked.card.guard.status, 'blocked');
 });
 
 test('reviewers are asked to probe stated rules; passing probes on approvals stay regression checks without blocking', async () => {

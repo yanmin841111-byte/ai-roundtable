@@ -467,6 +467,7 @@ export interface ReviewInfo {
   unreadable: string[]; // 列了、但讀不到內容的檔案(已刪除、不是文字檔、沙箱拒絕)
   verdict?: ReviewVerdict; // 回合結束後才有
   recheck?: boolean;       // 修復後的複查
+  coverage?: boolean;      // 宣告通過前的覆蓋檢查:只補反例,不是審查結論
 }
 
 // ---------- 選項式提問 ----------

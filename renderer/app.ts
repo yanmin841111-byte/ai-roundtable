@@ -2385,8 +2385,9 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   // 審查結論改用徽章表示,[NO_ISSUES] 這個給程式看的標記不顯示
   const text = m.review ? Marker.stripMarker(Marker.stripAgreement(m.text || '', 'AGREED'), 'NO_ISSUES') : Marker.stripAgreement(m.text || '', 'AGREED');
   // 結論與流程(要不要進修復回合)是同一個判斷,由主程序寫進訊息,介面不自己猜
-  const verdict = m.review && m.status !== 'running' ? m.review.verdict : undefined;
-  const verdictBadge = (m.review?.recheck ? `<span class="badge recheck" title="${escapeHtml(t('review.recheckTitle'))}">${escapeHtml(t('review.recheck'))}</span>` : '')
+  const verdict = m.review && !m.review.coverage && m.status !== 'running' ? m.review.verdict : undefined;
+  const verdictBadge = (m.review?.coverage ? `<span class="badge recheck" title="${escapeHtml(t('review.coverageTitle'))}">${escapeHtml(t('review.coverage'))}</span>` : '')
+    + (m.review?.recheck ? `<span class="badge recheck" title="${escapeHtml(t('review.recheckTitle'))}">${escapeHtml(t('review.recheck'))}</span>` : '')
     + (verdict
       ? `<span class="badge verdict ${escapeHtml(verdict)}" title="${escapeHtml(t(`review.verdictTitle.${verdict}`))}">${escapeHtml(t(`review.verdict.${verdict}`))}</span>`
       : '');
