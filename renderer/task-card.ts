@@ -95,7 +95,7 @@ function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary
   }
   for (const item of summary.counterexamples) {
     const title = item.title || t('task.counterexamples.untitled');
-    const after = item.confirmation === 'rejected' || item.confirmation === 'pending' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
+    const after = item.confirmation === 'rejected' || item.confirmation === 'unspecified' || item.confirmation === 'pending' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
     const detail = [
       item.rejection?.join('\n') || '',
       item.output ? `${t('task.counterexamples.initialOutput')}\n${item.output}` : '',

@@ -369,6 +369,26 @@ test('assessment clarification is bounded, read-only and cannot turn uncertainty
   }
 });
 
+test('a probe every assessor finds unspecified is reference only: no repair, gate, corpus entry or block', async () => {
+  const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"The request does not specify sparse arrays."}';
+  const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"Required."}';
+  const probe = '```counterexample sparse arrays\nrequire("assert").strictEqual(1, 2);\n```\n[NO_ISSUES]';
+  for (const proposer of [uncertain, retained]) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReview: uncertain },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, fixWrites: { 'a.txt': 'must not write' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [probe], counterexampleReview: proposer },
+    ]);
+    const unspecified = proposer === uncertain;
+    assert.strictEqual(result.card.counterexamples[0].confirmation, unspecified ? 'unspecified' : 'pending');
+    assert.strictEqual(result.card.guard.status, unspecified ? 'passed' : 'blocked');
+    assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
+    assert.strictEqual(result.read('a.txt'), 'done');
+    assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
+    if (unspecified) assert.ok(result.orc.messages.some((message: any) => /需求沒有規定/.test(message.text) && /sparse arrays/.test(message.text)));
+  }
+});
+
 test('confirmed evidence can be repaired alongside pending evidence without forwarding disputed repair instructions', async () => {
   const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The required output is incorrect."}';
   const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"This behavior is not specified."}';
@@ -376,7 +396,7 @@ test('confirmed evidence can be repaired alongside pending evidence without forw
   const result = await run([
     { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
     { id: 'author', name: '作者', task: '寫 a.txt 與 b.txt', writes: { 'a.txt': 'original', 'b.txt': 'preserved' }, fixWrites: { 'a.txt': 'repaired' } },
-    { id: 'reviewer', name: '審查者', canEdit: false, review: [review, '[NO_ISSUES]'], counterexampleReviews: [retained, uncertain] },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [review, '[NO_ISSUES]'], counterexampleReviews: [retained, retained] },
   ]);
   assert.strictEqual(result.card.guard.repairRounds, 1);
   assert.strictEqual(result.card.guard.status, 'blocked');
@@ -404,7 +424,7 @@ test('restricted repairs honor deferral while still verifying writes and preserv
     const result = await run([
       { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
       { id: 'author', name: '作者', task: '寫 value.js', writes: { 'value.js': 'module.exports = 1;' }, fixWrites: corrupt ? { 'value.js': 'module.exports = ;' } : {}, fixReport: 'Cannot isolate this safely.\n[REPAIR_DEFERRED]' },
-      { id: 'reviewer', name: '審查者', canEdit: false, review: [review], counterexampleReviews: [retained, uncertain] },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [review], counterexampleReviews: [retained, retained] },
     ]);
     assert.strictEqual(result.card.guard.repairRounds, 1);
     assert.strictEqual(result.turns.filter((turn) => turn.phase === 'repair').length, 1);

@@ -182,7 +182,7 @@ async function partitionCases(live = false) {
         members: [
           scriptedMember({ id: 'lead', name: 'Lead', canEdit: false, plan: { summary: sample.name, assignments: [{ agent: 'A2', task }], acceptance: [sample.task] }, counterexampleReviews: [retained, uncertain] }),
           live ? { id: 'author', name: 'Author', cli: 'copilot', model, canEdit: true } : scriptedMember({ id: 'author', name: 'Author', canEdit: true, writes: { [sample.file]: sample.before }, report: 'Initial implementation ready', fixWrites: { [sample.file]: sample.after }, fixReport: 'Corrected only the confirmed behavior.' }),
-          scriptedMember({ id: 'reviewer', name: 'Reviewer', canEdit: false, review, recheck: '[NO_ISSUES]', counterexampleReviews: [retained, uncertain] }),
+          scriptedMember({ id: 'reviewer', name: 'Reviewer', canEdit: false, review, recheck: '[NO_ISSUES]', counterexampleReviews: [retained, retained] }),
         ],
         files: { [sample.file]: sample.before, 'policy.json': '{"style":"existing"}\n' },
         git: true,

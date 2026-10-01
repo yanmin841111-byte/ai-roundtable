@@ -16,7 +16,7 @@ import { snapshotDir, diffSnapshots } from './snapshot';
 import { captureBaseline, changesSince, directoryIdentity, revertToBaseline } from './task-changes';
 import { verificationRevision, verifyChanges, verifyNotes } from './verify';
 // 反例與棘輪:把審查從「意見」變成可執行的證據,再用它守住「不准變糟」(見 counterexample.ts / ratchet.ts)
-import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexampleRejection, parseCounterexampleVote, type Counterexample, type CounterexampleRun } from './counterexample';
+import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexampleRejection, counterexampleUnspecified, parseCounterexampleVote, type Counterexample, type CounterexampleRun } from './counterexample';
 import { gateState, decideRatchet, describeChanges, type GateState } from './ratchet';
 import { loadCorpus, additions, saveCorpus, corpusCounterexamples } from './corpus';
 import { readProjectRules } from './project-rules';
@@ -486,9 +486,9 @@ class Orchestrator extends EventEmitter {
         title: run.title,
         reviewer: run.reviewerName,
         confirmation: classifyConfirmation(run),
-        ...(repaired && !run.rejection?.length && !run.assessmentPending ? { afterRepair: repaired.unusable ? 'unusable' as const : repaired.passed ? 'passed' as const : 'failed' as const } : {}),
+        ...(repaired && !run.rejection?.length && !run.unspecified?.length && !run.assessmentPending ? { afterRepair: repaired.unusable ? 'unusable' as const : repaired.passed ? 'passed' as const : 'failed' as const } : {}),
         output: run.output,
-        ...(run.rejection?.length ? { rejection: run.rejection } : {}),
+        ...(run.rejection?.length || run.unspecified?.length ? { rejection: run.rejection || run.unspecified } : {}),
         ...(repaired ? { repairOutput: repaired.output } : {}),
       };
     });
@@ -1262,8 +1262,8 @@ class Orchestrator extends EventEmitter {
     if (dropped.length) this.system(this.text('sys.ceDropped', { list: dropped.join('\n') }), { level: 'warn', tag: 'counterexample' });
     if (!list.length || this.stopped) return [];
     this.setPhase({ code: 'verify' });
-    const retained = carry.filter((run) => run.rejection?.length || run.assessmentPending);
-    const runs = await runCounterexamples(cwd, list.filter((item) => !item.rejection?.length && !item.assessmentPending), this.locale, this.trackProc, () => this.stopped);
+    const retained = carry.filter((run) => run.rejection?.length || run.unspecified?.length || run.assessmentPending);
+    const runs = await runCounterexamples(cwd, list.filter((item) => !item.rejection?.length && !item.unspecified?.length && !item.assessmentPending), this.locale, this.trackProc, () => this.stopped);
     runs.push(...retained);
     const carried = new Set(carry.map((run) => run.id));
     if (assessment) for (const run of runs) {
@@ -1285,9 +1285,11 @@ class Orchestrator extends EventEmitter {
       }));
       if (!this.stopped) {
         run.rejection = counterexampleRejection(assessment.task, reviewers.map((agent) => agent.id), votes);
-        run.assessmentPending = !run.rejection && !votes.every((vote) => !vote.error && parseCounterexampleVote(assessment.task, vote.text)?.decision === 'retain_counterexample');
+        run.unspecified = run.rejection ? undefined : counterexampleUnspecified(assessment.task, reviewers.map((agent) => agent.id), votes);
+        run.assessmentPending = !run.rejection && !run.unspecified && !votes.every((vote) => !vote.error && parseCounterexampleVote(assessment.task, vote.text)?.decision === 'retain_counterexample');
       }
       if (run.rejection) this.system(this.text('sys.ceRejected', { title: run.title || this.text('ce.untitled'), reasons: run.rejection.join('\n'), output: run.output }), { tag: 'counterexample' });
+      if (run.unspecified) this.system(this.text('sys.ceUnspecified', { title: run.title || this.text('ce.untitled'), reasons: run.unspecified.join('\n') }), { tag: 'counterexample' });
       if (run.assessmentPending) this.system(this.text('sys.cePending', { title: run.title || this.text('ce.untitled') }), { level: 'warn', tag: 'counterexample' });
     }
     this.reportCounterexamples(runs.filter((run) => !run.id.startsWith('corpus-')));
@@ -1644,7 +1646,7 @@ class Orchestrator extends EventEmitter {
       const stale = pending ? [] : latestReviews.filter((review) => {
         if (reviewVerdict(review.text, review.error) !== 'issues') return false;
         const evidence = latestCounterexamples.filter((run) => run.reviewerId === review.reviewer.id && run.targetId === review.target.agent.id
-          && ['rejected', 'unsubstantiated', 'unusable'].includes(classifyConfirmation(run))
+          && ['rejected', 'unspecified', 'unsubstantiated', 'unusable'].includes(classifyConfirmation(run))
           && !reconciledEvidence.has(`${run.id}:${classifyConfirmation(run)}`));
         for (const run of evidence) reconciledEvidence.add(`${run.id}:${classifyConfirmation(run)}`);
         return evidence.length > 0;
@@ -1803,7 +1805,7 @@ class Orchestrator extends EventEmitter {
         this.text('prompt.fixTask', { task: it.task }),
         '',
         this.text('prompt.fixNotes', { notes: it.notes.join('\n\n') }),
-        counterexampleStatus(counterexamples.filter((run) => run.rejection?.length), this.locale),
+        counterexampleStatus(counterexamples.filter((run) => run.rejection?.length || run.unspecified?.length), this.locale),
       ].filter((line): line is string => line !== null).join('\n');
       // 修復回合一樣要給檔案工具,閘門與執行回合相同(能改檔 + 有人能審查)。
       // 少了這一行的後果實測過:API 成員在修復回合只能「說」怎麼修——模型正確診斷出

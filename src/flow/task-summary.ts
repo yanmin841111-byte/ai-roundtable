@@ -60,7 +60,7 @@ function counterexamplesText(summary: TaskSummary, locale: TextLocale): string {
   if (!summary.counterexamples.length) return tx(locale, 'sys.taskSummary.counterexamplesNone');
   const lines = [tx(locale, 'sys.taskSummary.counterexamples')];
   for (const item of summary.counterexamples) {
-    const after = item.confirmation === 'rejected' || item.confirmation === 'pending' ? tx(locale, 'sys.taskSummary.counterexample.excluded') : item.afterRepair ? tx(locale, `sys.taskSummary.counterexample.after.${item.afterRepair}`) : tx(locale, 'sys.taskSummary.counterexample.notRetested');
+    const after = item.confirmation === 'rejected' || item.confirmation === 'unspecified' || item.confirmation === 'pending' ? tx(locale, 'sys.taskSummary.counterexample.excluded') : item.afterRepair ? tx(locale, `sys.taskSummary.counterexample.after.${item.afterRepair}`) : tx(locale, 'sys.taskSummary.counterexample.notRetested');
     lines.push(tx(locale, 'sys.taskSummary.counterexample.item', {
       reviewer: item.reviewer,
       title: item.title || tx(locale, 'ce.untitled'),
@@ -109,7 +109,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     .slice(0, TASK_SUMMARY_FILES)
     .map((f: any) => ({ path: f.path, status: f.status, added: num(f.added), removed: num(f.removed) }));
   const verification = restoreVerification(raw.verification);
-  const confirmations = new Set(['confirmed', 'unsubstantiated', 'unusable', 'rejected', 'pending']);
+  const confirmations = new Set(['confirmed', 'unsubstantiated', 'unusable', 'rejected', 'unspecified', 'pending']);
   const afterRepairStatuses = new Set(['passed', 'failed', 'unusable']);
   const counterexamples = Array.isArray(raw.counterexamples) ? raw.counterexamples
     .filter((item: any) => item && typeof item.title === 'string' && typeof item.reviewer === 'string' && confirmations.has(item.confirmation) && typeof item.output === 'string')
@@ -117,7 +117,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
       title: item.title,
       reviewer: item.reviewer,
       confirmation: item.confirmation,
-      ...(!['rejected', 'pending'].includes(item.confirmation) && afterRepairStatuses.has(item.afterRepair) ? { afterRepair: item.afterRepair } : {}),
+      ...(!['rejected', 'unspecified', 'pending'].includes(item.confirmation) && afterRepairStatuses.has(item.afterRepair) ? { afterRepair: item.afterRepair } : {}),
       output: item.output.slice(0, TASK_COUNTEREXAMPLE_OUTPUT),
       ...(Array.isArray(item.rejection) ? { rejection: item.rejection.filter((reason: unknown) => typeof reason === 'string').slice(0, 20).map((reason: string) => reason.slice(0, TASK_COUNTEREXAMPLE_OUTPUT)) } : {}),
       ...(typeof item.repairOutput === 'string' ? { repairOutput: item.repairOutput.slice(0, TASK_COUNTEREXAMPLE_OUTPUT) } : {}),
