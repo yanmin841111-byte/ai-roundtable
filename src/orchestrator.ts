@@ -34,6 +34,8 @@ import { discardMemberWorkspaces, mergeMemberWorkspaces, prepareMemberWorkspaces
 import type { PreparedWorkspaces } from './worktrees';
 
 const AGREED = 'AGREED';
+const GUARD_REPAIR_ROUNDS = 3;
+const GUARD_REPAIR_LIMIT = 5;
 const ASK = 'ASK';
 const MARK = (t: string) => `[${t}]`;
 const READ_ONLY_PHASES = new Set(['discuss', 'divide', 'review', 'summary']);
@@ -1633,7 +1635,10 @@ class Orchestrator extends EventEmitter {
     const repaired = new Map<string, NonNullable<FixOutcome['repaired']>[number]>();
     const discovered: CounterexampleRun[] = [];
     const reconciledEvidence = new Set<string>();
-    for (let round = 1; round <= 3 && !this.stopped; round++) {
+    let extend = false;
+    for (let round = 1; round <= GUARD_REPAIR_LIMIT && !this.stopped; round++) {
+      if (round > GUARD_REPAIR_ROUNDS && !extend) break;
+      extend = false;
       const pending = latestCounterexamples.some((run) => run.assessmentPending);
       if (pending && !latestCounterexamples.some((run) => classifyConfirmation(run) === 'confirmed' && latestReports.some((report) => report.agent.id === run.targetId && effectiveCanEdit(report.agent)))) break;
       const stale = pending ? [] : latestReviews.filter((review) => {
@@ -1668,7 +1673,9 @@ class Orchestrator extends EventEmitter {
       const approved = latestReports.every((report) => allReviewsPassed(agents, report.agent.id, latestReviews));
       const counterexampleFailed = latestCounterexamples.some((run) => classifyConfirmation(run) === 'confirmed' && !run.passed);
       if (approved && (!latestVerify?.ran || latestVerify.ok) && !counterexampleFailed) break;
-      this.system(this.text('sys.guardRepairRound', { round, max: 3 }), { tag: 'repair' });
+      const failingBefore = latestCounterexamples.filter((run) => classifyConfirmation(run) === 'confirmed' && !run.passed).map((run) => run.id);
+      if (round > GUARD_REPAIR_ROUNDS) this.system(this.text('sys.guardRepairExtend', { max: GUARD_REPAIR_LIMIT }), { tag: 'repair' });
+      this.system(this.text('sys.guardRepairRound', { round, max: round > GUARD_REPAIR_ROUNDS ? GUARD_REPAIR_LIMIT : GUARD_REPAIR_ROUNDS }), { tag: 'repair' });
       const next = await this.fixPhase(latestReviews, latestReports, latestVerify, touchedTests, cwd, latestCounterexamples, true);
       for (const repair of next.repaired || []) repaired.set(repair.item.agent.id, repair);
       result = { ...result, ...next, repaired: [...repaired.values()], rereviews: latestReviews, repairRounds: round };
@@ -1688,6 +1695,9 @@ class Orchestrator extends EventEmitter {
       result.reviewFailed = latestReviews.filter((review) => reviewVerdict(review.text, review.error) === 'failed');
       const regression = decideRatchet({ execute: gateState(verify, counterexamples), afterFix: gateState(latestVerify, latestCounterexamples), canRevertRepair: !!this.fixBaseline });
       if (next.fixFailed.length || regression.scope !== 'none' || next.repaired?.some((repair) => hasMarker(repair.report, 'REPAIR_DEFERRED'))) break;
+      // 只有可執行的進展才延長:舊的已確認反例全部修好,剩下的都是這一輪新確認的
+      const failingNow = latestCounterexamples.filter((run) => classifyConfirmation(run) === 'confirmed' && !run.passed).map((run) => run.id);
+      extend = failingBefore.length > 0 && failingNow.length > 0 && !failingNow.some((id) => failingBefore.includes(id));
     }
     result.discoveredCounterexamples = discovered;
     for (const pending of latestCounterexamples.filter((run) => run.assessmentPending)) {

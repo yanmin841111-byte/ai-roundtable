@@ -126,7 +126,7 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     startedAt: num(raw.startedAt),
     endedAt: num(raw.endedAt),
     ...(raw.guard && ['plan', 'review'].includes(raw.guard.stage) && ['passed', 'blocked'].includes(raw.guard.status)
-      ? { guard: { stage: raw.guard.stage, status: raw.guard.stage === 'plan' ? 'blocked' : raw.guard.status, reviewers: Math.max(2, num(raw.guard.reviewers)), repairRounds: Math.min(3, num(raw.guard.repairRounds)) } as NonNullable<TaskSummary['guard']> } : {}),
+      ? { guard: { stage: raw.guard.stage, status: raw.guard.stage === 'plan' ? 'blocked' : raw.guard.status, reviewers: Math.max(2, num(raw.guard.reviewers)), repairRounds: Math.min(5, num(raw.guard.repairRounds)) } as NonNullable<TaskSummary['guard']> } : {}),
     members,
     files,
     moreFiles: num(raw.moreFiles),

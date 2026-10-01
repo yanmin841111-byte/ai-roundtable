@@ -613,6 +613,33 @@ test('reviewers are asked to probe stated rules; passing probes on approvals sta
   assert.deepStrictEqual(result.card.counterexamples.map((item: any) => item.confirmation), ['unsubstantiated']);
 });
 
+test('repair rounds extend only while each round fixes every confirmed probe and new ones appear, capped at five', async () => {
+  const probe = (n: number) => `\`\`\`counterexample 分工 ${n}\nrequire("assert").ok(require("fs").readFileSync("./a.txt", "utf8").includes("${n}"));\n\`\`\`\n[NO_ISSUES]`;
+  const attempt = async (probes: number, fixes: string[]) => run([
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+    { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'v' }, fixSequence: fixes.map((content) => ({ 'a.txt': content })) },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [...Array.from({ length: probes }, (_, i) => probe(i + 1)), '[NO_ISSUES]'] },
+  ]);
+  const extended = (result: any) => result.orc.messages.some((message: any) => /依實際進展延長修正/.test(message.text));
+  const cumulative = (n: number) => Array.from({ length: n }, (_, i) => 'v' + '123456'.slice(0, i + 1));
+
+  const finished = await attempt(4, cumulative(4));
+  assert.strictEqual(finished.card.guard.status, 'passed');
+  assert.strictEqual(finished.card.guard.repairRounds, 4);
+  assert.ok(extended(finished));
+  assert.strictEqual(finished.read('a.txt'), 'v1234');
+
+  const capped = await attempt(7, cumulative(6));
+  assert.strictEqual(capped.card.guard.status, 'blocked');
+  assert.strictEqual(capped.card.guard.repairRounds, 5);
+  assert.strictEqual(capped.turns.filter((turn) => turn.phase === 'repair').length, 5);
+
+  const stuck = await attempt(1, ['a', 'b', 'c', 'd', 'e']);
+  assert.strictEqual(stuck.card.guard.status, 'blocked');
+  assert.strictEqual(stuck.card.guard.repairRounds, 3);
+  assert.ok(!extended(stuck));
+});
+
 test('a standalone approval marker followed by prose gets exactly one clarification and never approves by itself', async () => {
   const vote = '沒有阻斷項目。\n[AGREED]\n\n接著開始檢查現有程式。';
   const approved = await run([
