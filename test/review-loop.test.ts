@@ -369,23 +369,23 @@ test('assessment clarification is bounded, read-only and cannot turn uncertainty
   }
 });
 
-test('a probe every assessor finds unspecified is reference only: no repair, gate, corpus entry or block', async () => {
+test('unspecified or proposer-only probes are reference only; independent support keeps a dispute blocking', async () => {
   const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"The request does not specify sparse arrays."}';
   const retained = '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"Required."}';
   const probe = '```counterexample sparse arrays\nrequire("assert").strictEqual(1, 2);\n```\n[NO_ISSUES]';
-  for (const proposer of [uncertain, retained]) {
+  for (const [proposer, other, expected] of [[uncertain, uncertain, 'unspecified'], [retained, uncertain, 'uncorroborated'], [uncertain, retained, 'pending']]) {
     const result = await run([
-      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReview: uncertain },
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReview: other },
       { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, fixWrites: { 'a.txt': 'must not write' } },
       { id: 'reviewer', name: '審查者', canEdit: false, review: [probe], counterexampleReview: proposer },
     ]);
-    const unspecified = proposer === uncertain;
-    assert.strictEqual(result.card.counterexamples[0].confirmation, unspecified ? 'unspecified' : 'pending');
-    assert.strictEqual(result.card.guard.status, unspecified ? 'passed' : 'blocked');
+    assert.strictEqual(result.card.counterexamples[0].confirmation, expected);
+    assert.strictEqual(result.card.guard.status, expected === 'pending' ? 'blocked' : 'passed');
     assert.ok(!result.turns.some((turn) => turn.phase === 'repair'));
     assert.strictEqual(result.read('a.txt'), 'done');
     assert.strictEqual(result.read('.roundtable/counterexamples.json'), null);
-    if (unspecified) assert.ok(result.orc.messages.some((message: any) => /需求沒有規定/.test(message.text) && /sparse arrays/.test(message.text)));
+    if (expected === 'unspecified') assert.ok(result.orc.messages.some((message: any) => /需求沒有規定/.test(message.text) && /sparse arrays/.test(message.text)));
+    if (expected === 'uncorroborated') assert.ok(result.orc.messages.some((message: any) => message.level === 'warn' && /只有提出者主張保留/.test(message.text) && /sparse arrays/.test(message.text)));
   }
 });
 
@@ -394,9 +394,9 @@ test('confirmed evidence can be repaired alongside pending evidence without forw
   const uncertain = '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"This behavior is not specified."}';
   const review = 'DISPUTED_REPAIR_INSTRUCTION: change b.txt to disputed.\n```counterexample required output\nrequire("assert").strictEqual(require("fs").readFileSync("a.txt", "utf8"), "repaired");\n```\n```counterexample unspecified behavior\nrequire("fs").appendFileSync("probe-count.txt", "ran\\n");\nrequire("assert").strictEqual(require("fs").readFileSync("b.txt", "utf8"), "disputed");\n```';
   const result = await run([
-    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
+    { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, retained] },
     { id: 'author', name: '作者', task: '寫 a.txt 與 b.txt', writes: { 'a.txt': 'original', 'b.txt': 'preserved' }, fixWrites: { 'a.txt': 'repaired' } },
-    { id: 'reviewer', name: '審查者', canEdit: false, review: [review, '[NO_ISSUES]'], counterexampleReviews: [retained, retained] },
+    { id: 'reviewer', name: '審查者', canEdit: false, review: [review, '[NO_ISSUES]'], counterexampleReviews: [retained, uncertain] },
   ]);
   assert.strictEqual(result.card.guard.repairRounds, 1);
   assert.strictEqual(result.card.guard.status, 'blocked');
@@ -422,9 +422,9 @@ test('restricted repairs honor deferral while still verifying writes and preserv
   const review = '```counterexample required value\nrequire("assert").strictEqual(require("./value.js"), 2);\n```\n```counterexample ambiguous claim\nthrow new Error("unspecified");\n```';
   for (const corrupt of [false, true]) {
     const result = await run([
-      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, uncertain] },
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [retained, retained] },
       { id: 'author', name: '作者', task: '寫 value.js', writes: { 'value.js': 'module.exports = 1;' }, fixWrites: corrupt ? { 'value.js': 'module.exports = ;' } : {}, fixReport: 'Cannot isolate this safely.\n[REPAIR_DEFERRED]' },
-      { id: 'reviewer', name: '審查者', canEdit: false, review: [review], counterexampleReviews: [retained, retained] },
+      { id: 'reviewer', name: '審查者', canEdit: false, review: [review], counterexampleReviews: [retained, uncertain] },
     ]);
     assert.strictEqual(result.card.guard.repairRounds, 1);
     assert.strictEqual(result.turns.filter((turn) => turn.phase === 'repair').length, 1);
@@ -488,12 +488,12 @@ test('post-repair evidence reconciliation clears stale review issues but retains
   const initiallyFailing = '```counterexample file content\nrequire("assert").strictEqual(require("fs").readFileSync("a.txt", "utf8"), "repaired");\n```';
   for (const pending of [false, true]) {
     const result = await run([
-      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, counterexampleReviews: [
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'original' }, fixWrites: { 'a.txt': 'repaired' } },
+      { id: 'reviewer', name: '審查者', canEdit: false, counterexampleReviews: [
         '{"decision":"retain_counterexample","expectationContradictsRequirement":false,"requirement":"分工","reason":"The file content is required."}',
         '{"decision":"uncertain_counterexample","expectationContradictsRequirement":false,"requirement":"","reason":"Not specified."}',
-      ] },
-      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'original' }, fixWrites: { 'a.txt': 'repaired' } },
-      { id: 'reviewer', name: '審查者', canEdit: false, review: [initiallyFailing, 'The previous file content defect remains.', pending ? '```counterexample new ambiguity\nthrow new Error("ambiguous");\n```\n[NO_ISSUES]' : '[NO_ISSUES]'] },
+      ], review: [initiallyFailing, 'The previous file content defect remains.', pending ? '```counterexample new ambiguity\nthrow new Error("ambiguous");\n```\n[NO_ISSUES]' : '[NO_ISSUES]'] },
     ]);
     assert.strictEqual(result.card.guard.repairRounds, 1);
     assert.strictEqual(result.card.guard.status, pending ? 'blocked' : 'passed');
@@ -617,6 +617,21 @@ test('negative and quoted plan votes never authorize execution', async () => {
     assert.strictEqual(result.card.guard.status, 'blocked', vote);
     assert.ok(!result.turns.some((turn) => turn.phase === 'execute'), vote);
     assert.ok(result.prompts.Author.filter((prompt) => /【計畫審核】/.test(prompt)).length <= 2, vote);
+  }
+});
+
+test('guarded coding tasks review file work only; read-only reports are advisory, but still reviewed in general tasks', async () => {
+  for (const workStyle of ['code', 'general'] as const) {
+    const result = await run([
+      { id: 'lead', name: '主持人', mode: 'guarded', canEdit: false, workStyle },
+      { id: 'planner', name: '規劃者', canEdit: false, task: '列出檢查清單' },
+      { id: 'author', name: '作者', task: '寫 a.txt', writes: { 'a.txt': 'done' }, review: Array(6).fill('規劃者的回報缺少逐項清單') },
+    ]);
+    const coding = workStyle === 'code';
+    assert.strictEqual(result.outcome['規劃者'], coding ? 'advisory' : 'unresolved');
+    assert.strictEqual(result.card.guard.status, coding ? 'passed' : 'blocked');
+    assert.strictEqual(Object.values(result.prompts).flat().some((prompt) => /【交叉審查】/.test(prompt) && prompt.includes('「規劃者」剛完成')), !coding);
+    assert.strictEqual(result.read('a.txt'), 'done');
   }
 });
 

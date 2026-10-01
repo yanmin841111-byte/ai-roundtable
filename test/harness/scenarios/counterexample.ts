@@ -180,9 +180,9 @@ async function partitionCases(live = false) {
       const review = `Unverified suggestion: change policy.json.\n\`\`\`counterexample confirmed behavior\n${sample.probe}\n\`\`\`\n\`\`\`counterexample unspecified policy\n${pending}\n\`\`\``;
       const result = await runApp({
         members: [
-          scriptedMember({ id: 'lead', name: 'Lead', canEdit: false, plan: { summary: sample.name, assignments: [{ agent: 'A2', task }], acceptance: [sample.task] }, counterexampleReviews: [retained, uncertain] }),
+          scriptedMember({ id: 'lead', name: 'Lead', canEdit: false, plan: { summary: sample.name, assignments: [{ agent: 'A2', task }], acceptance: [sample.task] }, counterexampleReviews: [retained, retained] }),
           live ? { id: 'author', name: 'Author', cli: 'copilot', model, canEdit: true } : scriptedMember({ id: 'author', name: 'Author', canEdit: true, writes: { [sample.file]: sample.before }, report: 'Initial implementation ready', fixWrites: { [sample.file]: sample.after }, fixReport: 'Corrected only the confirmed behavior.' }),
-          scriptedMember({ id: 'reviewer', name: 'Reviewer', canEdit: false, review, recheck: '[NO_ISSUES]', counterexampleReviews: [retained, retained] }),
+          scriptedMember({ id: 'reviewer', name: 'Reviewer', canEdit: false, review, recheck: '[NO_ISSUES]', counterexampleReviews: [retained, uncertain] }),
         ],
         files: { [sample.file]: sample.before, 'policy.json': '{"style":"existing"}\n' },
         git: true,

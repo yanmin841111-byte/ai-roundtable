@@ -11,7 +11,7 @@ import type { TaskSummary, TaskVerificationStatus } from './api';
 // 誰做完了、審查結論、改了哪些檔案、花了多少時間與 token:原本散在整條對話裡,任務結束時整理成一張卡。
 // 結論沿用審查徽章的樣式與用詞,和流程實際的走向是同一個判斷(由主程序寫進訊息)。
 // 「已修復」修完之後沒有再審查一次,不能跟「審查通過」一樣是綠色:用中性色
-const OUTCOME_BADGE: Record<string, string> = { approved: 'verdict pass', repaired: '', unresolved: 'warn', unreviewed: 'unreviewed', failed: 'bad' };
+const OUTCOME_BADGE: Record<string, string> = { approved: 'verdict pass', repaired: '', unresolved: 'warn', unreviewed: 'unreviewed', failed: 'bad', advisory: '' };
 const TASK_FILES_SHOWN = 12;
 
 function durationText(ms: number): string {
@@ -25,7 +25,7 @@ function taskState(s: TaskSummary): { tone: 'ok' | 'info' | 'warn' | 'bad'; labe
   if (s.verify === 'failed' || s.members.some((member) => ['failed', 'unresolved'].includes(member.outcome)) || s.rollback) {
     return { tone: 'bad', label: t('task.acceptance.blocked') };
   }
-  if (s.verify !== 'passed' || s.reviewStale || s.testsTouched || !s.verification?.scopeKnown || s.verification.unchecked?.length || s.verification.skippedCommands?.length || s.members.some((member) => member.outcome !== 'approved')) {
+  if (s.verify !== 'passed' || s.reviewStale || s.testsTouched || !s.verification?.scopeKnown || s.verification.unchecked?.length || s.verification.skippedCommands?.length || s.members.some((member) => member.outcome !== 'approved' && member.outcome !== 'advisory')) {
     return { tone: 'warn', label: t('task.acceptance.incomplete') };
   }
   return { tone: 'info', label: t('task.acceptance.pending') };
@@ -95,13 +95,13 @@ function appendCounterexampleEvidence(section: HTMLElement, summary: TaskSummary
   }
   for (const item of summary.counterexamples) {
     const title = item.title || t('task.counterexamples.untitled');
-    const after = item.confirmation === 'rejected' || item.confirmation === 'unspecified' || item.confirmation === 'pending' ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
+    const after = ['rejected', 'unspecified', 'uncorroborated', 'pending'].includes(item.confirmation) ? t('task.counterexamples.excluded') : item.afterRepair ? t(`task.counterexamples.after.${item.afterRepair}`) : t('task.counterexamples.notRetested');
     const detail = [
       item.rejection?.join('\n') || '',
       item.output ? `${t('task.counterexamples.initialOutput')}\n${item.output}` : '',
       item.repairOutput ? `${t('task.counterexamples.repairOutput')}\n${item.repairOutput}` : '',
     ].filter(Boolean).join('\n\n');
-    const tone = item.confirmation === 'pending' || item.confirmation === 'unusable' || (item.confirmation === 'confirmed' && item.afterRepair !== 'passed') ? 'warn' : '';
+    const tone = item.confirmation === 'pending' || item.confirmation === 'uncorroborated' || item.confirmation === 'unusable' || (item.confirmation === 'confirmed' && item.afterRepair !== 'passed') ? 'warn' : '';
     section.appendChild(evidenceRow(`${item.reviewer} · ${title}: ${t(`task.counterexamples.${item.confirmation}`)} · ${after}`, detail, tone));
   }
 }
@@ -112,7 +112,7 @@ function acceptanceEvidence(summary: TaskSummary): HTMLElement {
   if (summary.guard) {
     section.appendChild(evidenceRow(t(`task.guard.${summary.guard.stage === 'plan' ? 'plan' : summary.guard.status}`), t('task.guard.detail', { n: summary.guard.reviewers, rounds: summary.guard.repairRounds }), summary.guard.status === 'blocked' ? 'warn' : ''));
   }
-  const pending = summary.members.filter((member) => member.outcome !== 'approved');
+  const pending = summary.members.filter((member) => member.outcome !== 'approved' && member.outcome !== 'advisory');
   if (pending.length || summary.verify === 'failed' || summary.rollback || summary.testsTouched || summary.reviewStale) section.appendChild(sectionLabel(t('task.acceptance.attention')));
   for (const member of pending) section.appendChild(evidenceRow(`${member.name}: ${t(`task.outcome.${member.outcome}`)}`, undefined, 'warn'));
   if (summary.verify === 'failed') section.appendChild(evidenceRow(t('task.verify.failed'), undefined, 'bad'));

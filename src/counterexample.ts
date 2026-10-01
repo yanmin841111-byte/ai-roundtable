@@ -55,7 +55,14 @@ export interface Counterexample {
   rejection?: string[];
   // 所有評估者都判定需求未規定:只供參考,不是缺陷也不是爭議
   unspecified?: string[];
+  // 只有提出者自己主張保留,其他評估者都沒支持:未獲獨立佐證,不阻擋
+  uncorroborated?: string[];
   assessmentPending?: boolean;
+}
+
+// 撤回、需求未規定、未獲獨立佐證:都只供參考,不重跑、不當門檻、不進修復提示
+export function referenceReasons(run: Counterexample): string[] | undefined {
+  return run.rejection?.length ? run.rejection : run.unspecified?.length ? run.unspecified : run.uncorroborated?.length ? run.uncorroborated : undefined;
 }
 
 export interface CounterexampleRun extends Counterexample {
@@ -195,9 +202,10 @@ export async function runCounterexamples(
 //   confirmed    跑出問題(非零結束):這一條是真的,拿去當關卡。
 //   unsubstantiated 竟然通過:審查者說得出問題,卻舉不出可重現的例子。不拿去逼人修,但要說出來。
 //   unusable     腳本本身沒跑成:兩邊都不算。
-export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'unspecified' | 'pending' {
+export function classifyConfirmation(run: CounterexampleRun): 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'unspecified' | 'uncorroborated' | 'pending' {
   if (run.rejection?.length) return 'rejected';
   if (run.unspecified?.length) return 'unspecified';
+  if (run.uncorroborated?.length) return 'uncorroborated';
   if (run.assessmentPending) return 'pending';
   if (run.unusable) return 'unusable';
   return run.passed ? 'unsubstantiated' : 'confirmed';
@@ -227,6 +235,20 @@ export function counterexampleRejection(task: string, reviewers: string[], votes
 
 export function counterexampleUnspecified(task: string, reviewers: string[], votes: Array<{ reviewerId: string; text: string; error?: string | null }>): string[] | undefined {
   return unanimousVote(task, reviewers, votes, 'uncertain_counterexample');
+}
+
+// 提出者保留,但其他每位評估者都有效地投了非保留票(不確定或撤回)
+export function counterexampleUncorroborated(task: string, proposer: string, reviewers: string[], votes: Array<{ reviewerId: string; text: string; error?: string | null }>): string[] | undefined {
+  if (new Set(reviewers).size < 2 || new Set(reviewers).size !== reviewers.length || !reviewers.includes(proposer)) return;
+  const reasons: string[] = [];
+  for (const reviewer of reviewers) {
+    const matches = votes.filter((vote) => vote.reviewerId === reviewer);
+    if (matches.length !== 1 || matches[0].error) return;
+    const vote = parseCounterexampleVote(task, matches[0].text);
+    if (!vote || (vote.decision === 'retain_counterexample') !== (reviewer === proposer)) return;
+    reasons.push(vote.requirement ? `${reviewer}: ${vote.requirement} - ${vote.reason}` : `${reviewer}: ${vote.reason}`);
+  }
+  return reasons;
 }
 
 function unanimousVote(task: string, reviewers: string[], votes: Array<{ reviewerId: string; text: string; error?: string | null }>, decision: 'withdraw_counterexample' | 'uncertain_counterexample'): string[] | undefined {
@@ -261,8 +283,8 @@ export function counterexampleNotes(runs: CounterexampleRun[], locale: TextLocal
 export function counterexampleStatus(runs: CounterexampleRun[], locale: TextLocale = 'zh-Hant'): string | null {
   if (!runs.length) return null;
   const items = runs.map((run) => {
-    const key = run.rejection?.length ? 'ce.statusRejected' : run.unspecified?.length ? 'ce.statusUnspecified' : run.assessmentPending ? 'ce.statusPending' : run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
-    return tx(locale, key, { title: run.title || tx(locale, 'ce.untitled'), output: run.rejection?.join('\n') || run.unspecified?.join('\n') || run.output || tx(locale, 'ce.noOutput') });
+    const key = run.rejection?.length ? 'ce.statusRejected' : run.unspecified?.length ? 'ce.statusUnspecified' : run.uncorroborated?.length ? 'ce.statusUncorroborated' : run.assessmentPending ? 'ce.statusPending' : run.unusable ? 'ce.statusUnusable' : run.passed ? 'ce.statusPassed' : 'ce.statusFailed';
+    return tx(locale, key, { title: run.title || tx(locale, 'ce.untitled'), output: referenceReasons(run)?.join('\n') || run.output || tx(locale, 'ce.noOutput') });
   });
   return tx(locale, 'ce.status', { list: items.join('\n') });
 }

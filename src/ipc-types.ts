@@ -364,7 +364,8 @@ export interface ChatMessage {
 //   unresolved 審查提出問題,但沒有修好(沒有改檔權限,或修復回合失敗)
 //   unreviewed 沒有人審查成功
 //   failed     執行階段就失敗了
-export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed';
+//   advisory   程式任務中的唯讀成員:回報只供參考,不送審也不阻擋
+export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed' | 'advisory';
 
 export interface TaskVerification {
   revision?: string;
@@ -389,7 +390,7 @@ export interface TaskVerificationStatus {
 export interface TaskCounterexample {
   title: string;
   reviewer: string;
-  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'unspecified' | 'pending';
+  confirmation: 'confirmed' | 'unsubstantiated' | 'unusable' | 'rejected' | 'unspecified' | 'uncorroborated' | 'pending';
   afterRepair?: 'passed' | 'failed' | 'unusable';
   output: string;
   rejection?: string[];
