@@ -32,8 +32,8 @@ export function unresolvedLiveErrors(messages: Array<Partial<ChatMessage>>): str
 export function liveRunPassed(value: { guard?: { status: string }; verify?: string; members?: Array<{ outcome: string }>; errors?: string[]; messages?: Array<Partial<ChatMessage>> } | undefined, testPassed: boolean, testUnchanged: boolean, headUnchanged: boolean): boolean {
   const errors = value?.messages ? unresolvedLiveErrors(value.messages) : value?.errors;
   return value?.guard?.status === 'passed' && value.verify === 'passed'
-    && errors?.length === 0 && !!value.members?.length
-    && value.members.every((member) => member.outcome === 'approved')
+    && errors?.length === 0 && !!value.members?.some((member) => member.outcome === 'approved')
+    && value.members.every((member) => member.outcome === 'approved' || member.outcome === 'advisory')
     && testPassed && testUnchanged && headUnchanged;
 }
 

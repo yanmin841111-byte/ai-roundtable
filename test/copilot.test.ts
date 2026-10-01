@@ -50,7 +50,8 @@ async function run(events: unknown[], options: { code?: number; stderr?: string;
 test('live acceptance requires approved guard, members, tests and unchanged Git history', () => {
   const value = { guard: { status: 'passed' }, verify: 'passed', errors: [], members: [{ outcome: 'approved' }] };
   assert.equal(liveRunPassed(value, true, true, true), true);
-  for (const invalid of [undefined, {}, { ...value, guard: { status: 'blocked' } }, { ...value, verify: 'failed' }, { ...value, errors: ['timeout'] }, { ...value, members: [] }, { ...value, members: [{ outcome: 'unresolved' }] }]) {
+  assert.equal(liveRunPassed({ ...value, members: [{ outcome: 'advisory' }, { outcome: 'approved' }] }, true, true, true), true);
+  for (const invalid of [undefined, {}, { ...value, guard: { status: 'blocked' } }, { ...value, verify: 'failed' }, { ...value, errors: ['timeout'] }, { ...value, members: [] }, { ...value, members: [{ outcome: 'unresolved' }] }, { ...value, members: [{ outcome: 'advisory' }] }]) {
     assert.equal(liveRunPassed(invalid, true, true, true), false);
   }
   assert.equal(liveRunPassed(value, false, true, true), false);
