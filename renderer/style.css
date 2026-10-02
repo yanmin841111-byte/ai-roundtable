@@ -1122,7 +1122,7 @@ body.resizing-x .term-body, body.resizing-y .term-body { pointer-events: none; }
 
 /* 輸入區選項:標籤放在膠囊內側,底列維持一行 */
 .composer-bar { align-items: center; padding-top: 8px; }
-.composer-option { flex-direction: row; align-items: center; gap: 0; margin-right: 2px; border: 1px solid transparent; border-radius: 999px; background: var(--panel-2); transition: border-color .14s, background .14s; }
+.composer-option { flex-direction: row; align-items: center; gap: 0; margin-right: 2px; border: 1px solid transparent; border-radius: 999px; background: var(--panel-2); transition: border-color .14s; }
 .composer-option:hover { border-color: var(--border); }
 .composer-option:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--ring); }
 .composer-option > span { padding: 0 2px 0 11px; font-size: 11px; white-space: nowrap; }
@@ -1185,6 +1185,48 @@ body.resizing-x .term-body, body.resizing-y .term-body { pointer-events: none; }
 
 /* 數字與代號用等寬字,像儀表板一樣對齊 */
 .bubble-head .phase-badge, .ts-meta, .usage, .usage-total, .review-scope-text { font-variant-numeric: tabular-nums; }
+
+/* ---------- 全畫面一致:頂端列、設定視窗、輸入區沿用卡片的光邊語彙 ---------- */
+#topbar .phase, #topbar #workdir-chip { min-height: 30px; display: inline-flex; align-items: center; }
+.phase::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--faint); }
+.phase.busy::before { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
+
+.modal-card {
+  position: relative; border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(135deg, var(--accent-border), var(--border) 35%, var(--border) 65%, color-mix(in srgb, var(--accent) 40%, var(--border))) border-box;
+}
+.modal-card::after { content: ''; position: absolute; left: 15%; right: 15%; top: 0; height: 1px; pointer-events: none; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 70%, transparent), transparent); }
+.settings-tab.active::before { box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent); }
+
+.composer-box {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(color-mix(in srgb, var(--panel) 94%, transparent), color-mix(in srgb, var(--panel) 94%, transparent)) padding-box,
+    linear-gradient(135deg, var(--accent-border), var(--border) 40%, var(--border) 60%, var(--accent-border)) border-box;
+}
+
+/* ---------- 結果卡內部:少用分隔線,以留白與淡底分組 ---------- */
+.ts-freshness { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: color-mix(in srgb, var(--panel-2) 70%, var(--panel)); }
+.ts-evidence-row { border-bottom: 0; padding: 4px 0; }
+.ts-evidence .ts-label { margin: 14px 0 4px; letter-spacing: .06em; }
+.ts-body .ts-member { border-bottom: 0; padding: 6px 0; }
+.ts-review { border-bottom: 0; padding-bottom: 4px; }
+.ts-files-head { border-top-style: dashed; }
+
+/* ---------- 色系收斂:品牌藍 + 灰階;語意色只留在文字與細線,不再大面積填色(頭像除外) ---------- */
+.msg.agent .bubble::before { background: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 35%, transparent); }
+.badge.ok, .badge.agreed, .badge.warn, .badge.bad, .badge.unreviewed, .badge.recheck,
+.badge.verdict.pass, .badge.verdict.issues, .badge.verdict.failed,
+.ts-verify.passed, .ts-verify.syntax-only, .ts-verify.failed, .ts-verify.tests,
+.ce-vote-decision.retain, .ce-vote-decision.withdraw { background: var(--panel-2); border-color: var(--border); }
+.badge.recheck { color: var(--accent); }
+.ts-state { background: var(--panel-2); border-color: var(--border); }
+.msg.system.warn .bubble, .msg.system.error .bubble { background: var(--panel); border-color: var(--border); color: var(--text); border-left-width: 3px; }
+.msg.system.warn .bubble { border-left-color: var(--warn); }
+.msg.system.error .bubble { border-left-color: var(--danger); }
+.ts-member::before { background: var(--border-strong); }
 
 /* ---------- CLI 安裝 ---------- */
 .install-card { width: 640px; }
