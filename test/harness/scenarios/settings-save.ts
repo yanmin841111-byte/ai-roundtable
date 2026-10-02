@@ -256,6 +256,8 @@ async function layout(locale: 'zh-Hant' | 'en') {
       const harness: any = globalThis;
       await harness.ready();
       await harness.waitFor(() => harness.$('#composer-resize').hasAttribute('aria-valuenow'), 5000, 'Layout resize initialized');
+      window.resizeTo(1024, 705);
+      await harness.waitFor(() => window.innerWidth === 1024, 5000, 'CI-sized layout window');
       const chip = harness.$('#workdir-chip') as HTMLButtonElement;
       harness.check(chip.classList.contains('empty') && chip.querySelector('.chip-icon')?.getAttribute('data-icon') === 'folderPlus' && chip.offsetWidth > 100, `Missing working folder is a full folder-plus button (${chip.offsetWidth}px)`);
       harness.check(chip.title.length > 20 && !/\{dir\}/.test(chip.title), `Missing folder explains the next step (${chip.title})`);
@@ -277,7 +279,7 @@ async function layout(locale: 'zh-Hant' | 'en') {
       const sidebarBefore = sidebar.offsetWidth;
       const inputBefore = input.offsetHeight;
       await drag(harness.$('#sidebar-resize'), 80, 0);
-      harness.check(sidebar.offsetWidth === sidebarBefore + 80, `Sidebar follows the drag (${sidebarBefore} -> ${sidebar.offsetWidth})`);
+      harness.check(sidebar.offsetWidth === sidebarBefore + 80, `Sidebar follows the drag (${sidebarBefore} -> ${sidebar.offsetWidth}; style=${sidebar.style.width}; max=${harness.$('#sidebar-resize').getAttribute('aria-valuemax')}; viewport=${window.innerWidth}x${window.innerHeight}; resizing=${document.body.className})`);
       await drag(harness.$('#composer-resize'), 0, -70);
       harness.check(input.offsetHeight === inputBefore + 70, `Input area grows upward (${inputBefore} -> ${input.offsetHeight})`);
       await harness.waitFor(async () => {
