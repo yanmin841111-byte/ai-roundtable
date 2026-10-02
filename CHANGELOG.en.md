@@ -6,8 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-03
+
 ### Added
 
+- **Evidence partitioning and coverage follow-up**: Multi-AI checks distinguish confirmed, pending and reference-only counterexamples, allowing confirmed defects to be repaired while disputes remain unresolved. An extra requirement-probing turn runs before coding approval; it is model-driven, not a complete coverage matrix or correctness guarantee.
 - **Full Copilot model list**: member settings read every CLI-supported model from `copilot help config` (no quota used), listing `gpt-5-mini`, `claude-haiku-4.5` and `gpt-5.4-mini` first with a "low cost" label, and fall back to Auto plus those three. Actual availability still depends on organization policy. When members are missing, quick teams can create read-only Copilot members for those three models.
 - **Quick teams**: the sidebar Lineups menu offers development and research presets. Preview and adjust planning, authoring and review roles for three existing members, then save and apply Multi-AI checks with independent-first discussion. Models, connections, edit permissions and other lineups remain unchanged; applying never starts a task. Missing members, an eligible development author or a working folder have setup actions. Custom commands are explicitly marked untested. Roles are prompt presets, not additional permission isolation.
 - **Multi-AI checks mode**: select "Multi-AI checks" under Collaboration with at least two enabled members, from any supported providers. Discussion must reach unanimous agreement, and the lead's concrete plan must list acceptance criteria and receive every other member's approval before execution; plan revisions use the discussion round limit. Every result is reviewed by all non-authors in fresh contexts, checking each acceptance criterion; with only two members, the author also reviews in a fresh context as the second reviewer, matching the common Claude Code × Codex cross-review practice. Up to three repair rounds rerun verification and send all results back for review; failed reviews, missing approvals or failed verification block approval. Lineups preserve the mode, and result cards and history exports retain gate status and repair counts. General tasks are supported without code verification; unanimous AI approval is not human acceptance or a deployment guarantee. More members mean more review calls and model usage.
@@ -25,6 +28,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- **Consistent conversation UI**: messages, plans, warnings and result cards share a content column. Short replies are compact and repeated model and stage labels are reduced. Settings, composer and cards share a restrained blue-and-gray palette, while avatars and necessary warning indicators retain their colors.
+- **Progress-gated repair extensions**: the normal three-round Multi-AI repair limit extends only when every previously failing confirmed probe passes and new confirmed failures remain, up to five rounds total. Read-only coding members are labeled advisory instead of being treated as code deliverables.
 - **Relay merged into Multi-AI checks**: Multi-AI checks now run the approved plan's steps in order, handing each step's report to the next so nobody reads files while another member is changing them. "Relay" is no longer listed as a collaboration option; saved settings and lineups using relay become Multi-AI checks with three or more members, or Parallel with fewer. The evaluation's team-relay condition still uses the original relay flow.
 - CLI members with edit permission are read-only during discussion, planning, plan approval, review and summary turns; only execution and repair turns can write.
 - **Git commits off by default**: a new "Allow members to create git commits" setting. While off, plans do not include commits or pushes, and GitHub Copilot members are blocked from `git commit` and `git push` through CLI permission rules; other CLIs are only asked not to.
@@ -37,6 +42,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- The pinned stage indicator now occupies its own row above the scrolling conversation, so it cannot cover messages or warnings. Composer selects no longer retain light backgrounds after switching to the dark theme.
+- The VS Code Copilot shim is no longer mistaken for an installed official Copilot CLI.
 - Failed lineup saves preserve the original main-process and UI settings, do not report successful application, and keep the team preview available for retry.
 - Timeline stage headers no longer stick together, overlap, or cover messages. After scrolling past a stage, one current-stage pill remains and fades out before the next stage or "Task finished" divider.
 - Member settings fields align at the top, and a missing CLI no longer repeats the same command-not-found message.
@@ -143,6 +150,8 @@ First release.
 - A corrupt `secrets.json` is backed up first instead of being overwritten by the next key.
 - Paths for attachments, history and extension files are always validated in the main process.
 
-[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...HEAD
+[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...v0.2.1
 [0.2.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...481bb88
 [0.1.0]: https://github.com/yanmin841111-byte/ai-roundtable/releases/tag/v0.1.0

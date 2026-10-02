@@ -2250,13 +2250,14 @@ let stagePinFrame = 0;
 
 function ensureStagePin(): HTMLElement {
   const timeline = $<HTMLDivElement>('#timeline');
-  let pin = timeline.querySelector<HTMLElement>(':scope > .stage-pin');
+  let pin = timeline.parentElement!.querySelector<HTMLElement>(':scope > .stage-pin');
   if (!pin) {
     pin = document.createElement('div');
     pin.className = 'stage-pin';
+    pin.hidden = true;
     pin.setAttribute('aria-hidden', 'true');
     pin.innerHTML = '<span class="tl-stage-label"></span>';
-    timeline.prepend(pin);
+    timeline.before(pin);
     timeline.addEventListener('scroll', scheduleStagePin, { passive: true });
   }
   return pin;
@@ -2270,6 +2271,7 @@ function scheduleStagePin(): void {
 function updateStagePin(): void {
   const timeline = $<HTMLDivElement>('#timeline');
   const pin = ensureStagePin();
+  pin.hidden = !timeline.querySelector(':scope > .tl-stage');
   const top = timeline.getBoundingClientRect().top;
   let current: HTMLElement | null = null;
   let next: HTMLElement | null = null;

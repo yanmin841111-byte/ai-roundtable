@@ -212,8 +212,8 @@ textarea { resize: vertical; }
 #timeline { --msg-indent: 44px; }
 /* 階段分隔是一般排版;捲過之後由頂端唯一一顆 .stage-pin 標示目前階段,不再多條吸頂疊在一起 */
 .tl-stage { display: flex; align-items: center; gap: 12px; margin: 22px 0 6px; padding: 4px 0; }
-.stage-pin + .tl-stage, .empty + .tl-stage, .tl-stage:first-child { margin-top: 0; }
-.stage-pin { position: sticky; top: 8px; z-index: 4; height: 0; display: flex; justify-content: center; pointer-events: none; }
+.empty + .tl-stage, .tl-stage:first-child { margin-top: 0; }
+.stage-pin { flex: 0 0 32px; display: flex; align-items: center; justify-content: center; pointer-events: none; background: var(--panel); border-bottom: 1px solid var(--border); }
 .stage-pin .tl-stage-label { height: fit-content; opacity: 0; transform: translateY(-6px); background: color-mix(in srgb, var(--panel) 82%, transparent); backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2); box-shadow: var(--shadow-md), inset 0 1px 0 var(--hairline); transition: opacity .16s ease, transform .16s ease; }
 .stage-pin.on .tl-stage-label { opacity: 1; transform: none; }
 .tl-stage::before { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong)); }

@@ -221,7 +221,11 @@ export async function runApp(opts: HarnessOptions): Promise<HarnessResult> {
       AI_ROUNDTABLE_DEBUG: '1',
     };
     delete env.ELECTRON_RUN_AS_NODE; // 有這個變數時 electron 會以純 node 模式啟動,開不了視窗
-    const child = spawn(electronBin(), [REPO_ROOT, `--user-data-dir=${userData}`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const packagedExecutable = process.env.AI_ROUNDTABLE_PACKAGED_EXECUTABLE;
+    const executable = packagedExecutable || electronBin();
+    const args = packagedExecutable ? [] : [REPO_ROOT];
+    args.push(`--user-data-dir=${userData}`);
+    const child = spawn(executable, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;

@@ -97,6 +97,20 @@ npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正�
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過
 ```
 
+### 安裝包 QA
+
+指定已打包 app 的執行檔,同一套情境就會改測包內的程式,仍使用隔離的設定與工作目錄:
+
+```sh
+AI_ROUNDTABLE_PACKAGED_EXECUTABLE='/path/to/AI Roundtable.app/Contents/MacOS/AI Roundtable' \
+  npm run harness:ui
+```
+
+未設定時仍測開發版。測試不會重新打包,因此必須先建立欲驗證的安裝包;
+`harness:ui` 開頭的 build 只更新工作區的 `dist/`,不會更新已打包 app。
+發版前另以 `hdiutil verify` 檢查 DMG,掛載後以 `codesign --verify --deep --strict` 檢查 app。
+ad-hoc 簽章有效不代表通過 Apple 公證。
+
 快速組隊可在 build 後單獨跑 `node --import tsx test/harness/scenarios/lineups.ts --quick-only`。
 使用假成員及隔離設定,檢查套用不啟動任務、不提升權限、保留舊陣容,以及窄側欄沒有水平溢出。
 

@@ -114,7 +114,7 @@ async function once(locale: 'zh-Hant' | 'en') {
       (document.querySelector('#diff-close') as HTMLButtonElement).click();
 
       const markers = Array.from(timeline.querySelectorAll<HTMLElement>(':scope > .tl-stage'));
-      const pin = timeline.querySelector(':scope > .stage-pin') as HTMLElement;
+      const pin = document.querySelector('#main > .stage-pin') as HTMLElement;
       const scrollMarker = async (marker: HTMLElement, below: number) => {
         timeline.scrollTop += marker.getBoundingClientRect().top - timeline.getBoundingClientRect().top - below;
         await g.w(120);
@@ -122,6 +122,8 @@ async function once(locale: 'zh-Hant' | 'en') {
       g.check(markers.length >= 2 && markers.every((marker) => getComputedStyle(marker).position === 'static'), '階段分隔不再各自吸頂');
       await scrollMarker(markers[1], -120);
       g.check(pin.classList.contains('on') && pin.textContent === markers[1].textContent, `捲過階段後頂端只顯示目前階段(${pin.textContent})`);
+      const pinLabel = pin.querySelector('.tl-stage-label') as HTMLElement;
+      g.check(pinLabel.getBoundingClientRect().bottom <= timeline.getBoundingClientRect().top, '固定階段標籤位於對話區外,不覆蓋訊息或警告');
       await scrollMarker(markers[1], 20);
       g.check(!pin.classList.contains('on'), '下一個階段靠近頂端時,目前階段先淡出,不會兩個疊在一起');
       await scrollMarker(card!.closest('.msg')!.querySelector('.ts-end') as HTMLElement, 20);

@@ -255,6 +255,7 @@ async function layout(locale: 'zh-Hant' | 'en') {
     scenario: async (options) => {
       const harness: any = globalThis;
       await harness.ready();
+      await harness.waitFor(() => harness.$('#composer-resize').hasAttribute('aria-valuenow'), 5000, 'Layout resize initialized');
       const chip = harness.$('#workdir-chip') as HTMLButtonElement;
       harness.check(chip.classList.contains('empty') && chip.querySelector('.chip-icon')?.getAttribute('data-icon') === 'folderPlus' && chip.offsetWidth > 100, `Missing working folder is a full folder-plus button (${chip.offsetWidth}px)`);
       harness.check(chip.title.length > 20 && !/\{dir\}/.test(chip.title), `Missing folder explains the next step (${chip.title})`);
