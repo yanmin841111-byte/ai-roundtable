@@ -795,13 +795,13 @@ input[type=color] { width: 44px; height: 36px; padding: 3px; cursor: pointer; }
 .badge.recheck { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
 
 /* 審查者看了什麼。看不到改動的審查(unknown)用警示色,讓人知道這份意見的根據有限 */
-.review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 2px 0 6px; font-size: 12px; color: var(--muted); }
+.review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 6px; font-size: 11.5px; color: var(--faint); }
 .review-scope[data-scope="unknown"] .review-scope-text { color: var(--warn); }
-.review-files { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.review-file { font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-file:hover { border-color: var(--accent-border); background: var(--hover); }
+.review-files { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; }
+.review-file { font-family: var(--mono); font-size: 11px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); cursor: pointer; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file:hover { color: var(--accent); background: transparent; text-decoration: underline; }
 /* 列了但沒附上內容:審查者對它的判斷沒有根據 */
-.review-file.omitted { border-style: dashed; color: var(--muted); }
+.review-file.omitted { border-style: dashed; color: var(--faint); text-decoration: line-through dotted; }
 .review-file.more { font-family: var(--font); color: var(--muted); }
 /* 從審查訊息點進來的那個檔案 */
 .diff-file.focused { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
@@ -1132,6 +1132,59 @@ body.resizing-x .term-body, body.resizing-y .term-body { pointer-events: none; }
 
 /* 捲動邊緣淡出,內容不在頂欄與輸入區前被硬切 */
 #timeline { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 22px), transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 22px), transparent 100%); }
+
+/* 統一風格:卡片類用 --radius-lg,提示框與分段控制用 --radius,內層元件用 --radius-sm */
+.msg.system .bubble.task-summary, .diff-file, .theme-swatch { border-radius: var(--radius-lg); }
+.job-queue-note, .diff-focus-missing, .lineup-note, .ext-simple-hint, .body pre, .install-log pre, .unreviewed-note { border-radius: var(--radius); }
+.segmented, .template-filters, .ext-editor-tabs { border-radius: var(--radius); }
+.segmented span { border-radius: var(--radius-sm); }
+/* 固定的階段標題用實底,疊在內容上時不會和底下的字混在一起 */
+.stage-pin .tl-stage-label { background: var(--panel); }
+
+/* 一句話的發言:名字與內容同一列,卡片變矮 */
+.msg.agent.short { margin-top: 8px; }
+.msg.agent.short > .avatar { margin-top: 3px; }
+.msg.agent.short .bubble { padding: 6px 13px; }
+.msg.agent.short .bubble-head { display: inline-flex; margin: 0 8px 0 0; vertical-align: baseline; }
+.msg.agent.short .body { display: inline; }
+.msg.agent.short .body p { display: inline; margin: 0; }
+.msg-group:not([data-count="1"]) > .msg.agent.short .bubble { padding: 6px 12px; }
+
+/* ---------- 科技感:細光邊、微漸層底、成員色光條 ---------- */
+#timeline { --tech-edge: color-mix(in srgb, var(--accent) 30%, var(--border)); --tech-glow: color-mix(in srgb, var(--accent) 16%, transparent); }
+.msg.agent .bubble {
+  position: relative; border-left-width: 1px;
+  border-color: color-mix(in srgb, var(--border) 86%, var(--accent) 14%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 95%, var(--accent) 5%), var(--panel) 64px);
+  transition: border-color .16s, box-shadow .16s;
+}
+/* 成員色改成發光的細光條,取代原本的粗左框 */
+.msg.agent .bubble::before { content: ''; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--c, var(--accent)); box-shadow: 0 0 10px color-mix(in srgb, var(--c, var(--accent)) 65%, transparent); }
+.msg.agent.short .bubble::before { top: 7px; bottom: 7px; }
+.msg.agent .bubble:hover { border-color: var(--tech-edge); box-shadow: 0 0 0 1px var(--tech-glow), var(--shadow-md); }
+/* 正在回覆:邊框亮起品牌色並帶一圈柔光 */
+.msg.agent.streaming .bubble { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--tech-glow), 0 10px 28px -14px color-mix(in srgb, var(--accent) 60%, transparent); }
+
+/* 結果卡與分工卡:漸層描邊與頂端高光 */
+.msg.system .bubble.task-summary, .msg.system.tag-plan .bubble {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(135deg, var(--accent-border), var(--border) 38%, var(--border) 62%, color-mix(in srgb, var(--accent) 45%, var(--border))) border-box;
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--hairline);
+}
+.msg.system.tag-plan .bubble { position: relative; overflow: hidden; color: var(--text); }
+.msg.system.tag-plan .bubble::after, .msg.system .bubble.task-summary::after { content: ''; position: absolute; left: 12%; right: 12%; top: 0; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 70%, transparent), transparent); }
+
+/* 階段標題:品牌色細框與光點,分隔線帶淡淡的品牌色 */
+.tl-stage-label { border-color: var(--accent-border); color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 6%, transparent), var(--shadow-sm); font-variant-numeric: tabular-nums; }
+.tl-stage-label::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; vertical-align: 1px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.tl-stage::before { background: linear-gradient(90deg, transparent, var(--accent-border)); }
+.tl-stage::after { background: linear-gradient(90deg, var(--accent-border), transparent); }
+.stage-pin .tl-stage-label { background: var(--panel); }
+
+/* 數字與代號用等寬字,像儀表板一樣對齊 */
+.bubble-head .phase-badge, .ts-meta, .usage, .usage-total, .review-scope-text { font-variant-numeric: tabular-nums; }
 
 /* ---------- CLI 安裝 ---------- */
 .install-card { width: 640px; }

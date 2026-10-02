@@ -1236,6 +1236,7 @@ function renderSidebar() {
     el.setAttribute('aria-label', a.name);
     el.dataset.agentId = a.id;
     el.style.setProperty('--c', a.color); // 頭像外圈的成員色淡光
+    if (a.persona) el.title = a.persona;
     // 健康狀態要畫在成員卡上。以前只在「轉接器沒註冊」時給徽章,所以綁到一個沒安裝的
     // CLI 的成員看起來完全正常——使用者要等送出任務失敗才知道,而那時已經浪費一輪。
     const health = cliTypes[a.cli] ? cliStatus[a.cli] : null;
@@ -1256,8 +1257,7 @@ function renderSidebar() {
       <div class="avatar" style="background:${a.color}">${initials(a.name)}</div>
       <div class="agent-info">
         <div class="agent-name">${escapeHtml(a.name)} ${a.id === lead ? `<span class="badge lead">${escapeHtml(t('agent.lead'))}</span>` : ''} ${healthBadge}${editBadge}${capabilityBadges(a)}</div>
-        <div class="agent-meta">${escapeHtml(cliLabel(cliTypes[a.cli], a.cli))} · ${escapeHtml(a.model || t('agent.defaultModel'))} · ${escapeHtml(a.effort ? effortLabel(a.effort) : t('agent.defaultEffort'))}</div>
-        ${a.persona ? `<div class="agent-meta persona">${escapeHtml(a.persona)}</div>` : ''}
+        <div class="agent-meta">${escapeHtml([cliLabel(cliTypes[a.cli], a.cli), a.model, a.effort ? effortLabel(a.effort) : ''].filter(Boolean).join(' · '))}</div>
       </div>`;
     el.onclick = () => openModal(a.id);
     el.onkeydown = (event) => {
@@ -2437,6 +2437,10 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
       : m.status === 'running' ? '<span class="hint">…</span>'
         : m.error || agreed || verdict === 'pass' ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
+  // 一句話的發言(同意、通過)縮成一列,不佔一整張大卡片
+  const plain = (text || '').trim();
+  el.classList.toggle('short', m.status !== 'running' && !m.error && !m.rawPlan && !m.thinking && !(m.activities || []).length
+    && !m.review && !plain.includes('\n') && plain.length <= 60 && !counterexampleVoteHtml(plain));
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
   // 失敗如果是環境問題,錯誤訊息底下直接給下一步:和設定頁、檔案改動同一張卡片。
