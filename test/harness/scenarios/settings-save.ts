@@ -299,10 +299,13 @@ async function layout(locale: 'zh-Hant' | 'en') {
       const before = input.offsetHeight;
       composerHandle.focus();
       composerHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      await painted();
       harness.check(input.offsetHeight === before - 24 && composerHandle.getAttribute('aria-valuenow') === String(input.offsetHeight), 'Keyboard resizing updates the separator value');
       harness.$('#sidebar-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      await painted();
       composerHandle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      harness.check(sidebar.offsetWidth === sidebarBefore && input.offsetHeight === inputBefore, 'Double-click restores default sizes');
+      await painted();
+      harness.check(sidebar.offsetWidth === sidebarBefore && input.offsetHeight === inputBefore, `Double-click restores default sizes (sidebar=${sidebar.offsetWidth}/${sidebarBefore}; input=${input.offsetHeight}/${inputBefore})`);
       await harness.waitFor(async () => {
         const saved = (await (window as any).api.getConfig()).settings;
         return !('sidebarWidth' in saved) && !('composerHeight' in saved);
