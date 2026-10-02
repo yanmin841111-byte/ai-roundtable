@@ -1923,7 +1923,7 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
       el!.addEventListener('animationend', () => el!.classList.remove('enter'), { once: true });
     }
   }
-  el.className = `msg ${m.kind} ${m.level || ''} ${m.status === 'running' ? 'streaming' : ''}${el.classList.contains('enter') ? ' enter' : ''}${el.classList.contains('msg-continue') ? ' msg-continue' : ''}`;
+  el.className = `msg ${m.kind} ${m.level || ''} ${m.kind === 'system' && m.tag ? `tag-${m.tag}` : ''} ${m.status === 'running' ? 'streaming' : ''}${el.classList.contains('enter') ? ' enter' : ''}${el.classList.contains('msg-continue') ? ' msg-continue' : ''}`;
   if (m.agentId) el.dataset.agentId = m.agentId;
   else delete el.dataset.agentId;
   if (m.kind === 'agent') renderAgentMessage(el, m);
@@ -2179,6 +2179,28 @@ async function stopSelected(): Promise<void> {
 // 顯示文字一律在 renderer 這側依介面語言組出。
 const PHASE_CODES = new Set(['idle', 'direct', 'discuss', 'ask', 'divide', 'tests', 'execute', 'review', 'repair', 'summary']);
 
+// 發言標題只留上方階段分隔沒講到的階段(例如審查階段裡的修復、接力的第幾棒)
+function headPhaseText(m: ChatMessage): string {
+  const phase = m.phase;
+  if (!isPhaseInfo(phase)) return phaseText(phase);
+  if (phase.code === 'discuss' || phase.code === 'review') return '';
+  if (phase.code === 'execute' && !(Number(phase.maxRounds) > 1)) return '';
+  return phaseText(phase);
+}
+
+// 反例評估的 JSON 票改成人看得懂的一小塊;不是票就回傳 null,照原文顯示
+function counterexampleVoteHtml(text: string): string | null {
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(text.trim());
+  let vote: any;
+  try { vote = JSON.parse(fenced ? fenced[1] : text.trim()); } catch { return null; }
+  const decisions = ['retain_counterexample', 'withdraw_counterexample', 'uncertain_counterexample'];
+  if (!vote || typeof vote !== 'object' || !decisions.includes(vote.decision)) return null;
+  const tone = { retain_counterexample: 'retain', withdraw_counterexample: 'withdraw', uncertain_counterexample: 'uncertain' }[vote.decision as string];
+  const quote = typeof vote.requirement === 'string' && vote.requirement.trim() ? `<blockquote>${escapeHtml(vote.requirement.trim())}</blockquote>` : '';
+  const reason = typeof vote.reason === 'string' ? `<p>${escapeHtml(vote.reason.trim())}</p>` : '';
+  return `<div class="ce-vote"><span class="ce-vote-decision ${tone}">${escapeHtml(t(`ce.vote.${tone}`))}</span>${quote}${reason}</div>`;
+}
+
 function phaseText(phase: PhaseValue | undefined | null): string {
   if (!phase) return '';
   if (!isPhaseInfo(phase)) return phase; // 舊 session 存的是現成字串,原樣顯示
@@ -2263,8 +2285,10 @@ function updateStagePin(): void {
 function insertTimelineMarkers(el: HTMLElement, m: ChatMessage): void {
   const prev = adjacentMsg(el, -1);
   const inherited = prev ? prev.dataset.stage : '';
-  const stage = stageFromMessage(m) || inherited || (m.kind === 'user' ? 'discuss' : '');
-  const round = roundFromMessage(m);
+  let stage = stageFromMessage(m) || inherited || (m.kind === 'user' ? 'discuss' : '');
+  // 計畫審核發生在分工之後,歸在「分工執行」裡,不要跳回「討論」
+  if (stage === 'discuss' && inherited === 'execute' && m.kind !== 'user') stage = inherited;
+  const round = stage === 'discuss' ? roundFromMessage(m) : 0;
   el.dataset.stage = stage || '';
   el.dataset.round = round ? String(round) : (stage && stage === inherited ? (prev && prev.dataset.round) || '' : '');
   if (stage && stage !== inherited) {
@@ -2275,6 +2299,7 @@ function insertTimelineMarkers(el: HTMLElement, m: ChatMessage): void {
   }
   if (round && String(round) !== (prev && prev.dataset.round || '')) {
     const maxRounds = Number(typeof m.phase === 'object' ? m.phase?.maxRounds : 0) || Number(config && config.settings && config.settings.maxRounds) || 0;
+    if (maxRounds === 1) return;
     const divider = document.createElement('div');
     divider.className = 'tl-round';
     divider.textContent = maxRounds ? t('timeline.round', { round, max: maxRounds }) : t('timeline.roundOnly', { round });
@@ -2396,7 +2421,7 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   shell.avatar.style.background = m.color || '#6c8cff';
   setTextIfChanged(shell.avatar, initials(m.agentName));
   shell.bubble.style.setProperty('--c', m.color || '#6c8cff');
-  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b>${escapeHtml(m.agentName)}</b><span class="badge">${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}</span>${phaseText(m.phase) ? `<span class="badge phase-badge">${escapeHtml(phaseText(m.phase))}</span>` : ''}${verdictBadge}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${m.unreviewed ? `<span class="badge unreviewed" title="${escapeHtml(t('review.unreviewedTitle'))}">${escapeHtml(t('review.unreviewed'))}</span>` : ''}${status}`);
+  setHtmlIfChanged(shell.head, `<span class="avatar head-avatar" style="background:${escapeHtml(m.color || '#6c8cff')}">${escapeHtml(initials(m.agentName))}</span><b title="${escapeHtml(cliLabel(cliTypes[m.cli || ''], m.cli || ''))}${m.model ? ' · ' + escapeHtml(m.model) : ''}">${escapeHtml(m.agentName)}</b>${headPhaseText(m) ? `<span class="phase-badge">${escapeHtml(headPhaseText(m))}</span>` : ''}${verdictBadge}${agreed ? `<span class="badge agreed">${escapeHtml(t('msg.agreed'))}</span>` : ''}${m.unreviewed ? `<span class="badge unreviewed" title="${escapeHtml(t('review.unreviewedTitle'))}">${escapeHtml(t('review.unreviewed'))}</span>` : ''}${status}`);
   renderReviewScope(shell.reviewScope, m.review);
   renderThinking(shell.thinking, m.thinking || '');
   renderActivities(shell.activities, m.activities || []);
@@ -2405,10 +2430,12 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
   // 分工原文已經解析成下方的「分工結果」卡片:只留一句說明,原文收進可展開的區塊
   const body = text && m.rawPlan && m.status !== 'running'
     ? `<span class="hint raw-plan-note">${escapeHtml(t('plan.rawNote'))}</span><details class="raw-plan"><summary>${escapeHtml(t('plan.rawShow'))}</summary><div class="raw-plan-body">${md(text)}</div></details>`
+    : text && m.status !== 'running' && counterexampleVoteHtml(text)
+      ? counterexampleVoteHtml(text)!
     : text
       ? md(text)
       : m.status === 'running' ? '<span class="hint">…</span>'
-        : m.error ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
+        : m.error || agreed || verdict === 'pass' ? '' : `<span class="hint">${escapeHtml(t('msg.emptyReply'))}</span>`;
   if (!hasSelectionInside(shell.body)) setHtmlIfChanged(shell.body, body);
   shell.error.hidden = !m.error;
   setTextIfChanged(shell.error, m.error ? `⚠ ${m.error}` : '');
