@@ -616,7 +616,7 @@ app.whenReady().then(async () => {
     return withDirectory(job, () => job.orchestrator.reverifyTask(messageId, confirmedCommand), (blocker) => ({ ok: false, error: blockedText(blocker) }));
   });
   handle('verify:detect', async (cwd) => ({
-    commands: await detectVerifyCommands(typeof cwd === 'string' && cwd.trim() ? cwd : store.get().settings.workDir),
+    commands: await detectVerifyCommands(typeof cwd === 'string' && cwd.trim() ? cwd : store.get().settings.workDir, uiLocale()),
   }));
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。

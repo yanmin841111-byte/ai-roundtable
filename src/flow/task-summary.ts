@@ -34,9 +34,16 @@ export function taskSummaryText(summary: TaskSummary, locale: TextLocale): strin
   const files = summary.files.map((f) => tx(locale, 'sys.taskSummary.file', { path: f.path, added: f.added, removed: f.removed }));
   if (summary.moreFiles > 0) files.push(tx(locale, 'git.more', { n: summary.moreFiles }));
   const u = summary.usage;
-  const usage = u.turnsWithUsage
-    ? tx(locale, 'sys.taskSummary.usage', { input: u.inputTokens.toLocaleString('en-US'), output: u.outputTokens.toLocaleString('en-US') }) + (u.costUsd != null ? ` · $${u.costUsd.toFixed(3)}` : '')
-    : '';
+  const reported = u.turnsWithCost;
+  const cost = u.costUsd == null ? '' : [
+    tx(locale, 'sys.taskSummary.knownCost', { n: u.costUsd.toFixed(3) }),
+    ...(reported === undefined ? [tx(locale, 'sys.taskSummary.costCoverageUnknown')]
+      : reported < u.turns ? [tx(locale, 'sys.taskSummary.costCoverage', { a: reported, b: u.turns }), tx(locale, 'sys.taskSummary.costMissing', { n: u.turns - reported })] : []),
+  ].join(' · ');
+  const usage = [
+    u.turnsWithUsage ? tx(locale, 'sys.taskSummary.usage', { input: u.inputTokens.toLocaleString('en-US'), output: u.outputTokens.toLocaleString('en-US') }) : '',
+    cost,
+  ].filter(Boolean).join(' · ');
   const verify = [summary.verify ? tx(locale, `sys.taskSummary.verify.${summary.verify}`) : '', summary.testsTouched ? tx(locale, 'sys.taskSummary.testsTouched') : ''].filter(Boolean).join(' · ');
   return [
     tx(locale, 'sys.taskSummary.title', { duration: formatTimeout(summary.endedAt - summary.startedAt, locale) }) + (usage ? ` · ${usage}` : '') + (verify ? ` · ${verify}` : ''),
@@ -143,9 +150,11 @@ export function restoreTaskSummary(raw: any): TaskSummary | null {
     usage: {
       inputTokens: num(raw.usage.inputTokens),
       outputTokens: num(raw.usage.outputTokens),
-      costUsd: typeof raw.usage.costUsd === 'number' && raw.usage.costUsd >= 0 ? raw.usage.costUsd : null,
+      costUsd: typeof raw.usage.costUsd === 'number' && Number.isFinite(raw.usage.costUsd) && raw.usage.costUsd >= 0 ? raw.usage.costUsd : null,
       turns: num(raw.usage.turns),
       turnsWithUsage: num(raw.usage.turnsWithUsage),
+      ...(Number.isInteger(raw.usage.turnsWithCost) && raw.usage.turnsWithCost >= 0 && raw.usage.turnsWithCost <= num(raw.usage.turns)
+        ? { turnsWithCost: raw.usage.turnsWithCost } : {}),
     },
   };
 }

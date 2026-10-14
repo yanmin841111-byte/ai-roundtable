@@ -24,6 +24,7 @@ import {
   showAttachError, clearAttachError,
 } from './attachments';
 import { setupExtensions, renderExtensions, cliLabel, typeLabel } from './extensions';
+import { summarizeCosts } from '../src/usage';
 import { envFixHtml, bindEnvFix, describeCliHealth, setEnvFixHandlers } from './env-fix';
 import { isInstallRunning, openInstallDialog, setupInstallDialog } from './install-dialog';
 import type { PhaseValue } from '../src/ipc-types';
@@ -273,6 +274,7 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
+  $<HTMLInputElement>('#work-dir').addEventListener('input', clearVerifySuggestions);
   for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#max-task-cost', '#verify-command', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
   $<HTMLTextAreaElement>('#verify-command').addEventListener('input', () => renderVerifySuggestions());
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
@@ -290,24 +292,35 @@ async function init() {
 
 let detectedVerifyCommands: string[] = [];
 let detectVerifySeq = 0;
+let detectVerifyError = '';
+let detectingVerify = false;
 
-async function refreshVerifySuggestions(dir?: string): Promise<void> {
-  if (typeof window.api.detectVerifyCommands !== 'function') return;
-  const cwd = (dir ?? $<HTMLInputElement>('#work-dir').value ?? config.settings.workDir ?? '').trim();
-  const seq = ++detectVerifySeq;
-  if (!cwd) {
-    detectedVerifyCommands = [];
-    renderVerifySuggestions();
-    return;
-  }
+function clearVerifySuggestions(): void {
+  detectVerifySeq++;
+  detectedVerifyCommands = [];
+  detectVerifyError = '';
+  detectingVerify = false;
+  renderVerifySuggestions();
+}
+
+async function refreshVerifySuggestions(): Promise<void> {
+  clearVerifySuggestions();
+  const cwd = $<HTMLInputElement>('#work-dir').value.trim();
+  const seq = detectVerifySeq;
+  if (!cwd) return;
+  detectingVerify = true;
+  renderVerifySuggestions();
   try {
+    if (typeof window.api.detectVerifyCommands !== 'function') throw new Error(t('settings.verifyUnavailable'));
     const res = await window.api.detectVerifyCommands(cwd);
     if (seq !== detectVerifySeq) return;
-    detectedVerifyCommands = Array.isArray(res?.commands) ? res.commands : [];
-  } catch {
+    if (!Array.isArray(res?.commands) || !res.commands.every((cmd) => typeof cmd === 'string')) throw new Error(t('settings.verifyInvalidResponse'));
+    detectedVerifyCommands = res.commands;
+  } catch (error) {
     if (seq !== detectVerifySeq) return;
-    detectedVerifyCommands = [];
+    detectVerifyError = cleanIpcError(error);
   }
+  detectingVerify = false;
   renderVerifySuggestions();
 }
 
@@ -317,13 +330,28 @@ function renderVerifySuggestions(): void {
   const input = $<HTMLTextAreaElement>('#verify-command');
   const existing = new Set(input.value.split('\n').map((line) => line.trim()).filter(Boolean));
   const missing = detectedVerifyCommands.filter((cmd) => !existing.has(cmd));
-  if (!missing.length) {
-    box.hidden = true;
-    box.innerHTML = '';
+  box.innerHTML = '';
+  box.hidden = false;
+  if (detectingVerify || detectVerifyError) {
+    const status = document.createElement('span');
+    status.className = 'verify-suggest-label';
+    status.setAttribute('role', detectVerifyError ? 'alert' : 'status');
+    status.textContent = detectVerifyError ? t('settings.verifyFailed', { reason: detectVerifyError }) : t('settings.verifyDetecting');
+    box.appendChild(status);
+    if (detectVerifyError) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'ghost small';
+      retry.textContent = t('msg.retry');
+      retry.onclick = () => { void refreshVerifySuggestions(); };
+      box.appendChild(retry);
+    }
     return;
   }
-  box.hidden = false;
-  box.innerHTML = '';
+  if (!missing.length) {
+    box.hidden = true;
+    return;
+  }
   const label = document.createElement('span');
   label.className = 'verify-suggest-label';
   label.textContent = t('settings.verifyDetected');
@@ -650,6 +678,7 @@ function renderSidebar() {
 }
 
 function saveSettings() {
+  const previousWorkDir = config.settings.workDir;
   config.settings.workDir = $<HTMLInputElement>('#work-dir').value.trim();
   config.settings.discussionMode = $<HTMLSelectElement>('#discussion-mode').value === 'independent-first' ? 'independent-first' : 'sequential';
   config.settings.maxRounds = Math.max(config.settings.discussionMode === 'independent-first' ? 2 : 1, Number($<HTMLInputElement>('#max-rounds').value) || 3);
@@ -669,7 +698,8 @@ function saveSettings() {
   // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
   void saveConfig({ saved: true });
   renderSidebar();
-  void refreshVerifySuggestions();
+  if (config.settings.workDir !== previousWorkDir) void refreshVerifySuggestions();
+  else renderVerifySuggestions();
 }
 
 // ---------- 成員編輯 ----------
@@ -2070,7 +2100,7 @@ function usageText(u: UsageInfo | null | undefined): string {
     if (hasNumber(u.cacheWriteTokens)) parts.push(t('usage.cacheWrite', { n: fmt(numeric(u.cacheWriteTokens)) }));
   }
   if (hasNumber(u.outputTokens)) parts.push(t('usage.output', { n: fmt(numeric(u.outputTokens)) }));
-  if (hasNumber(u.costUsd)) parts.push(`$${numeric(u.costUsd).toFixed(3)}`);
+  if (hasNumber(u.costUsd)) parts.push(t('usage.knownCost', { n: numeric(u.costUsd).toFixed(3) }));
   return parts.join(' · ');
 }
 
@@ -2094,7 +2124,6 @@ function updateUsageTotal() {
     cachedInputTokens: emptyMetric(),
     cacheWriteTokens: emptyMetric(),
     outputTokens: emptyMetric(),
-    costUsd: emptyMetric(),
   };
   const usageAgents = new Set();
   let usageTurns = 0;
@@ -2119,16 +2148,21 @@ function updateUsageTotal() {
     if (metrics.cacheWriteTokens.turns) compact.push(t('usage.cacheWrite', { n: fmt(metrics.cacheWriteTokens.total) }));
   }
   if (metrics.outputTokens.turns) compact.push(t('usage.output', { n: fmt(metrics.outputTokens.total) }));
-  if (metrics.costUsd.turns) compact.push(`$${metrics.costUsd.total.toFixed(3)}`, t('usage.costCoverage', { a: metrics.costUsd.turns, b: usageTurns }));
+  const costs = summarizeCosts(messageData.values());
+  if (costs.costUsd !== null) {
+    compact.push(t('usage.knownCost', { n: costs.costUsd.toFixed(3) }));
+    if (costs.turnsWithCost < costs.turns) compact.push(t('usage.costCoverage', { a: costs.turnsWithCost, b: costs.turns }), t('usage.costMissing', { n: costs.turns - costs.turnsWithCost }));
+  }
   if (unknownTurns) compact.push(t('usage.unknownTurns', { n: unknownTurns }));
 
   const details = [];
   for (const [key, metric] of Object.entries(metrics)) {
     if (!metric.turns) continue;
-    const total = key === 'costUsd' ? `$${metric.total.toFixed(6)}` : exactNumber(metric.total);
+    const total = exactNumber(metric.total);
     details.push(t('usage.detail', { label: t(`usage.label.${key}`), total, a: metric.agents.size, b: usageAgents.size, c: metric.turns, d: usageTurns }));
   }
   if (unknownTurns) details.push(t('usage.unknownDetail', { a: unknownTurns, b: usageTurns }));
+  if (costs.costUsd !== null) details.push(t('usage.knownCost', { n: costs.costUsd.toFixed(6) }), t('task.costTitle'));
   const el = $<HTMLDivElement>('#usage-total');
   el.hidden = compact.length === 0;
   el.textContent = compact.join(' · ');

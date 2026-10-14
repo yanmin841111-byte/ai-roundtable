@@ -196,7 +196,7 @@
                 <input id="max-parallel" type="number" min="1" max="6" />
               </div>
               <div class="setting">
-                <div class="setting-label"><b data-i18n="settings.maxTaskCost">單次任務成本上限(USD)</b><span data-i18n="settings.maxTaskCostDesc">達上限時停止後續自動修復輪次並直接總結;0 或留空代表不限制</span></div>
+                <div class="setting-label"><b data-i18n="settings.maxTaskCost">修復成本門檻(USD)</b><span data-i18n="settings.maxTaskCostDesc">本次任務已完成回合的已知成本達門檻時,不再啟動自動修復。未回報費用不代表免費,執行中的請求與後續總結仍可能產生費用;這不是整體支出的硬上限。0 或留空代表不限制。</span></div>
                 <input id="max-task-cost" type="number" min="0" step="0.5" placeholder="0" />
               </div>
             </div>

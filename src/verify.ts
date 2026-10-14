@@ -298,15 +298,9 @@ export function verifyNotes(result: VerifyResult, locale: TextLocale = 'zh-Hant'
 
 // 依工作目錄下的專案設定檔(package.json、Cargo.toml、go.mod、pyproject.toml、Makefile 等)
 // 偵測常見的 lint / typecheck / test 指令,讓使用者在設定頁可以一鍵加入驗證指令。
-export async function detectVerifyCommands(cwd: string): Promise<string[]> {
+export async function detectVerifyCommands(cwd: string, locale: TextLocale = 'zh-Hant'): Promise<string[]> {
   const dir = String(cwd || '').trim();
-  if (!dir) return [];
-  try {
-    const stat = await fs.promises.stat(dir);
-    if (!stat.isDirectory()) return [];
-  } catch {
-    return [];
-  }
+  if (!dir || !(await fs.promises.stat(dir)).isDirectory()) throw new Error(tx(locale, 'verify.detectDirectory'));
   const commands: string[] = [];
   const add = (cmd: string) => {
     const trimmed = cmd.trim();
@@ -315,10 +309,18 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
 
   // 1. Node.js / TypeScript (package.json)
   const pkgPath = path.join(dir, 'package.json');
-  try {
-    const raw = await fs.promises.readFile(pkgPath, 'utf8');
-    const pkg = JSON.parse(raw);
-    const scripts = pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts as Record<string, unknown> : {};
+  const raw = await readOptionalConfig(pkgPath);
+  if (raw !== null) {
+    let pkg: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('expected an object');
+      pkg = parsed as Record<string, unknown>;
+      if (pkg.scripts !== undefined && (!pkg.scripts || typeof pkg.scripts !== 'object' || Array.isArray(pkg.scripts))) throw new Error('scripts must be an object');
+    } catch (error) {
+      throw new Error(tx(locale, 'verify.detectPackage', { reason: error instanceof Error ? error.message : String(error) }));
+    }
+    const scripts = (pkg.scripts || {}) as Record<string, unknown>;
     const pm = await detectNodePackageManager(dir, typeof pkg?.packageManager === 'string' ? pkg.packageManager : '');
     const runScript = (name: string) => (pm === 'npm' ? `npm run ${name}` : `${pm} ${name}`);
     const testCmd = pm === 'yarn' ? 'yarn test' : `${pm} test`;
@@ -336,8 +338,7 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
       }
     }
     if (!commands.some((c) => /type|tsc/.test(c)) && await fileExists(path.join(dir, 'tsconfig.json'))) {
-      const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
-      if (deps && typeof deps === 'object' && 'typescript' in deps) {
+      if ([pkg.dependencies, pkg.devDependencies].some((deps) => deps && typeof deps === 'object' && 'typescript' in deps)) {
         add(pm === 'npm' ? 'npx tsc --noEmit' : `${pm} exec tsc --noEmit`);
       }
     }
@@ -345,7 +346,7 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
       const testScript = scripts.test.trim();
       if (testScript && !/no test specified/i.test(testScript)) add(testCmd);
     }
-  } catch {}
+  }
 
   // 2. Rust (Cargo.toml)
   if (await fileExists(path.join(dir, 'Cargo.toml'))) {
@@ -361,16 +362,12 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
 
   // 4. Python (pyproject.toml / pytest.ini / tox.ini)
   const pyprojectPath = path.join(dir, 'pyproject.toml');
-  const hasPyproject = await fileExists(pyprojectPath);
+  const pyContent = await readOptionalConfig(pyprojectPath);
   const hasPytestIni = await fileExists(path.join(dir, 'pytest.ini'));
-  if (hasPyproject || hasPytestIni) {
-    let pyContent = '';
-    if (hasPyproject) {
-      try { pyContent = await fs.promises.readFile(pyprojectPath, 'utf8'); } catch {}
-    }
-    if (/\[tool\.ruff\b/i.test(pyContent)) add('ruff check .');
-    if (/\[tool\.mypy\b/i.test(pyContent)) add('mypy .');
-    if (hasPytestIni || /pytest/i.test(pyContent) || await fileExists(path.join(dir, 'tests')) || await fileExists(path.join(dir, 'test'))) {
+  if (pyContent !== null || hasPytestIni) {
+    if (/\[tool\.ruff\b/i.test(pyContent || '')) add('ruff check .');
+    if (/\[tool\.mypy\b/i.test(pyContent || '')) add('mypy .');
+    if (hasPytestIni || /pytest/i.test(pyContent || '') || await fileExists(path.join(dir, 'tests')) || await fileExists(path.join(dir, 'test'))) {
       add('pytest');
     }
   }
@@ -379,13 +376,11 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
   if (commands.length === 0) {
     for (const makeName of ['Makefile', 'makefile', 'GNUmakefile']) {
       const makePath = path.join(dir, makeName);
-      if (!(await fileExists(makePath))) continue;
-      try {
-        const makeText = await fs.promises.readFile(makePath, 'utf8');
-        for (const target of ['lint', 'check', 'test']) {
-          if (new RegExp(`^${target}\\s*:`, 'm').test(makeText)) add(`make ${target}`);
-        }
-      } catch {}
+      const makeText = await readOptionalConfig(makePath);
+      if (makeText === null) continue;
+      for (const target of ['lint', 'check', 'test']) {
+        if (new RegExp(`^${target}\\s*:`, 'm').test(makeText)) add(`make ${target}`);
+      }
       break;
     }
   }
@@ -393,12 +388,22 @@ export async function detectVerifyCommands(cwd: string): Promise<string[]> {
   return commands;
 }
 
+async function readOptionalConfig(full: string): Promise<string | null> {
+  try {
+    return await fs.promises.readFile(full, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 async function fileExists(full: string): Promise<boolean> {
   try {
     await fs.promises.access(full);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 

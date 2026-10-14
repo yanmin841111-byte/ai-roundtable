@@ -217,6 +217,32 @@ test('語法檢查支援 Python 與 Shell 腳本,不留下 __pycache__ 且不執
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('verification detection distinguishes empty projects from invalid paths, configs and permission failures', async () => {
+  const dir = dirWith({});
+  const { mock } = require('node:test');
+  try {
+    assert.deepStrictEqual(await detectVerifyCommands(dir), []);
+    await assert.rejects(detectVerifyCommands(''), /工作目錄/);
+    await assert.rejects(detectVerifyCommands(path.join(dir, 'missing')), /ENOENT/);
+    const pkg = path.join(dir, 'package.json');
+    for (const invalid of ['{', 'null', '[]', '{"scripts": []}']) {
+      fs.writeFileSync(pkg, invalid);
+      await assert.rejects(detectVerifyCommands(dir, 'en'), /Could not parse package.json/);
+    }
+    await assert.rejects(detectVerifyCommands(pkg, 'en'), /working directory/);
+    fs.writeFileSync(pkg, '{"scripts":{"test":"node --test"}}');
+    const read = mock.method(fs.promises, 'readFile', async () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+    try { await assert.rejects(detectVerifyCommands(dir), /permission denied/); }
+    finally { read.mock.restore(); }
+    assert.deepStrictEqual(await detectVerifyCommands(dir), ['npm test'], 'retry after recovery succeeds');
+    fs.mkdirSync(path.join(dir, 'Makefile'));
+    fs.unlinkSync(pkg);
+    await assert.rejects(detectVerifyCommands(dir), /EISDIR/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

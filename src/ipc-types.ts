@@ -111,7 +111,7 @@ export interface AppSettings {
   composerHeight?: number;
   // 同時進行的獨立任務件數上限;同一個專案目錄、同一台本機模型的任務另外排隊
   maxParallelJobs?: number;
-  // 單次任務成本上限(USD,0 或未設代表不限制);達標時停止後續修復輪次並警告
+  // 已知任務成本的修復門檻(USD,0 或未設代表不限制);不是整體支出的硬上限
   maxTaskCostUsd?: number;
 }
 
@@ -408,7 +408,7 @@ export interface TaskSummary {
   files: Array<{ path: string; status: DiffFileStatus; added: number; removed: number }>;
   moreFiles: number;
   // 這次任務所有回合的用量加總。turnsWithUsage < turns 代表有些回合沒有回報用量,總數偏低
-  usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number };
+  usage: { inputTokens: number; outputTokens: number; costUsd: number | null; turns: number; turnsWithUsage: number; turnsWithCost?: number };
   // app 自己跑的自動驗證:
   //   passed          語法檢查與專案驗證指令都跑過且通過
   //   syntax-only     只做了內建語法檢查,沒有專案驗證指令。不代表需求或邏輯已驗證。

@@ -181,3 +181,28 @@ test('merging identical executable scripts or 3-way merged executable scripts pr
   }
 });
 
+test('identical added files with differing modes remain conflicts without widening permissions', async () => {
+  for (const modes of [[0o600, 0o644], [0o644, 0o755]]) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-lanes-mode-conflict-'));
+    const before = await snapshotDir(cwd);
+    const lanes = await prepareMemberWorkspaces(cwd, ['alice', 'bob'], before);
+    try {
+      for (const [index, member] of lanes.members.entries()) {
+        const file = path.join(member.dir, 'run.sh');
+        fs.writeFileSync(file, '#!/bin/sh\necho hi\n');
+        fs.chmodSync(file, modes[index]);
+      }
+      const result = await mergeMemberWorkspaces(cwd, lanes, before, new Map([['alice', 'Alice'], ['bob', 'Bob']]));
+      assert.deepEqual(result.adopted, []);
+      assert.deepEqual(result.failed, []);
+      assert.deepEqual(result.overlaps, [{ file: 'run.sh', names: ['Alice', 'Bob'] }]);
+      assert.equal(fs.existsSync(path.join(cwd, 'run.sh')), false);
+      for (const [index, member] of lanes.members.entries()) {
+        assert.equal(fs.statSync(path.join(member.dir, 'run.sh')).mode & 0o777, modes[index]);
+      }
+    } finally {
+      await discardMemberWorkspaces(lanes);
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+});

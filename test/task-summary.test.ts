@@ -255,6 +255,35 @@ test('載入紀錄:形狀正確的保留,壞掉的欄位丟掉', () => {
   assert.strictEqual(O.restoreMessage({ id: 't', kind: 'system', taskSummary: { members: 'x' } }).taskSummary, undefined);
 });
 
+test('task costs retain reporting coverage in summaries, history and bilingual exports', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-card-cost-'));
+  try {
+    const { card, orc } = await run(dir, [
+      { id: 'a', name: 'A', canEdit: false, task: 'analysis', usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, total_cost_usd: 0.25 } },
+      { id: 'b', name: 'B', canEdit: false, task: 'review', usage: { prompt_tokens: 10, completion_tokens: 1 } },
+    ]);
+    const costs = require('../src/usage').summarizeCosts(orc.messages);
+    assert.strictEqual(card.taskSummary.usage.costUsd, costs.costUsd);
+    assert.strictEqual(card.taskSummary.usage.turnsWithCost, costs.turnsWithCost);
+    assert.ok(costs.turnsWithCost > 0 && costs.turnsWithCost < costs.turns);
+    const { restoreTaskSummary, taskSummaryText } = require('../src/flow/task-summary');
+    const restored = restoreTaskSummary(JSON.parse(JSON.stringify(card.taskSummary)));
+    assert.strictEqual(restored.usage.turnsWithCost, costs.turnsWithCost);
+    assert.match(taskSummaryText(restored, 'en'), /Known cost \$.*cost covers \d+\/\d+ turns.*does not mean free/);
+    assert.match(taskSummaryText(restored, 'zh-Hant'), /已知成本.*成本涵蓋.*不代表免費/);
+    const legacy = { ...restored, usage: { ...restored.usage } };
+    delete legacy.usage.turnsWithCost;
+    assert.match(taskSummaryText(restoreTaskSummary(legacy), 'en'), /older record did not save cost coverage/);
+    for (const invalid of [-1, 0.5, Infinity, restored.usage.turns + 1]) {
+      assert.strictEqual(restoreTaskSummary({ ...restored, usage: { ...restored.usage, turnsWithCost: invalid } }).usage.turnsWithCost, undefined);
+    }
+    const unknown = { ...restored, usage: { ...restored.usage, costUsd: null, turnsWithCost: 0 } };
+    assert.ok(!/Known cost|cost covers|does not mean free|\$/.test(taskSummaryText(unknown, 'en')), 'no cost noise when no turn reports cost');
+    const zero = { ...restored, usage: { ...restored.usage, costUsd: 0, turnsWithCost: restored.usage.turns } };
+    assert.match(taskSummaryText(zero, 'en'), /Known cost \$0.000/);
+    assert.ok(!/cost covers|does not mean free/.test(taskSummaryText(zero, 'en')), 'full coverage needs no warning');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 test('沒有修復回合時不把原始反例結果寫成修復後通過', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-card-no-repair-'));
   try {

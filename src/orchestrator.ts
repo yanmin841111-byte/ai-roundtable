@@ -15,6 +15,7 @@ import { FileToolSession } from './adapters/file-tools';
 import { snapshotDir, diffSnapshots } from './snapshot';
 import { captureBaseline, changesSince, directoryIdentity, revertToBaseline } from './task-changes';
 import { verificationRevision, verifyChanges, verifyNotes } from './verify';
+import { summarizeCosts } from './usage';
 // 反例與棘輪:把審查從「意見」變成可執行的證據,再用它守住「不准變糟」(見 counterexample.ts / ratchet.ts)
 import { parseCounterexamples, stripCounterexamples, runCounterexamples, classifyConfirmation, counterexampleNotes, counterexampleStatus, counterexampleRejection, counterexampleUnspecified, counterexampleUncorroborated, referenceReasons, parseCounterexampleVote, type Counterexample, type CounterexampleRun } from './counterexample';
 import { gateState, decideRatchet, describeChanges, type GateState } from './ratchet';
@@ -479,8 +480,8 @@ class Orchestrator extends EventEmitter {
     }
     const turns = this.messages.slice(startIndex).filter((m) => m.kind === 'agent' && m.status !== 'running');
     const measured = turns.filter((m) => m.usage);
-    const sum = (key: 'inputTokens' | 'outputTokens' | 'costUsd') => measured.reduce((n, m) => n + (Number(m.usage?.[key]) || 0), 0);
-    const hasCost = measured.some((m) => typeof m.usage?.costUsd === 'number');
+    const sum = (key: 'inputTokens' | 'outputTokens') => measured.reduce((n, m) => n + (Number(m.usage?.[key]) || 0), 0);
+    const costs = summarizeCosts(turns);
     const repairedById = new Map((repairedCounterexamples || []).map((run) => [run.id, run]));
     const counterexampleSummary: TaskSummary['counterexamples'] = counterexamples?.map((run) => {
       const repaired = repairedById.get(run.id);
@@ -506,7 +507,7 @@ class Orchestrator extends EventEmitter {
       members,
       files,
       moreFiles,
-      usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), costUsd: hasCost ? sum('costUsd') : null, turns: turns.length, turnsWithUsage: measured.length },
+      usage: { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), ...costs, turnsWithUsage: measured.length },
       ...(verify ? this.verificationSummary(verify) : {}),
       ...(counterexampleSummary ? { counterexamples: counterexampleSummary } : {}),
       ...(testsTouched ? { testsTouched: true } : {}),
@@ -599,6 +600,8 @@ class Orchestrator extends EventEmitter {
   // ---------- 主流程 ----------
   async runTask(task: string, mode: string, previous?: { plan: Plan; notes: string }) {
     return this.runExclusive(async (agents, cwd) => {
+      const startedAt = Date.now();
+      const startIndex = this.taskStartIndex;
       const guarded = mode === 'guarded';
       if (guarded && new Set(agents.map((agent) => agent.id)).size < 2) {
         await this.guardPlanStopped('sys.guardMembers');
@@ -619,8 +622,6 @@ class Orchestrator extends EventEmitter {
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
         if (!plan) { if (!guarded) await this.summaryPhase(task, 'discuss', {}); return; }
-        const startedAt = Date.now();
-        const startIndex = this.messages.length;
         const gitBefore = await gitStatus(cwd);
         // 審查要看的改動:工作目錄在執行前後的快照差異(見 snapshotDir)
         const snapBefore = await snapshotDir(cwd);
@@ -1637,10 +1638,7 @@ class Orchestrator extends EventEmitter {
 
   // 累計本次任務目前已完成的模型成本(USD)
   currentTaskCostUsd(): number {
-    return this.messages
-      .slice(this.taskStartIndex)
-      .filter((m) => m.kind === 'agent' && m.status !== 'running' && typeof m.usage?.costUsd === 'number')
-      .reduce((sum, m) => sum + (Number(m.usage?.costUsd) || 0), 0);
+    return summarizeCosts(this.messages.slice(this.taskStartIndex)).costUsd ?? 0;
   }
 
   // 檢查本次任務是否已超過使用者設定的單次成本上限

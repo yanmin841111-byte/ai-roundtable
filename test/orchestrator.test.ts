@@ -419,7 +419,7 @@ function fakeOrc(names: any) {
     const passReview = [{ reviewer: orc.agents[1], target: { agent: orc.agents[0], task: '做 A', report: '做好了' }, text: '沒問題\n[NO_ISSUES]', error: null }];
     const passFix = await orc.fixPhase(passReview, [{ agent: orc.agents[0], task: '做 A', report: '做好了' }]);
     assert.deepStrictEqual(passFix.unresolved, [], '審查通過不需修復時,達預算上限不可產生 unresolved');
-    assert.ok(!orc.messages.some((m: any) => m.tag === 'repair' && /成本上限/.test(m.text)), '不需修復時不應發送預算中斷警告');
+    assert.ok(!orc.messages.some((m: any) => m.tag === 'repair' && /修復門檻/.test(m.text)), '不需修復時不應發送預算中斷警告');
 
     // 部分成員有問題、部分成員通過時,達預算上限只會把有問題的成員列為未解決
     const mixedReviews = [
@@ -431,6 +431,7 @@ function fakeOrc(names: any) {
       { agent: orc.agents[1], task: '做 B', report: 'B' },
     ]);
     assert.deepStrictEqual(mixedFix.unresolved.map((u: any) => u.agent.id), ['a1'], '只有審查未過的乙應列為 unresolved,通過的甲不可受影響');
+    assert.ok(orc.messages.some((m: any) => m.tag === 'repair' && /已知成本.*修復門檻.*不代表免費/.test(m.text)));
   });
 
   console.log(`${m} 項整合測試全部通過`);

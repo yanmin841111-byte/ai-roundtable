@@ -18,6 +18,7 @@ let historyLoaded = false;
 let historySessions: SessionSummary[] = [];
 let openHistoryId: string | null = null;
 let activeSessionId: string | null = null;
+let historyLoadSeq = 0;
 const historyErrors = new Map<string, string>();
 
 export function setupHistory(options: HistoryOptions): void {
@@ -64,22 +65,27 @@ function setHistoryError(message: string): void {
 
 export async function loadHistory(force = false, { quiet = false }: { quiet?: boolean } = {}): Promise<void> {
   if (historyLoaded && !force) return;
+  const seq = ++historyLoadSeq;
   const refresh = $<HTMLButtonElement>('#history-refresh');
   refresh.disabled = true;
   setHistoryError('');
-  if (!quiet) $<HTMLDivElement>('#history-list').innerHTML = `<div class="history-empty">${escapeHtml(t('history.loading'))}</div>`;
+  if (!quiet && !historyLoaded) $<HTMLDivElement>('#history-list').innerHTML = `<div class="history-empty">${escapeHtml(t('history.loading'))}</div>`;
   try {
     const result = await window.api.sessions.list();
-    historySessions = Array.isArray(result && result.sessions) ? result.sessions! : [];
+    if (seq !== historyLoadSeq) return;
+    if (result.error) throw new Error(result.error);
+    if (!Array.isArray(result.sessions)) throw new Error(t('history.invalidResponse'));
+    historySessions = result.sessions;
     historyLoaded = true;
     historyErrors.clear();
-    if (result && result.error) setHistoryError(result.error);
     renderHistoryList();
   } catch (error) {
+    if (seq !== historyLoadSeq) return;
     setHistoryError(t('history.loadFailed', { reason: cleanIpcError(error) }));
-    $<HTMLDivElement>('#history-list').innerHTML = '';
+    if (historyLoaded) renderHistoryList();
+    else $<HTMLDivElement>('#history-list').innerHTML = '';
   } finally {
-    refresh.disabled = false;
+    if (seq === historyLoadSeq) refresh.disabled = false;
   }
 }
 

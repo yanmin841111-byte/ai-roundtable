@@ -196,4 +196,15 @@ t('SHAPES 只包含內建慣例,unknown 不在其中', () => {
   assert.ok(!SHAPES.includes('unknown'), 'unknown 是判讀失敗的結果,不是可宣告的值');
 });
 
+t('known costs count all completed agent turns and distinguish zero from unreported', () => {
+  const { summarizeCosts } = require('../src/usage');
+  const turn = (cost?: number | null) => ({ kind: 'agent', status: 'done', usage: cost === undefined ? undefined : { costUsd: cost } });
+  assert.deepStrictEqual(summarizeCosts([turn(), turn(null)]), { costUsd: null, turns: 2, turnsWithCost: 0 });
+  assert.deepStrictEqual(summarizeCosts([turn(0)]), { costUsd: 0, turns: 1, turnsWithCost: 1 });
+  assert.deepStrictEqual(summarizeCosts([
+    turn(0.25), turn(0), turn(), turn(null), turn(NaN), turn(Infinity), turn(-1),
+    { ...turn(50), status: 'running' }, { kind: 'user', usage: { costUsd: 50 } },
+  ]), { costUsd: 0.25, turns: 7, turnsWithCost: 2 });
+});
+
 console.log(`\n${n} 項測試全部通過`);

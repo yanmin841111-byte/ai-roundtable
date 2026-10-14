@@ -219,8 +219,8 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: strin
   const u = s.usage;
   if (u.turnsWithUsage) {
     metrics.appendChild(metric(t('task.metric.tokens'), t('task.tokens', { input: fmt(u.inputTokens), output: fmt(u.outputTokens) }), t('task.tokensTitle')));
-    if (u.costUsd != null) metrics.appendChild(metric(t('task.metric.cost'), `$${u.costUsd.toFixed(3)}`, t('task.costTitle')));
   }
+  if (u.costUsd != null) metrics.appendChild(metric(t('task.metric.cost'), `$${u.costUsd.toFixed(3)}`, t('task.costTitle')));
   head.append(titleRow, metrics);
   // 內容區:成員與檔案。標題列是一條品牌色的色帶,和對話泡泡明顯不同
   const body = document.createElement('div');
@@ -231,6 +231,17 @@ export function renderTaskSummary(el: HTMLElement, s: TaskSummary, taskId: strin
     partial.className = 'ts-partial';
     partial.textContent = t('task.usagePartial', { n: u.turns - u.turnsWithUsage });
     head.appendChild(partial);
+  }
+  // 只有部分回合回報費用時才提醒:全部回報不用提醒,全部沒回報則根本不顯示金額
+  const reported = u.turnsWithCost;
+  const costNote = u.costUsd == null ? ''
+    : reported === undefined ? t('usage.costCoverageUnknown')
+    : reported < u.turns ? `${t('usage.costCoverage', { a: reported, b: u.turns })} · ${t('usage.costMissing', { n: u.turns - reported })}` : '';
+  if (costNote) {
+    const coverage = document.createElement('div');
+    coverage.className = 'ts-partial ts-cost-coverage';
+    coverage.textContent = costNote;
+    head.appendChild(coverage);
   }
   card.append(head, body);
   let freshness: TaskVerificationStatus['freshness'] = 'unknown';

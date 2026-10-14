@@ -13,7 +13,24 @@
 // 最重要的規則:沒有回報的欄位一律是 null,絕不能寫成 0。
 // 「這個來源沒給這個數字」和「這個數字確定是零」在加總時意義完全不同。
 
+import type { ChatMessage } from './ipc-types';
+
 const SHAPES = ['anthropic', 'codex', 'openai', 'cursor'];
+
+export function summarizeCosts(messages: Iterable<Pick<ChatMessage, 'kind' | 'status' | 'usage'>>): { costUsd: number | null; turns: number; turnsWithCost: number } {
+  let total = 0;
+  let turns = 0;
+  let turnsWithCost = 0;
+  for (const message of messages) {
+    if (message.kind !== 'agent' || message.status === 'running') continue;
+    turns++;
+    const cost = message.usage?.costUsd;
+    if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) continue;
+    total += cost;
+    turnsWithCost++;
+  }
+  return { costUsd: turnsWithCost ? total : null, turns, turnsWithCost };
+}
 
 export type NormalizedUsage = {
   inputTokens: number | null;

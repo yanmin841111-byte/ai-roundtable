@@ -160,7 +160,8 @@ async function tryThreeWayMerge(
     if (changedModes.length > 1) return null;
     resolvedMode = changedModes.length === 1 ? changedModes[0] : baseMode;
   } else {
-    resolvedMode = modes.reduce((a, b) => a | b, modes[0]);
+    if (modes.some((mode) => mode !== modes[0])) return null;
+    resolvedMode = modes[0];
   }
   // 若所有成員改出完全相同的內容,直接採用並保留檔案權限
   if (buffers.every((b) => b.equals(buffers[0]))) return { buf: buffers[0], mode: resolvedMode };
