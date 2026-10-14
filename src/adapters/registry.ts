@@ -68,6 +68,7 @@ class Registry {
         if (file.endsWith('.json')) {
           const migration = this.migrateLegacyApiKey(file);
           if (migration.error) throw new Error(migration.error);
+          this.migrateGeminiCli(file);
         }
         const adapter = this.loadFile(full);
         entry.id = adapter.id;
@@ -354,6 +355,46 @@ class Registry {
 
   readFile(file: any) {
     return fs.readFileSync(this.safeUserPath(file), 'utf8');
+  }
+
+  private migrateGeminiCli(file: string): void {
+    const full = this.safeUserPath(file);
+    const original = fs.readFileSync(full, 'utf8');
+    let spec: Record<string, unknown>;
+    try { spec = JSON.parse(original); } catch { return; }
+    if (!spec || spec.type !== 'cli' || spec.bin !== 'gemini'
+      || spec.docsUrl !== 'https://github.com/google-gemini/gemini-cli') return;
+    let temporary: string | undefined;
+    try {
+      if (!this.templatesDir) throw new Error(tx(this.getLocale(), 'ext.noTemplateDir'));
+      const template = JSON.parse(fs.readFileSync(path.join(this.templatesDir, 'antigravity-cli.json'), 'utf8'));
+      const errors: string[] = [];
+      validateCommon(template, errors, this.getLocale());
+      validateCliSpec(template, errors, this.getLocale());
+      if (errors.length) throw new Error(errors.join(';'));
+      const preserved = Object.fromEntries(['id', 'env', 'timeoutMs', 'supportsEdit']
+        .filter((key) => Object.prototype.hasOwnProperty.call(spec, key))
+        .map((key) => [key, spec[key]]));
+      const migrated = { ...template, ...preserved };
+      validateCommon(migrated, errors, this.getLocale());
+      validateCliSpec(migrated, errors, this.getLocale());
+      if (errors.length) throw new Error(errors.join(';'));
+      const backup = `${full}.pre-antigravity.bak`;
+      if (fs.existsSync(backup)) {
+        if (fs.readFileSync(backup, 'utf8') !== original) throw new Error(tx(this.getLocale(), 'ext.exists', { file: path.basename(backup) }));
+      } else {
+        fs.writeFileSync(backup, original, { flag: 'wx', mode: 0o600 });
+      }
+      const candidate = `${full}.antigravity-${process.pid}.tmp`;
+      fs.writeFileSync(candidate, JSON.stringify(migrated, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+      temporary = candidate;
+      fs.renameSync(temporary, full);
+      temporary = undefined;
+    } catch (error) {
+      throw new Error(tx(this.getLocale(), 'ext.antigravityMigrationFailed', { error: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      if (temporary && fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
   }
 
   // 舊版擴充把 API key 明文寫在 apiKey 欄位。先存進安全儲存，成功後才改寫檔案；

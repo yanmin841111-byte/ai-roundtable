@@ -14,6 +14,8 @@ const path = require('path');
 const { claudeArgs, codexArgs } = require('../src/adapters/builtin');
 const { cursorArgs } = require('../src/adapters/cursor');
 const { copilotArgs, isCopilotInstallShim } = require('../src/adapters/copilot');
+const { buildArgs } = require('../src/adapters/template');
+const antigravity = require('../adapters/templates/antigravity-cli.json');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
@@ -23,7 +25,7 @@ const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
 function helpText(cmd: string): string | null {
   const file = path.join(os.tmpdir(), `rt-help-${cmd.replace(/\W+/g, '-')}-${process.pid}.txt`);
   try {
-    execSync(`${cmd} --help > ${JSON.stringify(file)} 2>/dev/null`, { timeout: 30000 });
+    execSync(`${cmd} --help > ${JSON.stringify(file)} 2>&1`, { timeout: 30000 });
     return fs.readFileSync(file, 'utf8');
   } catch { return null; } finally { fs.rmSync(file, { force: true }); }
 }
@@ -62,6 +64,8 @@ const CASES: Array<{ name: string; help: string; args: string[] }> = [
   { name: 'cursor 可改檔', help: 'cursor-agent', args: cursorArgs({ canEdit: true }, { cwd: '/tmp' }, '') },
   { name: 'copilot read-only', help: 'copilot', args: copilotArgs({ canEdit: false, model: 'auto', effort: 'high' }, { cwd: '/tmp', sessionId: 'abc' }) },
   { name: 'copilot editing', help: 'copilot', args: copilotArgs({ canEdit: true, model: '', effort: '' }, { newSessionId: '6c77123b-bc12-4476-bf69-7f7adb198e5c', attachments: [{ path: '/tmp/file.txt' }] }) },
+  { name: 'antigravity sandbox', help: 'agy', args: buildArgs(antigravity.args, { prompt: 'x', model: 'model-id', canEdit: false }) },
+  { name: 'antigravity editing', help: 'agy', args: buildArgs(antigravity.args, { prompt: 'x', model: '', canEdit: true }) },
 ];
 
 test('送出去的參數(含短旗標與固定選項的值),安裝的 CLI 都支援', () => {

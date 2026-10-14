@@ -1,0 +1,39 @@
+{
+  "id": "gemini",
+  "label": "Antigravity CLI",
+  "type": "cli",
+  "description": "Google Antigravity CLI(指令 agy)。以非互動純文字模式執行;不回報工具稽核、費用或續接 ID。未允許改檔時不自動批准權限,但 sandbox 並非嚴格唯讀。沿用舊內部 ID 以保留既有成員設定。已核對 agy 1.0.12 參數,尚未完成真實模型驗證。",
+  "docsUrl": "https://antigravity.google/docs/getting-started?tab=cli",
+  "bin": "agy",
+  "input": "arg",
+  "systemPrompt": "prepend",
+  "args": [
+    "--print",
+    "{prompt}",
+    [
+      "--model",
+      "{model}"
+    ],
+    {
+      "if": "canEdit",
+      "then": [
+        "--dangerously-skip-permissions"
+      ],
+      "else": [
+        "--sandbox"
+      ]
+    }
+  ],
+  "output": {
+    "format": "text"
+  },
+  "supportsResume": false,
+  "supportsEdit": true,
+  "models": [],
+  "capabilities": {
+    "attachments": [
+      "filePath"
+    ],
+    "attachmentsNeedCwd": true
+  }
+}

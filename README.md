@@ -6,7 +6,7 @@
 或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
 
 > A desktop app that seats multiple AI coding CLIs and APIs (Claude Code, Codex
-> CLI, Cursor CLI, GitHub Copilot CLI, Grok, Kimi, DeepSeek, Gemini, Ollama, or anything you plug
+> CLI, Cursor CLI, GitHub Copilot CLI, Grok, Kimi, DeepSeek, Antigravity CLI, Ollama, or anything you plug
 > in) at one table: they debate a task, split the work, execute in parallel, and
 > review each other's output. You watch the whole conversation live and can jump
 > in at any time.
@@ -16,7 +16,7 @@
 ## 特色
 
 - **多個 AI 同桌**:內建 Claude Code、Codex CLI、Cursor CLI、GitHub Copilot
-  CLI;Grok、Kimi、DeepSeek、Gemini、OpenRouter、Ollama 等可從範本一鍵加入。
+  CLI;Grok、Kimi、DeepSeek、Antigravity CLI、OpenRouter、Ollama 等可從範本一鍵加入。
 - **可擴充**:用 JSON 描述任何 CLI 或 OpenAI 相容 API,也能寫 JS 外掛,在 app
   內直接編輯與重新載入。
 - **每位成員各自設定**:角色個性、模型、推理強度、是否允許改檔案。
@@ -158,9 +158,12 @@ MB),不是完整備份;缺基準點、還原不完整或工作目錄身分改變
 | 強度         | 選項依模型而定;模型不支援時會自動降到最接近的等級,或略過不送,並在對話中標示                                                                                                                               |
 | 角色與個性   | 會放進系統提示,決定成員的立場與說話方式                                                                                                                                                                   |
 | 允許修改檔案 | 開啟時 Claude 用 `--dangerously-skip-permissions`、Codex 用 `workspace-write`、Cursor 用 `--force`、Copilot 用 `--allow-all-tools`;關閉時只能讀取(Cursor 用 `--mode ask`,Copilot 只提供 `view/glob/grep`) |
-| 自訂指令     | 提示詞從 stdin 送入、stdout 當作回覆,可用 `{model}`、`{effort}` 佔位,例如 `gemini -m {model} -p -`                                                                                                        |
+| 自訂指令     | 提示詞從 stdin 送入、stdout 當作回覆,可用 `{model}`、`{effort}` 佔位,例如 `my-cli --model {model}`                                                                                                        |
 
 主持人在「設定」區選擇,負責分工與總結。
+
+Antigravity CLI 的 `--sandbox` 並非強制唯讀;未允許改檔時僅不自動批准權限。
+替換方式、舊設定備份與能力限制見[轉接器文件](docs/adapters.md#antigravity-cli-取代-gemini-cli)。
 
 GitHub Copilot CLI 的模型清單讀自 `copilot help config`(不耗額度),`gpt-5-mini`、`claude-haiku-4.5`、`gpt-5.4-mini` 標示為低成本並排在前面;實際可用的模型由組織政策決定。提交權限關閉時,Copilot 成員額外帶上 `--deny-tool=shell(git commit)`;推送權限關閉時則帶上 `--deny-tool=shell(git push)`。其他 CLI 只在提示詞中要求,無法強制;這些規則不是完整的 Git 安全沙箱。
 
@@ -176,7 +179,7 @@ CLI、模型或金鑰。套用後又改過設定時,按鈕會標出「已修改�
 
 | 範本                                            | 類型 | 需要                                                                |
 | ----------------------------------------------- | ---- | ------------------------------------------------------------------- |
-| Grok CLI、Kimi Code CLI、Gemini CLI             | CLI  | 安裝對應 CLI                                                        |
+| Grok CLI、Kimi Code CLI、Antigravity CLI        | CLI  | 安裝對應 CLI;Antigravity 使用 `agy`                                   |
 | DeepSeek、Kimi(Moonshot)、Grok(xAI)、OpenRouter | API  | API key(在擴充編輯器填入,或設定環境變數)                            |
 | Ollama                                          | API  | 本機執行 Ollama；Qwen3.8 MLX 可先執行 `ollama pull qwen3.8:27b-mlx` |
 | 空白 CLI、空白 API、Aider JS 外掛               | 自訂 | 自己填                                                              |
@@ -219,7 +222,7 @@ MB,驗證在主程序進行(副檔名與檔案內容都會檢查)。
 
 附件存在 app 的資料夾,不會寫進工作目錄。依成員能力決定怎麼給:
 
-- 本機 CLI:給檔案路徑,由 CLI 自己讀。讀取範圍受限的 CLI(Claude Code、Gemini
+- 本機 CLI:給檔案路徑,由 CLI 自己讀。附件需放在工作目錄的 CLI(Claude Code、Antigravity
   CLI、GitHub Copilot CLI)會在工作目錄的 `.roundtable-runtime/` 放一份暫存副本,任務結束、停止或關閉
   app 時刪除。
 - API:文字檔直接內嵌;宣告支援圖片的端點會附上圖片,被拒收時自動改用純文字重送。PDF

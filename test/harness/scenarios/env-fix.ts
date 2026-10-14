@@ -13,7 +13,7 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { runApp, report, REPO_ROOT } from '../app';
-import { scriptedMember, missingCliMember } from '../fixtures';
+import { hideAntigravityCli, scriptedMember, missingCliMember } from '../fixtures';
 
 async function main() {
   // 連不上的端點,而且自己宣告了修復指令(範本作者可以宣告,app 不為某個服務寫死特例)
@@ -36,7 +36,8 @@ async function main() {
       { id: 'd1', name: '本機模型', cli: 'fixable', model: '', persona: '', canEdit: false },
       missingCliMember({ id: 'g1', name: '沒裝的 CLI' }),
     ],
-    adapters: [adapter, path.join(REPO_ROOT, 'adapters', 'templates', 'gemini-cli.json')],
+    adapters: [adapter, path.join(REPO_ROOT, 'adapters', 'templates', 'antigravity-cli.json')],
+    beforeLaunch: hideAntigravityCli,
     // 故意設一個不存在的驗證指令:使用者最常見的情況是打錯字或換了專案
     settings: { verifyCommand: 'definitely-not-a-real-command-xyz' },
     timeoutMs: 3 * 60 * 1000,
@@ -91,7 +92,7 @@ async function main() {
         const el = g.$('#f-cli-status') as HTMLElement;
         return el && !el.hidden && el.querySelector('[data-env-url]') ? el : null;
       }, 20000, '沒安裝的 CLI 也有下一步');
-      g.check(/gemini/.test(missingBox.textContent || ''), '說的是找不到哪一個指令');
+      g.check(/missing-agy/.test(missingBox.textContent || ''), '說的是找不到哪一個指令');
       const docs = missingBox.querySelector('[data-env-url]') as HTMLButtonElement;
       g.check(/^https:\/\//.test(docs.dataset.envUrl || ''), `安裝說明指向官方頁面(${docs.dataset.envUrl})`);
       g.check(!missingBox.querySelector('[data-env-run]'), '沒有可照做的指令時就不假裝有');

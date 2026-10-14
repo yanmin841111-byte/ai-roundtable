@@ -546,6 +546,7 @@ const ZH: Record<string, Entry> = {
   'ext.noKeychain': '系統安全儲存目前不可用',
   'ext.legacyKeyFailed': '偵測到舊版明文 API key,但{error}。請設定環境變數後移除檔案中的 apiKey',
   'ext.legacyKeyMigrated': '已將舊版明文 API key 移至系統安全儲存。',
+  'ext.antigravityMigrationFailed': '無法將舊 Gemini CLI 範本轉換為 Antigravity CLI:{error}。請檢查擴充設定與備份。',
   // ---------- 擴充設定的驗證錯誤(寫自訂 JSON 時看到) ----------
   // 句型重複度很高,所以用 {field} 參數化,不逐句翻譯。欄位名稱是協定,不翻譯。
   'spec.contentObject': '內容必須是物件',
@@ -1132,6 +1133,7 @@ const EN: Record<string, Entry> = {
   'ext.noKeychain': 'the system keychain is unavailable',
   'ext.legacyKeyFailed': 'Found a legacy plain-text API key, but {error}. Set an environment variable and remove apiKey from the file',
   'ext.legacyKeyMigrated': 'Moved the legacy plain-text API key into the system keychain.',
+  'ext.antigravityMigrationFailed': 'Could not migrate the legacy Gemini CLI template to Antigravity CLI: {error}. Check the extension settings and backup.',
   // ---------- Extension config validation errors ----------
   'spec.contentObject': 'The content must be an object',
   'spec.badId': 'id must be 1–64 letters, digits, . _ or -, starting with a letter or digit',

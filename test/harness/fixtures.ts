@@ -7,6 +7,7 @@
 // 可以把「分工 JSON 產得對不對」和「檔案工具通不通」分開驗。
 
 import path from 'path';
+import fs from 'fs';
 import type { HarnessMember } from './app';
 
 export const FIXTURE_DIR = __dirname;
@@ -88,11 +89,18 @@ export function ollamaMember(opts: { id?: string; name?: string; model?: string 
 export function missingCliMember(opts: { id?: string; name?: string; cli?: string } = {}): HarnessMember {
   return {
     id: opts.id || 'missing',
-    name: opts.name || 'Gemini',
+    name: opts.name || 'Antigravity',
     cli: opts.cli || 'gemini',
     persona: '對照用成員',
     canEdit: true,
   };
+}
+
+export function hideAntigravityCli({ userData }: { userData: string }): void {
+  const file = path.join(userData, 'adapters', 'antigravity-cli.json');
+  const spec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  spec.bin = path.join(userData, 'missing-agy');
+  fs.writeFileSync(file, JSON.stringify(spec));
 }
 
 /** 一行就能改對、也一定改得出來的題目。驗檔案工具時用它,才不會把模型能力混進來。 */

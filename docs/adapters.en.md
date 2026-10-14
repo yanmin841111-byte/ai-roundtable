@@ -6,7 +6,7 @@ AI Roundtable ships with Claude Code, Codex CLI, Cursor CLI and GitHub Copilot C
 
 | Type      | Suited to                                                                              | Can edit files                                                                               | File                        |
 | --------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------- |
-| CLI       | AI CLIs with a non-interactive mode, e.g. Grok CLI, Kimi Code CLI, Gemini CLI          | Yes                                                                                          | `.json`, `"type": "cli"`    |
+| CLI       | AI CLIs with a non-interactive mode, e.g. Grok CLI, Kimi Code CLI, Antigravity CLI     | Yes                                                                                          | `.json`, `"type": "cli"`    |
 | API       | OpenAI-compatible Chat Completions APIs, e.g. DeepSeek, Kimi, Grok, OpenRouter, Ollama | No by default; file editing requires explicitly enabled restricted tools and a reviewer gate | `.json`, `"type": "openai"` |
 | JS plugin | Anything JSON cannot describe                                                          | Up to you                                                                                    | `.js`                       |
 
@@ -326,4 +326,26 @@ For long-running work, pass the process or a `kit.createStopHandle(() => abort()
 
 An extension is a single file, so it can be shared directly. Pull requests with useful definitions for `adapters/templates/` are welcome.
 
-The Grok CLI, Kimi Code CLI and Gemini CLI templates were written from the official documentation and have not been tested by the author against the real CLIs. If the arguments or output format differ, please report or fix them.
+The Grok CLI and Kimi Code CLI templates were written from the official documentation and have not been tested by the author against the real CLIs. If the arguments or output format differ, please report or fix them.
+
+### Antigravity CLI replaces Gemini CLI
+
+`antigravity-cli.json` uses `agy --print`, an optional `--model`, and plain-text output.
+Arguments have been checked against `agy 1.0.12 --help`; real-model validation is still pending.
+Install and sign in through the terminal using the
+[official guide](https://antigravity.google/docs/getting-started?tab=cli).
+Leave the model blank for the CLI default, or select an ID from `agy models`; old Gemini model IDs
+are not guaranteed to work. Structured tool activity, costs and session resumption are not reported.
+A nonzero exit remains a failed turn even after partial text output; that text is preserved.
+
+The internal ID remains `gemini` to preserve existing members, lineups and historical references;
+there is no separate Gemini option. Installed official templates (`bin: gemini` and the Gemini CLI
+repository as `docsUrl`) are backed up to `.pre-antigravity.bak` before atomic replacement.
+IDs, environment variables, timeouts and edit-capability restrictions are preserved.
+Migration errors appear as extension load failures rather than silently falling back.
+Custom executables or documentation URLs are not rewritten automatically and need manual adjustment.
+
+Editing members use `--dangerously-skip-permissions`; other members use `--sandbox` without automatic
+permission approval. **Sandbox is not a read-only guarantee** and may allow workspace file operations.
+The app's read-only instructions are not CLI-level enforcement; choose an adapter with an enforced
+read-only mode when that guarantee is required.

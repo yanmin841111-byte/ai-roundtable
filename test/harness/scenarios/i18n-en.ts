@@ -10,7 +10,7 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { runApp, report, REPO_ROOT } from '../app';
-import { missingCliMember, scriptedMember } from '../fixtures';
+import { hideAntigravityCli, missingCliMember, scriptedMember } from '../fixtures';
 
 const CJK = /[一-鿿]/;
 
@@ -20,10 +20,11 @@ async function main() {
 
   const r = await runApp({
     members: [
-      missingCliMember({ id: 'g1', name: 'Gemini' }),
+      missingCliMember({ id: 'g1', name: 'Antigravity' }),
       scriptedMember({ id: 's1', name: 'Scripted' }),
     ],
-    adapters: [path.join(REPO_ROOT, 'adapters', 'templates', 'gemini-cli.json'), broken],
+    adapters: [path.join(REPO_ROOT, 'adapters', 'templates', 'antigravity-cli.json'), broken],
+    beforeLaunch: hideAntigravityCli,
     settings: { uiLocale: 'en', language: 'English', leadAgentId: 's1' },
     timeoutMs: 4 * 60 * 1000,
     scenario: async () => {
@@ -35,10 +36,10 @@ async function main() {
       g.$('#settings-btn').click();
       const rows = await g.waitFor(() => {
         const list = Array.from(document.querySelectorAll('#ext-list > *')).map((e) => (e.textContent || '').replace(/\s+/g, ' ').trim());
-        return list.some((t: string) => /Gemini/.test(t)) && list.some((t: string) => /zz-broken/.test(t)) ? list : null;
+        return list.some((t: string) => /Antigravity/.test(t)) && list.some((t: string) => /zz-broken/.test(t)) ? list : null;
       }, 30000, '擴充清單');
-      const gemini = rows.find((t: string) => /Gemini/.test(t));
-      g.check(/Command not found: gemini/.test(gemini), `健康檢查錯誤是英文(${gemini.slice(0, 70)})`);
+      const antigravity = rows.find((t: string) => /Antigravity/.test(t));
+      g.check(/Command not found: .*missing-agy/.test(antigravity), `健康檢查錯誤是英文(${antigravity.slice(0, 70)})`);
 
       // --- 擴充載入失敗 ---
       const brokenRow = rows.find((t: string) => /zz-broken/.test(t));
@@ -47,17 +48,17 @@ async function main() {
       g.$('#settings-close').click();
 
       // --- 執行中的成員回合:語言經 orchestrator → runTurn → ctx.locale 傳到 adapter ---
-      const msgs = await g.send('@Gemini hello', 'divide');
-      const turn = msgs.find((m: any) => m.kind === 'agent' && m.agentName === 'Gemini');
+      const msgs = await g.send('@Antigravity hello', 'divide');
+      const turn = msgs.find((m: any) => m.kind === 'agent' && m.agentName === 'Antigravity');
       g.check(!!turn && !!turn.error, '指定的成員回合有錯誤');
-      g.check(/Could not start gemini/.test(turn.error), `執行期錯誤是英文(${String(turn.error).slice(0, 70)})`);
+      g.check(/Could not start .*missing-agy/.test(turn.error), `執行期錯誤是英文(${String(turn.error).slice(0, 70)})`);
       await g.shot('02-turn-error-en');
 
       // 該隱藏的東西真的隱藏了嗎(例如沒有「尚未審查」時,那個提示框不該留下一個空框)
       const leaks = g.hiddenLeaks();
       g.check(leaks.length === 0, `沒有帶 hidden 卻仍佔版面的元素(${leaks.join(', ') || '無'})`);
 
-      return { gemini: gemini.slice(0, 90), broken: brokenRow.slice(0, 90), turnError: String(turn.error).slice(0, 90) };
+      return { antigravity: antigravity.slice(0, 90), broken: brokenRow.slice(0, 90), turnError: String(turn.error).slice(0, 90) };
     },
   });
 

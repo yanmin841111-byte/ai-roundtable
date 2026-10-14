@@ -13,7 +13,7 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { runApp, report, REPO_ROOT } from '../app';
-import { missingCliMember, scriptedMember } from '../fixtures';
+import { hideAntigravityCli, missingCliMember, scriptedMember } from '../fixtures';
 
 async function main() {
   const deadAdapter = path.join(REPO_ROOT, 'test', 'harness', 'zz-dead-endpoint.json');
@@ -24,15 +24,16 @@ async function main() {
 
   const r = await runApp({
     members: [
-      missingCliMember({ id: 'g1', name: 'Gemini' }),
+      missingCliMember({ id: 'g1', name: 'Antigravity' }),
       scriptedMember({ id: 's1', name: '對照組' }),
       missingCliMember({ id: 't1', name: '純文字', cli: 'deepseek' }),
     ],
     adapters: [
-      path.join(REPO_ROOT, 'adapters', 'templates', 'gemini-cli.json'),
+      path.join(REPO_ROOT, 'adapters', 'templates', 'antigravity-cli.json'),
       path.join(REPO_ROOT, 'adapters', 'templates', 'deepseek-api.json'),
       deadAdapter,
     ],
+    beforeLaunch: hideAntigravityCli,
     // 刻意無效的 key。不用 sk- 開頭,免得被 secret scanner 當成真金鑰擋下或誤報。
     env: { DEEPSEEK_API_KEY: 'invalid-key-for-harness-test' },
     timeoutMs: 4 * 60 * 1000,

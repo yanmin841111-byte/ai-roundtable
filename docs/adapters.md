@@ -6,7 +6,7 @@ AI Roundtable 內建 Claude Code、Codex CLI、Cursor CLI 與 GitHub Copilot CLI
 
 | 類型    | 適合                                                                             | 能修改檔案                                                   | 檔案                       |
 | ------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------- |
-| CLI     | 有非互動模式的 AI CLI,例如 Grok CLI、Kimi Code CLI、Gemini CLI                   | 可以                                                         | `.json`,`"type": "cli"`    |
+| CLI     | 有非互動模式的 AI CLI,例如 Grok CLI、Kimi Code CLI、Antigravity CLI              | 可以                                                         | `.json`,`"type": "cli"`    |
 | API     | OpenAI 相容的 Chat Completions API,例如 DeepSeek、Kimi、Grok、OpenRouter、Ollama | 預設不行；明確啟用受限檔案工具並通過 reviewer 閘門後才可改檔 | `.json`,`"type": "openai"` |
 | JS 外掛 | JSON 描述不了的情況                                                              | 自己決定                                                     | `.js`                      |
 
@@ -323,4 +323,23 @@ module.exports = {
 
 擴充就是一個檔案,可以直接分享。歡迎把好用的設定送 pull request 到 `adapters/templates/`。
 
-範本裡的 Grok CLI、Kimi Code CLI、Gemini CLI 是依官方文件撰寫,作者沒有實際安裝測試。如果參數或輸出格式不同,歡迎回報或修正。
+範本裡的 Grok CLI、Kimi Code CLI 是依官方文件撰寫,作者沒有實際安裝測試。如果參數或輸出格式不同,歡迎回報或修正。
+
+### Antigravity CLI 取代 Gemini CLI
+
+`antigravity-cli.json` 使用 `agy --print`、選填的 `--model` 與純文字輸出,已核對
+`agy 1.0.12 --help`,尚未完成真實模型驗證。先依
+[官方說明](https://antigravity.google/docs/getting-started?tab=cli)安裝並在終端登入。
+模型欄位可留白使用 CLI 預設;舊 Gemini 模型 ID 不保證相容,請以 `agy models` 確認後重新選擇。
+不假設支援 JSON 串流,因此不回報結構化工具活動、費用或對話續接 ID。
+CLI 有部分文字輸出後仍以非零代碼退出,會保留文字並將回合標為失敗。
+
+範本保留內部 ID `gemini`,以維持既有成員、陣容與歷史紀錄的參照,不是另一個 Gemini 選項。
+載入舊官方範本(`bin: gemini` 且 `docsUrl` 指向 Gemini CLI 官方儲存庫)時,
+先備份成 `.pre-antigravity.bak`,再原子替換成 Antigravity 設定;
+保留 ID、環境變數、逾時與改檔能力限制。轉換失敗會顯示擴充載入錯誤,不偷偷退回舊指令。
+自訂執行檔或不同文件網址的擴充不會自動改寫,需自行調整。
+
+允許修改檔案時會傳入 `--dangerously-skip-permissions`;否則只傳入 `--sandbox`,
+不自動批准權限。**Sandbox 不等於唯讀**,仍可能允許工作目錄內的檔案操作;
+App 的唯讀提示不是 CLI 層級的強制保護。若要求嚴格唯讀,請選擇有強制唯讀模式的轉接器。

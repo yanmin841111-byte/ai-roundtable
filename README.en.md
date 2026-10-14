@@ -15,7 +15,7 @@ work, execute it, and review each other.
 ## Features
 
 - **Several AIs at one table**: Claude Code, Codex CLI, Cursor CLI and GitHub Copilot CLI are built
-  in; Grok, Kimi, DeepSeek, Gemini, OpenRouter, Ollama and more can be added
+  in; Grok, Kimi, DeepSeek, Antigravity CLI, OpenRouter, Ollama and more can be added
   from templates in one click.
 - **Extensible**: describe any CLI or OpenAI-compatible API in JSON, or write a
   JS plugin; edit and reload extensions inside the app.
@@ -243,7 +243,11 @@ Click a member card in the sidebar to edit it:
 | Effort               | Options depend on the model; unsupported levels are lowered to the nearest supported one or skipped, and noted in the conversation                                                                                                       |
 | Role and personality | Goes into the system prompt and sets the member's stance and tone                                                                                                                                                                        |
 | Allow editing files  | When on, Claude runs with `--dangerously-skip-permissions`, Codex with `workspace-write`, Cursor with `--force`, Copilot with `--allow-all-tools`; when off, read-only (Cursor uses `--mode ask`, Copilot exposes only `view/glob/grep`) |
-| Custom command       | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `gemini -m {model} -p -`                                                                                                                  |
+| Custom command       | The prompt goes to stdin and stdout is the reply; `{model}` and `{effort}` are available, e.g. `my-cli --model {model}`                                                                                                                  |
+
+Antigravity CLI's `--sandbox` is not enforced read-only mode; disabling editing only avoids
+automatic permission approval. See the [adapter documentation](docs/adapters.en.md#antigravity-cli-replaces-gemini-cli)
+for migration, backups and capability limitations.
 
 The lead is chosen in Settings and is responsible for dividing the work and
 summarizing.
@@ -283,7 +287,7 @@ template:
 
 | Template                                          | Type   | Needs                                                                           |
 | ------------------------------------------------- | ------ | ------------------------------------------------------------------------------- |
-| Grok CLI, Kimi Code CLI, Gemini CLI               | CLI    | The CLI installed                                                               |
+| Grok CLI, Kimi Code CLI, Antigravity CLI          | CLI    | The CLI installed; Antigravity uses `agy`                                        |
 | DeepSeek, Kimi (Moonshot), Grok (xAI), OpenRouter | API    | An API key (entered in the extension editor, or an environment variable)        |
 | Ollama                                            | API    | Ollama running locally; run `ollama pull qwen3.8:27b-mlx` first for Qwen3.8 MLX |
 | Blank CLI, blank API, Aider JS plugin             | Custom | Fill it in yourself                                                             |
@@ -334,8 +338,8 @@ file content are both checked).
 Attachments are stored in the app's data folder, never in the working directory.
 How they reach a member depends on its capabilities:
 
-- Local CLIs get the file path and read it themselves. CLIs with a restricted
-  read scope (Claude Code, Gemini CLI, GitHub Copilot CLI) get a temporary copy under
+- Local CLIs get the file path and read it themselves. CLIs requiring workspace-local
+  attachments (Claude Code, Antigravity CLI, GitHub Copilot CLI) get a temporary copy under
   `.roundtable-runtime/` in the working directory, removed when the task ends,
   is stopped, or the app quits.
 - APIs get text files inline; endpoints that declare image support get images

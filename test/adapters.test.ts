@@ -47,6 +47,8 @@ process.stdin.on('end', () => {
   const fileIdx = args.indexOf('--prompt-file');
   const fromFile = fileIdx >= 0 ? require('fs').readFileSync(args[fileIdx + 1], 'utf8') : '';
   if (mode === 'text') { process.stdout.write('line1\\nline2\\n'); return; }
+  if (mode === 'args-text') { out({ args, stdin }); return; }
+  if (mode === 'partial-fail') { process.stdout.write('partial response\\n'); process.stderr.write('permission denied'); process.exitCode = 3; return; }
   if (mode === 'json') { out({ text: 'final:' + stdin, sessionId: 'json-session' }); return; }
   if (mode === 'fail') { process.stderr.write('boom'); process.exit(3); }
   if (mode === 'stderr-session') { process.stderr.write('session id: abc-123\\n'); process.stdout.write('ok\\n'); return; }
@@ -171,6 +173,56 @@ t('CLI format=text、json、sessionIdPattern(stderr)、非零結束代碼', asyn
 
   const missing = createCliAdapter(cliSpec({ bin: 'definitely-not-a-real-cli-xyz', args: [] }));
   assert.ok(/無法啟動/.test((await missing.run({}, makeCtx().ctx)).error));
+});
+
+t('Antigravity: replaces the Gemini template with print mode and gated approval', async () => {
+  const dir = path.join(__dirname, '..', 'adapters', 'templates');
+  assert.ok(!fs.existsSync(path.join(dir, 'gemini-cli.json')));
+  const spec = JSON.parse(fs.readFileSync(path.join(dir, 'antigravity-cli.json'), 'utf8'));
+  assert.strictEqual(spec.id, 'gemini', 'existing member and lineup references remain valid');
+  assert.strictEqual(spec.label, 'Antigravity CLI');
+  assert.strictEqual(spec.bin, 'agy');
+  assert.strictEqual(spec.output.format, 'text');
+  assert.strictEqual(spec.supportsResume, false);
+  for (const canEdit of [false, true]) {
+    const adapter = createCliAdapter({
+      ...spec, bin: process.execPath, args: [fakeCli, ...spec.args], env: { FAKE_MODE: 'args-text' },
+    });
+    const prompt = 'hello "quoted" $(not-a-command)';
+    const result = await adapter.run({ model: 'model-id', canEdit }, makeCtx({ prompt }).ctx);
+    assert.strictEqual(result.error, null);
+    const received = JSON.parse(result.text);
+    assert.deepStrictEqual(received.args, [
+      '--print', `SYS\n\n---\n\n${prompt}`, '--model', 'model-id',
+      canEdit ? '--dangerously-skip-permissions' : '--sandbox',
+    ]);
+    assert.strictEqual(received.stdin, '');
+    assert.strictEqual(result.usage, null);
+    assert.strictEqual(result.sessionId, null);
+  }
+  assert.deepStrictEqual(buildArgs(spec.args, { prompt: 'hello', model: '', canEdit: false }), ['--print', 'hello', '--sandbox']);
+});
+
+t('CLI text: partial output must not hide failures, timeouts or cancellation', async () => {
+  const spec = cliSpec({ args: [fakeCli], env: { FAKE_MODE: 'partial-fail' }, output: { format: 'text' } });
+  const failed = await createCliAdapter(spec).run({}, makeCtx().ctx);
+  assert.strictEqual(failed.text, 'partial response');
+  assert.match(failed.error, /結束代碼 3/);
+  assert.match(failed.error, /permission denied/);
+  assert.strictEqual((await createCliAdapter({ ...spec, successExitCodes: [0, 3] }).run({}, makeCtx().ctx)).error, null);
+
+  const hanging = createCliAdapter(cliSpec({
+    args: ['-e', 'console.log("partial"); setInterval(() => {}, 1000)'], output: { format: 'text' },
+  }));
+  const timedOut = await hanging.run({}, makeCtx({ timeoutMs: 1000 }).ctx);
+  assert.strictEqual(timedOut.text, 'partial');
+  assert.ok(timedOut.error);
+  const cancelled = await hanging.run({}, makeCtx({
+    onText: () => {},
+    onProc: (child: import('node:child_process').ChildProcess) => setTimeout(() => child.kill('SIGTERM'), 500),
+  }).ctx);
+  assert.strictEqual(cancelled.text, 'partial');
+  assert.ok(cancelled.error);
 });
 
 t('validateCliSpec:回報錯誤欄位', () => {
@@ -383,6 +435,72 @@ t('Registry:同一範本裝兩次會換 id、檔案管理擋掉壞檔名與壞 J
   assert.ok(!fs.existsSync(path.join(dir, 'x.json')));
   reg.deleteFile('y.json');
   assert.strictEqual(reg.get('y'), null);
+});
+
+t('Registry: migrates installed Gemini templates with backup and stable member IDs', () => {
+  const dir = path.join(tmp, 'reg-antigravity');
+  fs.mkdirSync(dir);
+  const templatesDir = path.join(__dirname, '..', 'adapters', 'templates');
+  const legacy = {
+    id: 'gemini', label: 'Gemini CLI', type: 'cli', bin: 'gemini',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    args: ['-p', '{prompt}', '--output-format', 'stream-json'],
+    output: { format: 'jsonl', rules: [] }, env: { EXAMPLE: 'preserved' }, timeoutMs: 12345, supportsEdit: false,
+  };
+  const file = path.join(dir, 'gemini-cli.json');
+  const original = JSON.stringify(legacy);
+  fs.writeFileSync(file, original);
+  fs.writeFileSync(path.join(dir, 'gemini-copy.json'), JSON.stringify({ ...legacy, id: 'gemini-2' }));
+  const custom = JSON.stringify({ ...legacy, id: 'custom-gemini', bin: 'my-gemini-wrapper' });
+  fs.writeFileSync(path.join(dir, 'custom.json'), custom);
+  const registry = new Registry({ userDir: dir, templatesDir });
+  assert.deepStrictEqual(registry.entries.filter((entry: any) => entry.error), []);
+  for (const id of ['gemini', 'gemini-2']) {
+    assert.strictEqual(registry.get(id).bin, 'agy');
+    assert.strictEqual(registry.get(id).label, 'Antigravity CLI');
+    assert.strictEqual(registry.get(id).supportsEdit, false);
+  }
+  assert.strictEqual(fs.readFileSync(`${file}.pre-antigravity.bak`, 'utf8'), original);
+  const migrated = JSON.parse(registry.readFile('gemini-cli.json'));
+  assert.deepStrictEqual(migrated.env, legacy.env);
+  assert.strictEqual(migrated.timeoutMs, 12345);
+  assert.strictEqual(migrated.output.format, 'text');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'custom.json'), 'utf8'), custom);
+  registry.reload();
+  assert.strictEqual(fs.readFileSync(`${file}.pre-antigravity.bak`, 'utf8'), original);
+  assert.deepStrictEqual(registry.templates().filter((item: any) => item.id === 'gemini').map((item: any) => item.label), ['Antigravity CLI']);
+});
+
+t('Registry: failed Antigravity migration preserves source and surfaces an error, then retries safely', () => {
+  const dir = path.join(tmp, 'reg-antigravity-failure');
+  fs.mkdirSync(dir);
+  const templatesDir = path.join(__dirname, '..', 'adapters', 'templates');
+  const file = path.join(dir, 'gemini-cli.json');
+  const original = JSON.stringify({
+    id: 'gemini', type: 'cli', bin: 'gemini', docsUrl: 'https://github.com/google-gemini/gemini-cli',
+  });
+  fs.writeFileSync(file, original);
+  const rename = fs.renameSync;
+  try {
+    fs.renameSync = (from: string, to: string) => {
+      if (to === file) throw new Error('migration write denied');
+      return rename(from, to);
+    };
+    const registry = new Registry({ userDir: dir, templatesDir, getLocale: () => 'en' });
+    assert.match(registry.entries[0].error, /Could not migrate.*migration write denied/);
+    assert.strictEqual(registry.get('gemini'), null);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
+    assert.ok(!fs.readdirSync(dir).some((entry: string) => entry.endsWith('.tmp')));
+  } finally {
+    fs.renameSync = rename;
+  }
+  assert.strictEqual(new Registry({ userDir: dir, templatesDir }).get('gemini').bin, 'agy');
+  fs.writeFileSync(file, original);
+  fs.writeFileSync(`${file}.pre-antigravity.bak`, 'older backup');
+  const conflict = new Registry({ userDir: dir, templatesDir, getLocale: () => 'en' });
+  assert.match(conflict.entries[0].error, /Could not migrate/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
+  assert.strictEqual(fs.readFileSync(`${file}.pre-antigravity.bak`, 'utf8'), 'older backup');
 });
 
 t('Registry:載入時把舊版明文 apiKey 移到安全儲存，失敗時保留原檔', () => {
