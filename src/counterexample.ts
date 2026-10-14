@@ -37,12 +37,15 @@ const CE_TIMEOUT_MS = 60_000;
 //     每一個反例都會以非零結束——而非零在這裡的意思是「問題確認了」,等於每一條都被誣賴成真的。
 const CE_ENV = { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '' };
 
-// ```counterexample 之後可以接一行說明,方便在介面與提示詞裡指名是哪一個
-const FENCE_OPEN = /^[ \t]*```+[ \t]*counterexample[ \t]*(.*?)[ \t]*$/i;
+// ```counterexample 之後可以接可選的語言標記(python / py / sh / bash)與一行說明,方便在介面與提示詞裡指名是哪一個
+const FENCE_OPEN = /^[ \t]*```+[ \t]*counterexample(?::([a-z0-9_-]+))?[ \t]*(.*?)[ \t]*$/i;
 const FENCE_CLOSE = /^[ \t]*```+[ \t]*$/;
 // 有頂層 import / export 的腳本要當成 ES module 跑。動態 import() 在 .cjs 裡本來就能用,
 // 所以只看語句形式的那兩個關鍵字,不看 import(。
 const ESM_HINT = /^[ \t]*(?:import[ \t]+(?![ \t]*\()|export[ \t]+)/m;
+const LANG_PREFIX = /^(?:python3?|py|sh|bash|node|js|javascript)(?=[ \t]|$)/i;
+
+export type CounterexampleLang = 'node' | 'python' | 'sh';
 
 export interface Counterexample {
   // 穩定的識別字:同一個反例在確認、修復提示、修復後重跑三個地方要對得起來
@@ -52,6 +55,7 @@ export interface Counterexample {
   targetId: string;
   title: string;
   source: string;
+  lang?: CounterexampleLang;
   rejection?: string[];
   // 所有評估者都判定需求未規定:只供參考,不是缺陷也不是爭議
   unspecified?: string[];
@@ -77,30 +81,59 @@ export interface CounterexampleRun extends Counterexample {
   unusable?: boolean;
 }
 
+function normalizeLang(raw: string | undefined): CounterexampleLang | undefined {
+  const lower = String(raw || '').trim().toLowerCase();
+  if (lower === 'python' || lower === 'python3' || lower === 'py') return 'python';
+  if (lower === 'sh' || lower === 'bash' || lower === 'shell') return 'sh';
+  if (lower === 'node' || lower === 'js' || lower === 'javascript') return 'node';
+  return undefined;
+}
+
+export function resolveCounterexampleLang(ce: Pick<Counterexample, 'lang' | 'source'>): CounterexampleLang {
+  if (ce.lang === 'python' || ce.lang === 'sh' || ce.lang === 'node') return ce.lang;
+  const src = String(ce.source || '').trimStart();
+  const firstLine = src.split('\n', 1)[0] || '';
+  if (/^#!.*\bpython/i.test(firstLine)) return 'python';
+  if (/^#!.*\b(?:ba|z)?sh\b/i.test(firstLine)) return 'sh';
+  return 'node';
+}
+
 // 從審查回覆裡取出反例區塊。多餘的、過長的一律丟掉並回報,不靜默截斷——
 // 截一半的腳本跑起來多半是語法錯誤,那會被讀成「問題確認了」,是最糟的誤判方向。
 export function parseCounterexamples(text: string | null | undefined): {
-  blocks: Array<{ title: string; source: string }>;
+  blocks: Array<{ title: string; source: string; lang?: CounterexampleLang }>;
   dropped: Array<{ title: string; reason: 'limit' | 'tooLong' | 'empty' }>;
 } {
-  const blocks: Array<{ title: string; source: string }> = [];
+  const blocks: Array<{ title: string; source: string; lang?: CounterexampleLang }> = [];
   const dropped: Array<{ title: string; reason: 'limit' | 'tooLong' | 'empty' }> = [];
   const lines = String(text || '').split('\n');
-  let open: { title: string; body: string[] } | null = null;
+  let open: { title: string; lang?: CounterexampleLang; body: string[] } | null = null;
   for (const line of lines) {
     if (!open) {
       const m = FENCE_OPEN.exec(line);
-      if (m) open = { title: m[1] || '', body: [] };
+      if (m) {
+        let lang = normalizeLang(m[1]);
+        let rest = (m[2] || '').trim();
+        if (!lang && rest) {
+          const prefix = LANG_PREFIX.exec(rest);
+          if (prefix) {
+            lang = normalizeLang(prefix[0]);
+            rest = rest.slice(prefix[0].length).trim();
+          }
+        }
+        open = { title: rest, ...(lang ? { lang } : {}), body: [] };
+      }
       continue;
     }
     if (FENCE_CLOSE.test(line)) {
       const source = open.body.join('\n').trim();
       const title = open.title.trim();
+      const lang = open.lang;
       open = null;
       if (!source) { dropped.push({ title, reason: 'empty' }); continue; }
       if (source.length > CE_SOURCE_MAX) { dropped.push({ title, reason: 'tooLong' }); continue; }
       if (blocks.length >= CE_MAX_PER_REVIEW) { dropped.push({ title, reason: 'limit' }); continue; }
-      blocks.push({ title, source });
+      blocks.push({ title, source, ...(lang ? { lang } : {}) });
       continue;
     }
     open.body.push(line);
@@ -133,7 +166,8 @@ function safeName(id: string): string {
 }
 
 export function counterexamplePath(cwd: string, ce: Counterexample): string {
-  const ext = ESM_HINT.test(ce.source) ? '.mjs' : '.cjs';
+  const lang = resolveCounterexampleLang(ce);
+  const ext = lang === 'python' ? '.py' : lang === 'sh' ? '.sh' : (ESM_HINT.test(ce.source) ? '.mjs' : '.cjs');
   return path.join(cwd, `${CE_PREFIX}${safeName(ce.id)}${ext}`);
 }
 
@@ -150,11 +184,18 @@ export async function runCounterexample(
 ): Promise<CounterexampleRun> {
   const base: CounterexampleRun = { ...ce, passed: false, code: null, output: '', timedOut: false };
   if (cancelled()) return { ...base, unusable: true, output: tx(locale, 'ce.stopped') };
+  const lang = resolveCounterexampleLang(ce);
   const file = counterexamplePath(cwd, ce);
   try { await fs.promises.writeFile(file, ce.source, 'utf8'); }
   catch (error) { return { ...base, unusable: true, output: truncate(String((error as Error).message || error), CE_OUTPUT_MAX) }; }
   try {
-    const syntax = await runProcess(process.execPath, ['--check', file], { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: CE_ENV }, {
+    const pyCheck = 'import sys, traceback\np = sys.argv[1]\ntry:\n    with open(p, "rb") as f: compile(f.read(), p, "exec")\nexcept (SyntaxError, ValueError) as e:\n    traceback.print_exception(type(e), e, None)\n    sys.exit(2)';
+    const syntaxCmd = lang === 'python'
+      ? { bin: 'python3', args: ['-I', '-c', pyCheck, file], env: { PYTHONDONTWRITEBYTECODE: '1' } }
+      : lang === 'sh'
+        ? { bin: 'sh', args: ['-n', file], env: {} }
+        : { bin: process.execPath, args: ['--check', file], env: CE_ENV };
+    const syntax = await runProcess(syntaxCmd.bin, syntaxCmd.args, { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: syntaxCmd.env }, {
       onProc: (child) => stop && stop(child),
     });
     if (cancelled()) return { ...base, unusable: true, output: tx(locale, 'ce.stopped') };
@@ -163,8 +204,13 @@ export async function runCounterexample(
       return { ...base, unusable: true, code: syntax.code, timedOut: syntax.timedOut === true,
         output: truncate(text.split(file).join(path.basename(file)), CE_OUTPUT_MAX) };
     }
+    const execCmd = lang === 'python'
+      ? { bin: 'python3', args: ['-B', file], env: { PYTHONDONTWRITEBYTECODE: '1' } }
+      : lang === 'sh'
+        ? { bin: 'sh', args: [file], env: {} }
+        : { bin: process.execPath, args: [file], env: CE_ENV };
     let stdout = '';
-    const r = await runProcess(process.execPath, [file], { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: CE_ENV }, {
+    const r = await runProcess(execCmd.bin, execCmd.args, { cwd, timeoutMs: CE_TIMEOUT_MS, locale, env: execCmd.env }, {
       onProc: (child) => stop && stop(child),
       onLine: (line: string) => { stdout += `${line}\n`; if (stdout.length > CE_OUTPUT_MAX * 2) stdout = stdout.slice(-CE_OUTPUT_MAX * 2); },
     });

@@ -315,7 +315,7 @@ function fakeOrc(names: any) {
       },
     }),
   });
-  const settings = { maxTranscriptChars: 0, language: '繁體中文', workDir: require('os').tmpdir(), maxRounds: 1, mode: 'discuss', uiLocale: 'zh-Hant' };
+  const settings: Record<string, any> = { maxTranscriptChars: 0, language: '繁體中文', workDir: require('os').tmpdir(), maxRounds: 1, mode: 'discuss', uiLocale: 'zh-Hant' };
   const orc = new O.Orchestrator({ get: () => ({ agents, settings }), userDataDir: require('os').tmpdir() });
   const idle = () => new Promise((resolve: any) => {
     const check = (s: any) => { if (!s.running && s.phase && s.phase.code === 'idle') { orc.off('state', check); resolve(); } };
@@ -396,6 +396,41 @@ function fakeOrc(names: any) {
     assert.deepStrictEqual(staged, ['/task-start-dir']);
     await orc.turn(orc.agents[0], '說話');
     assert.strictEqual(calls[0].cwd, '/task-start-dir');
+  });
+
+  await at('單次任務成本上限:只計算本次任務已完成的成本,達標時回傳 exceeded', async () => {
+    const { orc, settings } = fakeOrc(['甲', '乙']);
+    // 任務開始前的舊訊息不應計入本次任務成本
+    orc.messages.push({ id: 'old', kind: 'agent', agentId: 'a0', agentName: '甲', status: 'done', text: '舊的', usage: { shape: 'openai', costUsd: 5.0 } });
+    orc.taskStartIndex = orc.messages.length;
+    orc.messages.push({ id: 'u1', kind: 'user', text: '新任務' });
+    orc.messages.push({ id: 'm1', kind: 'agent', agentId: 'a0', agentName: '甲', status: 'done', text: 'R1', usage: { shape: 'openai', costUsd: 0.4 } });
+    orc.messages.push({ id: 'm2', kind: 'agent', agentId: 'a1', agentName: '乙', status: 'done', text: 'R2', usage: { shape: 'openai', costUsd: 0.35 } });
+    assert.strictEqual(Math.round(orc.currentTaskCostUsd() * 100), 75);
+    assert.strictEqual(orc.isTaskBudgetExceeded().exceeded, false, '未設定上限時不觸發');
+    settings.maxTaskCostUsd = 1.0;
+    assert.strictEqual(orc.isTaskBudgetExceeded().exceeded, false, '未達上限');
+    settings.maxTaskCostUsd = 0.5;
+    const check = orc.isTaskBudgetExceeded();
+    assert.strictEqual(check.exceeded, true, '已達上限應觸發');
+    assert.strictEqual(check.limit, 0.5);
+
+    // 審查與驗證全過時,即使成本已達上限也不可把通過的成果標成未解決
+    const passReview = [{ reviewer: orc.agents[1], target: { agent: orc.agents[0], task: '做 A', report: '做好了' }, text: '沒問題\n[NO_ISSUES]', error: null }];
+    const passFix = await orc.fixPhase(passReview, [{ agent: orc.agents[0], task: '做 A', report: '做好了' }]);
+    assert.deepStrictEqual(passFix.unresolved, [], '審查通過不需修復時,達預算上限不可產生 unresolved');
+    assert.ok(!orc.messages.some((m: any) => m.tag === 'repair' && /成本上限/.test(m.text)), '不需修復時不應發送預算中斷警告');
+
+    // 部分成員有問題、部分成員通過時,達預算上限只會把有問題的成員列為未解決
+    const mixedReviews = [
+      { reviewer: orc.agents[1], target: { agent: orc.agents[0], task: '做 A', report: 'A' }, text: '沒問題\n[NO_ISSUES]', error: null },
+      { reviewer: orc.agents[0], target: { agent: orc.agents[1], task: '做 B', report: 'B' }, text: 'B 有 bug 需要修', error: null },
+    ];
+    const mixedFix = await orc.fixPhase(mixedReviews, [
+      { agent: orc.agents[0], task: '做 A', report: 'A' },
+      { agent: orc.agents[1], task: '做 B', report: 'B' },
+    ]);
+    assert.deepStrictEqual(mixedFix.unresolved.map((u: any) => u.agent.id), ['a1'], '只有審查未過的乙應列為 unresolved,通過的甲不可受影響');
   });
 
   console.log(`${m} 項整合測試全部通過`);

@@ -37,6 +37,7 @@
             <button id="history-refresh" class="ghost small icon" data-i18n-title="side.refresh" title="重新整理" hidden>↻</button>
           </div>
           <div id="history-panel" hidden>
+            <input id="history-search" class="history-search" type="search" data-i18n-placeholder="history.searchPlaceholder" placeholder="篩選標題或成員…" hidden />
             <div id="history-error" class="history-error" hidden></div>
             <div id="history-list" class="history-list"></div>
           </div>
@@ -189,13 +190,20 @@
                 <input id="max-transcript" type="number" min="0" step="10000" />
               </div>
             </div>
-            <div class="setting">
-              <div class="setting-label"><b data-i18n="settings.maxParallel">同時進行的任務</b><span data-i18n="settings.maxParallelDesc">不同專案的任務會同時進行;同一個專案、或用同一台本機模型的任務會排隊</span></div>
-              <input id="max-parallel" type="number" min="1" max="6" />
+            <div class="setting-grid">
+              <div class="setting">
+                <div class="setting-label"><b data-i18n="settings.maxParallel">同時進行的任務</b><span data-i18n="settings.maxParallelDesc">不同專案的任務會同時進行;同一個專案、或用同一台本機模型的任務會排隊</span></div>
+                <input id="max-parallel" type="number" min="1" max="6" />
+              </div>
+              <div class="setting">
+                <div class="setting-label"><b data-i18n="settings.maxTaskCost">單次任務成本上限(USD)</b><span data-i18n="settings.maxTaskCostDesc">達上限時停止後續自動修復輪次並直接總結;0 或留空代表不限制</span></div>
+                <input id="max-task-cost" type="number" min="0" step="0.5" placeholder="0" />
+              </div>
             </div>
             <div class="setting">
               <div class="setting-label"><b data-i18n="settings.verifyCommand">驗證指令</b><span data-i18n="settings.verifyCommandDesc">執行與修復之後,app 會在工作目錄跑這個指令(例如 npm test),結果交給審查者,失敗就一定要修。留空只做內建的語法檢查。</span></div>
               <textarea id="verify-command" rows="3" data-i18n-placeholder="settings.verifyCommandPlaceholder" placeholder="一行一道,依序執行,例如:&#10;npm run lint&#10;npm run typecheck&#10;npm test"></textarea>
+              <div id="verify-suggestions" class="verify-suggestions" hidden></div>
             </div>
             <div class="setting">
               <div class="setting-label"><b data-i18n="settings.allowGit">允許成員建立 git 提交</b><span data-i18n="settings.allowGitDesc">只允許在本機建立提交,不包含推送。關閉時 Copilot 會加上 git commit 禁止規則;其他 CLI 僅以提示詞要求,無法強制。</span></div>

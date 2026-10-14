@@ -14,6 +14,7 @@ import type { AgentConfig, AppConfig, AttachmentInput, AttachmentMeta, ChatSnaps
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 import { CapabilityStore, setCapabilityStore } from './src/capabilities';
 import { workdirChanges } from './src/task-changes';
+import { detectVerifyCommands } from './src/verify';
 import { TerminalManager, MAX_SESSIONS as TERMINAL_MAX } from './src/terminal';
 import { findMentions } from './src/shared';
 import { JobScheduler, RunLedger, localEndpointKey, workdirKey } from './src/jobs';
@@ -547,7 +548,7 @@ app.whenReady().then(async () => {
     fs.mkdirSync(dir, { recursive: true });
     return shell.openPath(dir);
   });
-  handle('session:list', () => listSessions(app.getPath('userData'), { limit: 50, locale: uiLocale() }));
+  handle('session:list', () => listSessions(app.getPath('userData'), { limit: 200, locale: uiLocale() }));
   handle('session:read', (id) => readSession(app.getPath('userData'), id, uiLocale()));
   handle('session:delete', (id) => {
     const result = deleteSession(app.getPath('userData'), id, uiLocale());
@@ -614,6 +615,9 @@ app.whenReady().then(async () => {
     const job = jobOf(jobId);
     return withDirectory(job, () => job.orchestrator.reverifyTask(messageId, confirmedCommand), (blocker) => ({ ok: false, error: blockedText(blocker) }));
   });
+  handle('verify:detect', async (cwd) => ({
+    commands: await detectVerifyCommands(typeof cwd === 'string' && cwd.trim() ? cwd : store.get().settings.workDir),
+  }));
   // 一鍵連接本機 Ollama。只轉交給 registry,IPC 層不保留任何狀態。
   // 偵測、模型清單、設定寫入全在 adapter 層,介面因此不必碰 baseUrl / API key / JSON。
   handle('ollama:quickSetup', async (payload) => {

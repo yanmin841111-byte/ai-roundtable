@@ -23,7 +23,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { CE_SOURCE_MAX, type Counterexample, type CounterexampleRun, classifyConfirmation } from './counterexample';
+import { CE_SOURCE_MAX, type Counterexample, type CounterexampleLang, type CounterexampleRun, classifyConfirmation } from './counterexample';
 
 export const CORPUS_DIR = '.roundtable';
 export const CORPUS_FILE = 'counterexamples.json';
@@ -37,6 +37,7 @@ export interface CorpusEntry {
   id: string;
   title: string;
   source: string;
+  lang?: CounterexampleLang;
   addedAt: number;
   // 誰舉出來的、當時在做什麼任務。只是紀錄,不參與任何判斷。
   reviewer: string;
@@ -69,9 +70,12 @@ export function loadCorpus(cwd: string): CorpusEntry[] {
     const id = typeof (item as CorpusEntry).id === 'string' && (item as CorpusEntry).id ? (item as CorpusEntry).id : entryId(source);
     if (seen.has(id)) continue;
     seen.add(id);
+    const langRaw = (item as CorpusEntry).lang;
+    const lang: CounterexampleLang | undefined = (langRaw === 'python' || langRaw === 'sh' || langRaw === 'node') ? langRaw : undefined;
     out.push({
       id,
       source,
+      ...(lang ? { lang } : {}),
       title: String((item as CorpusEntry).title || ''),
       addedAt: Number((item as CorpusEntry).addedAt) || 0,
       reviewer: String((item as CorpusEntry).reviewer || ''),
@@ -93,7 +97,15 @@ export function additions(runs: CounterexampleRun[], task: string, existing: Cor
     const id = entryId(run.source);
     if (known.has(id)) continue;
     known.add(id);
-    out.push({ id, title: run.title, source: run.source, addedAt: Date.now(), reviewer: run.reviewerName, task });
+    out.push({
+      id,
+      title: run.title,
+      source: run.source,
+      ...(run.lang ? { lang: run.lang } : {}),
+      addedAt: Date.now(),
+      reviewer: run.reviewerName,
+      task,
+    });
   }
   return out;
 }
@@ -137,5 +149,6 @@ export function corpusCounterexamples(entries: CorpusEntry[]): Counterexample[] 
     targetId: '',
     title: entry.title,
     source: entry.source,
+    ...(entry.lang ? { lang: entry.lang } : {}),
   }));
 }

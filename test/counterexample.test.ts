@@ -246,6 +246,50 @@ test('給模型看的文字:只列確認過的,而且附上原始碼與實際輸
   assert.match(status, /不成立/, '複查者要看到全部的狀態');
 });
 
+test('Python 與 Shell 反例:支援語言標記與 shebang、語法檢查、執行與語料庫保存', async () => {
+  const parsed = parseCounterexamples([
+    '```counterexample:python 除零錯誤',
+    'import calc',
+    'assert calc.add(1, 2) == 4',
+    '```',
+    '```counterexample sh CLI 退出碼',
+    'test -f missing.txt',
+    '```',
+  ].join('\n'));
+  assert.strictEqual(parsed.blocks.length, 2);
+  assert.strictEqual(parsed.blocks[0].lang, 'python');
+  assert.strictEqual(parsed.blocks[0].title, '除零錯誤');
+  assert.strictEqual(parsed.blocks[1].lang, 'sh');
+  assert.strictEqual(parsed.blocks[1].title, 'CLI 退出碼');
+
+  const dir = dirWith({ 'calc.py': 'def add(a, b):\n    return a + b\n' });
+  const pyFail = await runCounterexample(dir, ce('import calc\nassert calc.add(1, 1) == 3, "math wrong"\n', { lang: 'python', title: 'py fail' }));
+  assert.strictEqual(pyFail.passed, false);
+  assert.strictEqual(classifyConfirmation(pyFail), 'confirmed');
+  assert.match(pyFail.output, /AssertionError[\s\S]*math wrong/);
+  assert.strictEqual(fs.existsSync(path.join(dir, '__pycache__')), false, 'Python 反例不可留下 __pycache__');
+
+  for (const invalidPy of ['def broken(:\n    pass\n', 'return 1\n', 'break\n', 'def f(a, a):\n    pass\n']) {
+    const pySyntax = await runCounterexample(dir, ce(invalidPy, { lang: 'python' }));
+    assert.strictEqual(classifyConfirmation(pySyntax), 'unusable', `應判為 unusable: ${invalidPy}`);
+    assert.match(pySyntax.output, /SyntaxError/);
+  }
+
+  const shFail = await runCounterexample(dir, ce('#!/bin/sh\necho "sh-failed" >&2\nexit 1\n', { id: 'sh-1', title: 'sh fail' }));
+  assert.strictEqual(classifyConfirmation(shFail), 'confirmed');
+  assert.match(shFail.output, /sh-failed/);
+
+  const { additions, saveCorpus, loadCorpus, corpusCounterexamples } = require('../src/corpus');
+  const incoming = additions([pyFail], 'task', []);
+  assert.strictEqual(incoming.length, 1);
+  assert.strictEqual(incoming[0].lang, 'python');
+  saveCorpus(dir, [], incoming);
+  const loaded = corpusCounterexamples(loadCorpus(dir));
+  assert.strictEqual(loaded.length, 1);
+  assert.strictEqual(loaded[0].lang, 'python');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

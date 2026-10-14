@@ -34,7 +34,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
-const LIST_LIMIT = 50;
+const LIST_LIMIT = 200;
 // 檔名白名單:只接受單一檔名,不含任何目錄成分
 const ID_PATTERN = /^[\w.-]+\.json$/;
 

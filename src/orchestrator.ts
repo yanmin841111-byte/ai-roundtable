@@ -1253,6 +1253,7 @@ class Orchestrator extends EventEmitter {
           targetId: rv.target.agent.id,
           title: block.title,
           source: block.source,
+          ...(block.lang ? { lang: block.lang } : {}),
         });
       });
       for (const item of parsed.dropped) {
@@ -1634,6 +1635,22 @@ class Orchestrator extends EventEmitter {
     return named.length ? named : writers;
   }
 
+  // 累計本次任務目前已完成的模型成本(USD)
+  currentTaskCostUsd(): number {
+    return this.messages
+      .slice(this.taskStartIndex)
+      .filter((m) => m.kind === 'agent' && m.status !== 'running' && typeof m.usage?.costUsd === 'number')
+      .reduce((sum, m) => sum + (Number(m.usage?.costUsd) || 0), 0);
+  }
+
+  // 檢查本次任務是否已超過使用者設定的單次成本上限
+  isTaskBudgetExceeded(): { exceeded: boolean; current: number; limit: number } {
+    const limit = Number(this.config.settings.maxTaskCostUsd) || 0;
+    if (!(limit > 0)) return { exceeded: false, current: 0, limit: 0 };
+    const current = this.currentTaskCostUsd();
+    return { exceeded: current >= limit, current, limit };
+  }
+
   // 階段五:修復回合(只跑一輪,讓被審查者修掉問題或說明不修的理由)
   // 回傳 { unresolved, reviewFailed, fixFailed },三種未閉環的情況都要讓總結看得到
   async guardedFixPhase(agents: AgentConfig[], reviews: Review[], reports: ExecReport[], verify: VerifyResult | undefined, touchedTests: string[], cwd: string, counterexamples: CounterexampleRun[], snapBefore: Awaited<ReturnType<typeof snapshotDir>>, coding: boolean, failed: ExecReport[], conflicts: Array<{ file: string; names: string[] }>, task = ''): Promise<FixOutcome> {
@@ -1695,6 +1712,12 @@ class Orchestrator extends EventEmitter {
         if (this.stopped || !counterexampleFailed) break;
       }
       const failingBefore = latestCounterexamples.filter((run) => classifyConfirmation(run) === 'confirmed' && !run.passed).map((run) => run.id);
+      const budget = this.isTaskBudgetExceeded();
+      if (budget.exceeded) {
+        const skipped = await this.fixPhase(latestReviews, latestReports, latestVerify, touchedTests, cwd, latestCounterexamples, true);
+        result = { ...result, ...skipped, repaired: [...repaired.values()], rereviews: latestReviews };
+        break;
+      }
       if (round > GUARD_REPAIR_ROUNDS) this.system(this.text('sys.guardRepairExtend', { max: GUARD_REPAIR_LIMIT }), { tag: 'repair' });
       this.system(this.text('sys.guardRepairRound', { round, max: round > GUARD_REPAIR_ROUNDS ? GUARD_REPAIR_LIMIT : GUARD_REPAIR_ROUNDS }), { tag: 'repair' });
       const next = await this.fixPhase(latestReviews, latestReports, latestVerify, touchedTests, cwd, latestCounterexamples, true);
@@ -1805,6 +1828,12 @@ class Orchestrator extends EventEmitter {
       if (reviewFailed.length) this.system(this.text('sys.noSuccessfulReview'), { level: 'warn' });
       else if (reviews.length) this.system(this.text('sys.noIssues'));
       return { unresolved: [], reviewFailed, fixFailed: [] };
+    }
+
+    const budget = this.isTaskBudgetExceeded();
+    if (budget.exceeded) {
+      this.system(this.text('sys.budgetExceeded', { cost: budget.current.toFixed(3), limit: budget.limit.toFixed(2) }), { level: 'warn', tag: 'repair' });
+      return { unresolved: [...issues.values()], reviewFailed, fixFailed: [] };
     }
 
     const unresolved: Issue[] = [];

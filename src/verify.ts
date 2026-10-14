@@ -21,7 +21,7 @@ export const SYNTAX_MAX_FILES = 40;
 const SYNTAX_TIMEOUT_MS = 10_000;
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const OUTPUT_MAX = 4000;
-const SYNTAX_EXTS = new Set(['.js', '.mjs', '.cjs', '.json']);
+const SYNTAX_EXTS = new Set(['.js', '.mjs', '.cjs', '.json', '.py', '.sh', '.bash', '.zsh']);
 
 // 一道門檻:使用者設定的一行指令
 export interface GateResult {
@@ -82,10 +82,17 @@ export async function verifyChanges(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unchecked.push({ file, reason: 'unavailable' });
       continue;
     }
-    if (!SYNTAX_EXTS.has(path.extname(file).toLowerCase())) { unchecked.push({ file, reason: 'unsupported' }); continue; }
+    const ext = path.extname(file).toLowerCase();
+    if (!SYNTAX_EXTS.has(ext)) { unchecked.push({ file, reason: 'unsupported' }); continue; }
     if (attempted >= SYNTAX_MAX_FILES) { unchecked.push({ file, reason: 'limit' }); continue; }
     attempted++;
-    const error = path.extname(file).toLowerCase() === '.json' ? checkJson(full) : await checkJs(full, locale);
+    const error = ext === '.json'
+      ? checkJson(full)
+      : ext === '.py'
+        ? await checkPython(full, locale)
+        : (ext === '.sh' || ext === '.bash' || ext === '.zsh')
+          ? await checkShell(full, ext, locale)
+          : await checkJs(full, locale);
     if (error === undefined) { unchecked.push({ file, reason: 'unavailable' }); continue; }
     checked++;
     checkedFiles.push(file);
@@ -231,6 +238,39 @@ async function checkJs(full: string, locale: TextLocale): Promise<string | null 
   return esm.error.split('[stdin]').join(path.basename(full));
 }
 
+// Python 語法檢查:用 compile(..., "exec") 在記憶體中編譯為 code object(涵蓋 AST 與 return/break 等語義層級的 SyntaxError),
+// 不執行模組也不產生 __pycache__ / .pyc(避免弄髒工作目錄快照)。
+// 系統沒有裝 python3 時回 undefined(算 unavailable,不誣賴檔案有錯)。
+async function checkPython(full: string, locale: TextLocale): Promise<string | null | undefined> {
+  const script = [
+    'import sys, traceback',
+    'p = sys.argv[1]',
+    'try:',
+    '    with open(p, "rb") as f: src = f.read()',
+    '    compile(src, p, "exec")',
+    'except (SyntaxError, ValueError) as e:',
+    '    traceback.print_exception(type(e), e, None)',
+    '    sys.exit(2)',
+  ].join('\n');
+  const r = await runProcess('python3', ['-I', '-c', script, full], { timeoutMs: SYNTAX_TIMEOUT_MS, locale });
+  if (r.spawnError || r.timedOut) return undefined;
+  if (r.code === 0) return null;
+  const stderr = (r.stderr || '').trim();
+  if (r.code === 2 && /(?:SyntaxError|IndentationError|TabError|ValueError):/.test(stderr)) return stderr;
+  return undefined;
+}
+
+// Shell 腳本語法檢查:用 sh / bash / zsh 的 -n(noexec)只檢查語法不執行任何指令。
+async function checkShell(full: string, ext: string, locale: TextLocale): Promise<string | null | undefined> {
+  const bin = ext === '.bash' ? 'bash' : ext === '.zsh' ? 'zsh' : 'sh';
+  const r = await runProcess(bin, ['-n', full], { timeoutMs: SYNTAX_TIMEOUT_MS, locale });
+  if (r.spawnError || r.timedOut) return undefined;
+  if (r.code === 0) return null;
+  const stderr = (r.stderr || '').trim();
+  if (!stderr) return undefined;
+  return stderr;
+}
+
 // 給模型看的一段文字(審查提示與修復意見都用它);通過時回 null,沒什麼好說的
 export function verifyNotes(result: VerifyResult, locale: TextLocale = 'zh-Hant'): string | null {
   if (result.ok) return null;
@@ -252,5 +292,124 @@ export function verifyNotes(result: VerifyResult, locale: TextLocale = 'zh-Hant'
     const passed = (result.gates || []).filter((g) => g.ok).map((g) => `\`${g.command}\``);
     if (passed.length) parts.push(tx(locale, 'verify.gatesPassed', { list: passed.join('、') }));
   }
-  return parts.join('\n\n');
+  if (parts.length) return parts.join('\n\n');
+  return null;
+}
+
+// 依工作目錄下的專案設定檔(package.json、Cargo.toml、go.mod、pyproject.toml、Makefile 等)
+// 偵測常見的 lint / typecheck / test 指令,讓使用者在設定頁可以一鍵加入驗證指令。
+export async function detectVerifyCommands(cwd: string): Promise<string[]> {
+  const dir = String(cwd || '').trim();
+  if (!dir) return [];
+  try {
+    const stat = await fs.promises.stat(dir);
+    if (!stat.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  const commands: string[] = [];
+  const add = (cmd: string) => {
+    const trimmed = cmd.trim();
+    if (trimmed && !commands.includes(trimmed)) commands.push(trimmed);
+  };
+
+  // 1. Node.js / TypeScript (package.json)
+  const pkgPath = path.join(dir, 'package.json');
+  try {
+    const raw = await fs.promises.readFile(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw);
+    const scripts = pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts as Record<string, unknown> : {};
+    const pm = await detectNodePackageManager(dir, typeof pkg?.packageManager === 'string' ? pkg.packageManager : '');
+    const runScript = (name: string) => (pm === 'npm' ? `npm run ${name}` : `${pm} ${name}`);
+    const testCmd = pm === 'yarn' ? 'yarn test' : `${pm} test`;
+
+    for (const lintName of ['lint', 'check:lint', 'eslint', 'biome']) {
+      if (typeof scripts[lintName] === 'string' && scripts[lintName].trim()) {
+        add(runScript(lintName));
+        break;
+      }
+    }
+    for (const tcName of ['typecheck', 'type-check', 'check-types', 'types', 'tsc']) {
+      if (typeof scripts[tcName] === 'string' && scripts[tcName].trim()) {
+        add(runScript(tcName));
+        break;
+      }
+    }
+    if (!commands.some((c) => /type|tsc/.test(c)) && await fileExists(path.join(dir, 'tsconfig.json'))) {
+      const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
+      if (deps && typeof deps === 'object' && 'typescript' in deps) {
+        add(pm === 'npm' ? 'npx tsc --noEmit' : `${pm} exec tsc --noEmit`);
+      }
+    }
+    if (typeof scripts.test === 'string') {
+      const testScript = scripts.test.trim();
+      if (testScript && !/no test specified/i.test(testScript)) add(testCmd);
+    }
+  } catch {}
+
+  // 2. Rust (Cargo.toml)
+  if (await fileExists(path.join(dir, 'Cargo.toml'))) {
+    add('cargo check');
+    add('cargo test');
+  }
+
+  // 3. Go (go.mod)
+  if (await fileExists(path.join(dir, 'go.mod'))) {
+    add('go vet ./...');
+    add('go test ./...');
+  }
+
+  // 4. Python (pyproject.toml / pytest.ini / tox.ini)
+  const pyprojectPath = path.join(dir, 'pyproject.toml');
+  const hasPyproject = await fileExists(pyprojectPath);
+  const hasPytestIni = await fileExists(path.join(dir, 'pytest.ini'));
+  if (hasPyproject || hasPytestIni) {
+    let pyContent = '';
+    if (hasPyproject) {
+      try { pyContent = await fs.promises.readFile(pyprojectPath, 'utf8'); } catch {}
+    }
+    if (/\[tool\.ruff\b/i.test(pyContent)) add('ruff check .');
+    if (/\[tool\.mypy\b/i.test(pyContent)) add('mypy .');
+    if (hasPytestIni || /pytest/i.test(pyContent) || await fileExists(path.join(dir, 'tests')) || await fileExists(path.join(dir, 'test'))) {
+      add('pytest');
+    }
+  }
+
+  // 5. Makefile (若上面都沒有偵測到,或補充常見 target)
+  if (commands.length === 0) {
+    for (const makeName of ['Makefile', 'makefile', 'GNUmakefile']) {
+      const makePath = path.join(dir, makeName);
+      if (!(await fileExists(makePath))) continue;
+      try {
+        const makeText = await fs.promises.readFile(makePath, 'utf8');
+        for (const target of ['lint', 'check', 'test']) {
+          if (new RegExp(`^${target}\\s*:`, 'm').test(makeText)) add(`make ${target}`);
+        }
+      } catch {}
+      break;
+    }
+  }
+
+  return commands;
+}
+
+async function fileExists(full: string): Promise<boolean> {
+  try {
+    await fs.promises.access(full);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectNodePackageManager(dir: string, declared: string): Promise<'npm' | 'pnpm' | 'yarn' | 'bun'> {
+  const lower = declared.toLowerCase();
+  if (lower.startsWith('pnpm@')) return 'pnpm';
+  if (lower.startsWith('yarn@')) return 'yarn';
+  if (lower.startsWith('bun@')) return 'bun';
+  if (lower.startsWith('npm@')) return 'npm';
+  if (await fileExists(path.join(dir, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (await fileExists(path.join(dir, 'yarn.lock'))) return 'yarn';
+  if (await fileExists(path.join(dir, 'bun.lockb')) || await fileExists(path.join(dir, 'bun.lock'))) return 'bun';
+  return 'npm';
 }

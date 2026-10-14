@@ -14,6 +14,16 @@ import { renderTaskSummary } from './task-card';
 import { refreshTaskVerifications } from './task-verification';
 import { setupLineups, renderLineupButton } from './lineup-menu';
 import { setupTerminal, toggleTerminal, syncTerminalTheme, relocalizeTerminal } from './terminal';
+import {
+  setupHistory, setActiveSessionId, getActiveSessionId, isHistoryLoaded,
+  refreshHistoryUI, loadHistory, renderHistoryList, updateResumeButton, closeHistoryModal,
+} from './history';
+import {
+  pendingAttachments, setupComposerAttachments, attachmentsMarkup, hydrateAttachmentThumbs,
+  syncPendingAttachments, renderAttachChips, clearPendingAttachments, revokeThumbUrls,
+  showAttachError, clearAttachError,
+} from './attachments';
+import { setupExtensions, renderExtensions, cliLabel, typeLabel } from './extensions';
 import { envFixHtml, bindEnvFix, describeCliHealth, setEnvFixHandlers } from './env-fix';
 import { isInstallRunning, openInstallDialog, setupInstallDialog } from './install-dialog';
 import type { PhaseValue } from '../src/ipc-types';
@@ -62,18 +72,11 @@ let config: AppConfig = null as unknown as AppConfig;
 let cliTypes: Record<string, CliType> = {};
 let cliStatus: Record<string, CliHealth> = {};
 let extSummary: ExtSummary = { entries: [], templates: [] };
-let editingExtFile: string | null = null;
-let editingExtSpec: ExtSpec | null = null;
-let extTemplateFilter = 'all';
 let editingId: string | null = null;
 const msgEls = new Map<string, HTMLElement>();
 const messageData = new Map<string, ChatMessage>();
 let running = false;
 let exporting = false;
-let historyLoaded = false;
-let historySessions: SessionSummary[] = [];
-let openHistoryId: string | null = null;
-let activeSessionId: string | null = null; // 目前對話寫入的歷史紀錄檔
 let currentQuestion: PendingQuestion | null = null;
 let jobsState: JobsState | null = null;
 // 時間軸目前畫的是哪件任務;jobs:changed 會比切換的回應先到,不能拿 selectedId 判斷要不要重畫
@@ -81,9 +84,8 @@ let shownJobId: string | null = null;
 let switchingJobs = false;
 // 切到別的任務時,輸入框裡還沒送出的字留給原本那件
 const drafts = new Map<string, string>();
-let answeredQuestionId: string | null = null;
+let answeredQuestionId: string | null;
 let questionTimer: ReturnType<typeof setInterval> | undefined;
-const historyErrors = new Map<string, string>();
 const mentionMenu: { open: boolean; start: number; items: AgentConfig[]; index: number } =
   { open: false, start: 0, items: [], index: 0 };
 
@@ -146,24 +148,52 @@ async function init() {
       return true;
     },
   });
+  setupExtensions({
+    cliTypes: () => cliTypes,
+    cliStatus: () => cliStatus,
+    extSummary: () => extSummary,
+    refreshCatalog,
+    showSettingsTab,
+  });
   renderSidebar();
   renderExtensions();
   jobsState = await window.api.jobs.list();
   shownJobId = window.api.jobs.current();
   const snap = await window.api.snapshot();
-  activeSessionId = snap.sessionId || null;
+  setActiveSessionId(snap.sessionId || null);
   snap.messages.forEach((m) => renderMessage(m, { animate: false }));
   setState(snap);
   renderJobs();
   renderWorkdirChip();
   checkClis();
-  setupComposerAttachments();
+  setupComposerAttachments({
+    isSwitchingJobs: () => switchingJobs,
+    shownJobId: () => shownJobId,
+    onChanged: updateComposerHint,
+  });
   setupLayoutResize();
   ensureStagePin();
   window.addEventListener('resize', scheduleStagePin);
   // 修復卡片上的「打開設定」由這裡提供:env-fix 只負責畫面,不認得設定畫面
   setEnvFixHandlers({ openSettings: (tab) => openSettings(tab), install: (cliId) => { void openInstallDialog(cliId); } });
   setupInstallDialog(async () => { await checkClis(); return cliStatus; });
+  setupHistory({
+    running: () => running,
+    md,
+    phaseText,
+    usageText,
+    attachmentsMarkup,
+    hydrateAttachmentThumbs,
+    onResumed: async ({ id, messages, snapshot }) => {
+      clearTimeline();
+      await clearPendingAttachments();
+      setActiveSessionId(id);
+      messages.forEach((m) => renderMessage(m, { animate: false }));
+      setState(snapshot);
+      $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
+      $<HTMLTextAreaElement>('#input').focus();
+    },
+  });
   // 終端面板:平常收著。成員在工作目錄動手,使用者也該能在同一個目錄自己下指令。
   setupTerminal({
     workDir: () => selectedJob()?.workDir || config.settings.workDir,
@@ -178,13 +208,13 @@ async function init() {
   window.api.onReset(() => {
     clearTimeline();
     clearPendingAttachments();
-    activeSessionId = null;
-    if (historyLoaded) renderHistoryList();
+    setActiveSessionId(null);
+    if (isHistoryLoaded()) renderHistoryList();
   });
   // 任務結束寫入紀錄後刷新清單,剛完成或剛續接的對話會排到最上面
   window.api.onSessionSaved((info) => {
-    activeSessionId = (info && info.id) || activeSessionId;
-    if (historyLoaded) loadHistory(true, { quiet: true });
+    setActiveSessionId((info && info.id) || getActiveSessionId());
+    if (isHistoryLoaded()) void loadHistory(true, { quiet: true });
   });
 
   $<HTMLButtonElement>('#send-btn').onclick = sendMessage;
@@ -195,7 +225,6 @@ async function init() {
   $<HTMLTextAreaElement>('#input').addEventListener('input', () => { updateMentionMenu(); updateComposerHint(); });
   $<HTMLTextAreaElement>('#input').addEventListener('click', updateMentionMenu);
   $<HTMLTextAreaElement>('#input').addEventListener('blur', closeMentionMenu);
-  $<HTMLButtonElement>('#history-resume').onclick = resumeHistory;
   $<HTMLButtonElement>('#stop-btn').onclick = () => { void stopSelected(); };
   $<HTMLButtonElement>('#reset-btn').onclick = () => {
     if (!switchingJobs && (!running || confirm(t('confirm.reset')))) void window.api.reset().catch((error) => alert(cleanIpcError(error)));
@@ -233,9 +262,6 @@ async function init() {
     // ⌘J 開關終端。終端自己聚焦時的 ⌘J / ⌘T / ⌘W / ⌘K 由 renderer/terminal.ts 處理
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); void toggleTerminal(); }
   });
-  $<HTMLButtonElement>('#history-toggle').onclick = toggleHistory;
-  $<HTMLButtonElement>('#history-refresh').onclick = () => loadHistory(true);
-  $<HTMLButtonElement>('#history-modal-close').onclick = closeHistoryModal;
   $<HTMLButtonElement>('#add-agent').onclick = () => openModal(null);
   $<HTMLButtonElement>('#modal-close').onclick = closeModal;
   $<HTMLButtonElement>('#modal-save').onclick = saveModal;
@@ -247,83 +273,9 @@ async function init() {
   $<HTMLInputElement>('#f-model').addEventListener('input', () => refreshModelDependents());
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
-  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#max-task-cost', '#verify-command', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
+  $<HTMLTextAreaElement>('#verify-command').addEventListener('input', () => renderVerifySuggestions());
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
-  $<HTMLButtonElement>('#quick-detect').onclick = detectOllama;
-  $<HTMLButtonElement>('#quick-apply').onclick = applyOllamaModel;
-  $<HTMLButtonElement>('#ext-add').onclick = openTemplatePicker;
-  $<HTMLButtonElement>('#ext-open-dir').onclick = () => window.api.ext.openDir();
-  $<HTMLButtonElement>('#ext-reload').onclick = () => reloadExtensions();
-  $<HTMLButtonElement>('#ext-docs').onclick = () => window.api.ext.openDocs();
-  $<HTMLButtonElement>('#ext-editor-docs').onclick = () => window.api.ext.openDocs();
-  $<HTMLButtonElement>('#ext-picker-close').onclick = () => $<HTMLDivElement>('#ext-picker').classList.add('hidden');
-  $<HTMLButtonElement>('#ext-picker-local').onclick = () => {
-    $('#ext-picker').classList.add('hidden');
-    showSettingsTab('clis');
-    $('#quick-ollama').scrollIntoView({ block: 'nearest' });
-    $('#quick-detect').focus();
-    void detectOllama();
-  };
-  const extFilterButtons = [...document.querySelectorAll<HTMLButtonElement>('.template-filters [data-filter]')];
-  extFilterButtons.forEach((button, index) => {
-    button.onclick = () => {
-      extTemplateFilter = button.dataset.filter || 'all';
-      extFilterButtons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle('active', active);
-        item.setAttribute('aria-checked', String(active));
-        item.tabIndex = active ? 0 : -1;
-      });
-      renderExtTemplates();
-    };
-    button.onkeydown = (event: KeyboardEvent) => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault();
-      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? extFilterButtons.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + extFilterButtons.length) % extFilterButtons.length;
-      extFilterButtons[nextIndex].focus();
-      extFilterButtons[nextIndex].click();
-    };
-  });
-  $<HTMLInputElement>('#ext-search').addEventListener('input', renderExtTemplates);
-  $<HTMLButtonElement>('#ext-editor-close').onclick = () => $<HTMLDivElement>('#ext-editor').classList.add('hidden');
-  $<HTMLButtonElement>('#ext-cancel').onclick = () => $<HTMLDivElement>('#ext-editor').classList.add('hidden');
-  $<HTMLButtonElement>('#ext-save').onclick = () => { void saveExtension(); };
-  $<HTMLButtonElement>('#ext-delete').onclick = deleteExtension;
-  $<HTMLButtonElement>('#ext-tab-basic').onclick = () => showExtEditorTab('basic');
-  $<HTMLButtonElement>('#ext-tab-advanced').onclick = () => showExtEditorTab('advanced');
-  $<HTMLButtonElement>('#ext-edit-args').onclick = () => { showExtEditorTab('advanced'); $('#ext-content').focus(); };
-  $<HTMLButtonElement>('#ext-key-reveal').onclick = () => {
-    const input = $<HTMLInputElement>('#ext-api-key');
-    const reveal = input.type === 'password';
-    input.type = reveal ? 'text' : 'password';
-    const button = $('#ext-key-reveal');
-    button.setAttribute('aria-pressed', String(reveal));
-    controlLabel(button, reveal ? 'hide' : 'show', t(reveal ? 'extEditor.hideKey' : 'extEditor.showKey'));
-  };
-  $<HTMLButtonElement>('#ext-pick-bin').onclick = pickExtensionExecutable;
-  $<HTMLButtonElement>('#ext-key-clear').onclick = clearExtensionSecret;
-  $<HTMLButtonElement>('#ext-key-test').onclick = testExtensionConnection;
-  $<HTMLButtonElement>('#ext-get-key').onclick = () => {
-    const url = $('#ext-get-key').dataset.url;
-    if (url) window.open(url, '_blank');
-  };
-  for (const id of ['#ext-id', '#ext-label', '#ext-type', '#ext-bin', '#ext-args', '#ext-base-url', '#ext-api-env', '#ext-models', '#ext-timeout']) {
-    $(id).addEventListener('input', syncExtBasicToJson);
-  }
-  $<HTMLSelectElement>('#ext-type').addEventListener('change', () => {
-    syncExtBasicToJson();
-    $<HTMLDetailsElement>('#ext-connection-fields').open = true;
-    void refreshExtensionSecretStatus();
-  });
-  $<HTMLTextAreaElement>('#ext-content').addEventListener('blur', () => {
-    if (!editingExtFile || editingExtFile.endsWith('.js')) return;
-    try { fillExtBasic(JSON.parse($<HTMLTextAreaElement>('#ext-content').value)); } catch {}
-  });
-  $<HTMLTextAreaElement>('#ext-content').addEventListener('keydown', (e) => {
-    if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '  '); }
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveExtension(); }
-  });
   $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
   $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
   $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; void saveConfig(); renderLineupButton(); };
@@ -336,11 +288,80 @@ async function init() {
 
 // ---------- 設定視窗 ----------
 
+let detectedVerifyCommands: string[] = [];
+let detectVerifySeq = 0;
+
+async function refreshVerifySuggestions(dir?: string): Promise<void> {
+  if (typeof window.api.detectVerifyCommands !== 'function') return;
+  const cwd = (dir ?? $<HTMLInputElement>('#work-dir').value ?? config.settings.workDir ?? '').trim();
+  const seq = ++detectVerifySeq;
+  if (!cwd) {
+    detectedVerifyCommands = [];
+    renderVerifySuggestions();
+    return;
+  }
+  try {
+    const res = await window.api.detectVerifyCommands(cwd);
+    if (seq !== detectVerifySeq) return;
+    detectedVerifyCommands = Array.isArray(res?.commands) ? res.commands : [];
+  } catch {
+    if (seq !== detectVerifySeq) return;
+    detectedVerifyCommands = [];
+  }
+  renderVerifySuggestions();
+}
+
+function renderVerifySuggestions(): void {
+  const box = document.getElementById('verify-suggestions') as HTMLDivElement | null;
+  if (!box) return;
+  const input = $<HTMLTextAreaElement>('#verify-command');
+  const existing = new Set(input.value.split('\n').map((line) => line.trim()).filter(Boolean));
+  const missing = detectedVerifyCommands.filter((cmd) => !existing.has(cmd));
+  if (!missing.length) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'verify-suggest-label';
+  label.textContent = t('settings.verifyDetected');
+  box.appendChild(label);
+  for (const cmd of missing) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ghost small verify-chip';
+    btn.textContent = `+ ${cmd}`;
+    btn.onclick = () => {
+      const current = input.value.split('\n').map((line) => line.trim()).filter(Boolean);
+      if (!current.includes(cmd)) current.push(cmd);
+      input.value = current.join('\n');
+      saveSettings();
+    };
+    box.appendChild(btn);
+  }
+  if (missing.length > 1) {
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'ghost small verify-chip verify-chip-all';
+    allBtn.textContent = `+ ${t('settings.verifyAddAll')}`;
+    allBtn.onclick = () => {
+      const current = input.value.split('\n').map((line) => line.trim()).filter(Boolean);
+      for (const cmd of missing) if (!current.includes(cmd)) current.push(cmd);
+      input.value = current.join('\n');
+      saveSettings();
+    };
+    box.appendChild(allBtn);
+  }
+}
+
 function openSettings(tab = 'general'): void {
   renderSidebar();
   showSettingsTab(tab);
   $('#settings-saved').hidden = true;
   $<HTMLDivElement>('#settings').classList.remove('hidden');
+  void refreshVerifySuggestions();
   // 使用者正要依燈號判斷「哪一位能用」,這時才值得花一次網路往返真的驗證 key。
   // 不 await:畫面先開,狀態回來再重畫。
   void checkClis({ probeCredentialed: true });
@@ -471,10 +492,10 @@ function relocalize(): void {
     answeredQuestionId = question!.id;
     disableQuestionCard('answered');
   }
-  if (historyLoaded) renderHistoryList();
-  if (openHistoryId) updateResumeButton();
+  refreshHistoryUI();
   renderJobs();
   refreshQueueControls();
+  renderVerifySuggestions();
   showSettingsTab(document.querySelector<HTMLElement>('.settings-tab.active')?.dataset.tab || 'general');
 }
 
@@ -497,215 +518,6 @@ function emptyEl() {
   d.id = 'empty'; d.className = 'empty';
   d.innerHTML = `<img class="empty-icon" src="icon.png" width="84" height="84" alt="" aria-hidden="true" /><div class="empty-title">${escapeHtml(t('empty.title'))}</div><div class="empty-sub">${escapeHtml(t('empty.sub'))}</div><div class="empty-steps"><span>${escapeHtml(t('stage.discuss'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.execute'))}</span><span class="arrow">→</span><span>${escapeHtml(t('stage.review'))}</span></div>`;
   return d;
-}
-
-// ---------- 歷史對話 ----------
-async function toggleHistory() {
-  const panel = $<HTMLDivElement>('#history-panel');
-  const opening = panel.hidden;
-  panel.hidden = !opening;
-  $<HTMLButtonElement>('#history-toggle').setAttribute('aria-expanded', String(opening));
-  $('#history-toggle .history-arrow').textContent = opening ? '▾' : '▸';
-  $<HTMLButtonElement>('#history-refresh').hidden = !opening;
-  if (opening && !historyLoaded) await loadHistory();
-}
-
-function setHistoryError(message: string): void {
-  const el = $<HTMLDivElement>('#history-error');
-  el.hidden = !message;
-  el.textContent = message || '';
-}
-
-async function loadHistory(force = false, { quiet = false }: { quiet?: boolean } = {}): Promise<void> {
-  if (historyLoaded && !force) return;
-  const refresh = $<HTMLButtonElement>('#history-refresh');
-  refresh.disabled = true;
-  setHistoryError('');
-  if (!quiet) $<HTMLDivElement>('#history-list').innerHTML = `<div class="history-empty">${escapeHtml(t('history.loading'))}</div>`;
-  try {
-    const result = await window.api.sessions.list();
-    historySessions = Array.isArray(result && result.sessions) ? result.sessions! : [];
-    historyLoaded = true;
-    historyErrors.clear();
-    if (result && result.error) setHistoryError(result.error);
-    renderHistoryList();
-  } catch (error) {
-    setHistoryError(t('history.loadFailed', { reason: cleanIpcError(error) }));
-    $<HTMLDivElement>('#history-list').innerHTML = '';
-  } finally {
-    refresh.disabled = false;
-  }
-}
-
-function renderHistoryList() {
-  const list = $<HTMLDivElement>('#history-list');
-  list.innerHTML = '';
-  if (!historySessions.length) {
-    const empty = document.createElement('div');
-    empty.className = 'history-empty';
-    empty.textContent = t('history.empty');
-    list.appendChild(empty);
-    return;
-  }
-  for (const session of historySessions) {
-    const item = document.createElement('div');
-    const active = session.id === activeSessionId;
-    item.className = `history-item${active ? ' active' : ''}`;
-    item.dataset.sessionId = session.id;
-    const main = document.createElement('button');
-    main.className = 'history-open';
-    const title = document.createElement('span');
-    title.className = 'history-title';
-    // 讀不到的紀錄沒有標題;要說「無法讀取」而不是「未命名」,兩者意思完全不同
-    title.textContent = session.title || (session.error ? t('history.unreadable') : t('history.untitled'));
-    if (active) main.setAttribute('aria-current', 'true');
-    const meta = document.createElement('span');
-    meta.className = 'history-meta';
-    const details = [formatHistoryTime(session.createdAt), t('history.count', { n: Number(session.messageCount) || 0 })];
-    if (Array.isArray(session.agents) && session.agents.length) details.push(joinNames(session.agents));
-    meta.textContent = details.filter(Boolean).join(' · ');
-    main.append(title, meta);
-    main.onclick = () => openHistory(session);
-    const remove = document.createElement('button');
-    remove.className = 'history-delete';
-    remove.title = t('history.delete');
-    remove.textContent = '✕';
-    remove.onclick = () => removeHistory(session);
-    item.append(main, remove);
-    const error = historyErrors.get(session.id) || session.error;
-    if (error) {
-      const err = document.createElement('div');
-      err.className = 'history-item-error';
-      err.textContent = error;
-      item.appendChild(err);
-    }
-    list.appendChild(item);
-  }
-}
-
-async function openHistory(summary: SessionSummary): Promise<void> {
-  historyErrors.delete(summary.id);
-  try {
-    const result = await window.api.sessions.read(summary.id);
-    if (!result || !result.ok) throw new Error((result && result.error) || t('history.readFailed'));
-    if (!result.session) throw new Error(t('history.readFailed'));
-    const session = result.session;
-    openHistoryId = summary.id;
-    $('#history-modal-title').textContent = session.title || summary.title || t('history.untitled');
-    const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), t('history.messages', { n: (session.messages || []).length })];
-    $<HTMLDivElement>('#history-modal-meta').textContent = meta.filter(Boolean).join(' · ');
-    renderHistoryPreview(session.messages || []);
-    updateResumeButton();
-    $<HTMLDivElement>('#history-modal').classList.remove('hidden');
-  } catch (error) {
-    historyErrors.set(summary.id, cleanIpcError(error));
-    renderHistoryList();
-  }
-}
-
-function renderHistoryPreview(messages: unknown): void {
-  const preview = $<HTMLDivElement>('#history-preview');
-  preview.innerHTML = '';
-  const list = Array.isArray(messages) ? messages : [];
-  for (const rawMessage of list) {
-    const message = rawMessage && typeof rawMessage === 'object'
-      ? rawMessage
-      : { kind: 'system', text: rawMessage == null ? '' : String(rawMessage) };
-    const card = document.createElement('article');
-    card.className = `history-message ${message.kind || 'system'} ${message.level || ''}`;
-    const head = document.createElement('div');
-    head.className = 'history-message-head';
-    const who = message.kind === 'user' ? t('who.user') : message.kind === 'agent' ? (message.agentName || t('who.agent')) : t('who.system');
-    head.textContent = [who, phaseText(message.phase), message.model, formatHistoryTime(message.ts)].filter(Boolean).join(' · ');
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.innerHTML = md(String(message.text || ''));
-    card.append(head, body);
-    if (Array.isArray(message.attachments) && message.attachments.length) {
-      const wrap = document.createElement('div');
-      wrap.innerHTML = attachmentsMarkup(message.attachments);
-      if (wrap.firstChild) card.appendChild(wrap.firstChild);
-      hydrateAttachmentThumbs(card, message.attachments);
-    }
-    if (message.error) {
-      const error = document.createElement('div');
-      error.className = 'error-text';
-      error.textContent = `⚠ ${message.error}`;
-      card.appendChild(error);
-    }
-    const usage = usageText(message.usage);
-    if (usage) {
-      const el = document.createElement('div');
-      el.className = 'usage';
-      el.textContent = usage;
-      card.appendChild(el);
-    }
-    preview.appendChild(card);
-  }
-  if (!list.length) preview.innerHTML = `<div class="history-empty">${escapeHtml(t('history.noMessages'))}</div>`;
-}
-
-async function removeHistory(session: SessionSummary): Promise<void> {
-  const when = formatHistoryTime(session.createdAt);
-  if (!confirm(t('history.confirmDelete', { title: session.title || t('history.untitled'), when: when ? `\n${when}` : '' }))) return;
-  historyErrors.delete(session.id);
-  try {
-    const result = await window.api.sessions.remove(session.id);
-    if (!result || !result.ok) throw new Error((result && result.error) || t('history.deleteFailed'));
-    historySessions = historySessions.filter((item) => item.id !== session.id);
-    if (openHistoryId === session.id) closeHistoryModal();
-    renderHistoryList();
-  } catch (error) {
-    historyErrors.set(session.id, cleanIpcError(error));
-    renderHistoryList();
-  }
-}
-
-function updateResumeButton() {
-  const button = $<HTMLButtonElement>('#history-resume');
-  const hint = $('#history-resume-hint');
-  const current = !!openHistoryId && openHistoryId === activeSessionId;
-  button.disabled = running || current;
-  button.textContent = current ? t('history.current') : t('history.resume');
-  hint.textContent = running ? t('history.hintRunning') : current ? t('history.hintCurrent') : t('history.hintResume');
-}
-
-async function resumeHistory() {
-  const id = openHistoryId;
-  if (!id || running) return;
-  const button = $<HTMLButtonElement>('#history-resume');
-  button.disabled = true;
-  try {
-    const result = await window.api.resume(id);
-    if (!result || !result.ok) throw new Error((result && result.error) || t('history.resumeFailed'));
-    clearTimeline();
-    await clearPendingAttachments();
-    activeSessionId = result.id;
-    const messages = (result.snapshot && result.snapshot.messages) || [];
-    messages.forEach((m) => renderMessage(m, { animate: false }));
-    setState(result.snapshot || { running: false });
-    closeHistoryModal();
-    renderHistoryList();
-    $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
-    $<HTMLTextAreaElement>('#input').focus();
-  } catch (error) {
-    $('#history-resume-hint').textContent = t('history.loadError', { reason: cleanIpcError(error) });
-    button.disabled = false;
-  }
-}
-
-function closeHistoryModal() {
-  openHistoryId = null;
-  $<HTMLDivElement>('#history-modal').classList.add('hidden');
-  $<HTMLDivElement>('#history-preview').innerHTML = '';
-}
-
-function formatHistoryTime(value: string | number | undefined): string {
-  const date = new Date(value ?? NaN);
-  // 側欄一行放不下秒數與時區;匯出檔仍保留完整時間
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(localeTag(), {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  });
 }
 
 // probeCredentialed:打開設定時帶 true,真的連線驗證有 key 的雲端 API。
@@ -767,10 +579,6 @@ function renderEmptySetup(readyCount: number): void {
 }
 
 // ---------- CLI 與擴充 ----------
-// 內建的「自訂指令」轉接器 label 由主程序給中文,介面上依語言顯示;其他轉接器的 label 原樣用
-const cliLabel = (type: Partial<CliType> | undefined, fallback: string): string => (type?.id === 'custom' && type.origin === 'builtin' ? t('adapter.custom') : type?.label || fallback);
-const typeLabel = (type: string): string => (['builtin', 'cli', 'openai', 'js'].includes(type) ? t(`type.${type}`) : type);
-
 async function refreshCatalog() {
   [cliTypes, extSummary] = await Promise.all([window.api.cliTypes(), window.api.ext.list()]);
   resetCapabilities(); // 擴充可能改了端點或模型清單
@@ -778,449 +586,6 @@ async function refreshCatalog() {
   renderExtensions();
   renderCliSummary();
   checkClis();
-}
-
-async function reloadExtensions() {
-  await window.api.ext.reload();
-  await refreshCatalog();
-}
-
-// ---------- 一鍵連接本機模型(Ollama) ----------
-// 使用者反映「cli 與 api 與各種東西的連結太複雜,不是技術背景的使用者根本看不懂」。
-// 這個流程刻意只留一個決定:選一個模型。端點、API key、JSON、逾時、歷史上限全部
-// 留在 adapter 層,介面連顯示它們的機會都沒有。
-
-// 有下一步時,狀態底下多一張和其他地方一樣的修復卡片(例如「在終端執行 ollama serve」)
-function setQuickStatus(message: string, kind: 'ok' | 'warn' | 'error' | '' = '', fix?: EnvFix | null): void {
-  const el = $<HTMLDivElement>('#quick-status');
-  el.hidden = !message;
-  el.innerHTML = `<div>${escapeHtml(message)}</div>${envFixHtml(fix)}`;
-  el.className = `quick-status${kind ? ' ' + kind : ''}`;
-  bindEnvFix(el);
-}
-
-async function detectOllama(): Promise<void> {
-  const btn = $<HTMLButtonElement>('#quick-detect');
-  btn.disabled = true;
-  $<HTMLDivElement>('#quick-pick').hidden = true;
-  setQuickStatus(t('quick.detecting'));
-  try {
-    const r = await window.api.quickSetupOllama();
-    if (!r.ok) {
-      // hint 是可以照做的下一步(例如「請先執行 ollama serve」);
-      // error 是 fetch 的原始訊息,多半是英文且對一般使用者沒有意義,不顯示。
-      setQuickStatus(r.hint || t('quick.notFound'), 'warn', r.fix);
-      return;
-    }
-    if (!r.models.length) {
-      setQuickStatus(t('quick.noModels'), 'warn');
-      return;
-    }
-    const select = $<HTMLSelectElement>('#quick-model');
-    select.innerHTML = '';
-    for (const m of r.models) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.id;
-      select.appendChild(opt);
-    }
-    // 預設選中後端建議的模型,使用者不必自己判斷哪個好
-    if (r.recommendedModel) select.value = r.recommendedModel;
-    $<HTMLDivElement>('#quick-pick').hidden = false;
-    setQuickStatus(t('quick.found', { count: r.models.length }), 'ok');
-  } catch (error) {
-    // 主程序已經把 registry 的例外轉成 { ok:false }，所以走到這裡代表 IPC 本身出事。
-    // 即使如此也先給一句能照做的話，原始訊息只當補充,不要讓使用者只看到一行英文。
-    setQuickStatus(`${t('quick.notFound')}\n${cleanIpcError(error)}`, 'warn');
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function applyOllamaModel(): Promise<void> {
-  const btn = $<HTMLButtonElement>('#quick-apply');
-  const model = $<HTMLSelectElement>('#quick-model').value;
-  if (!model) return;
-  btn.disabled = true;
-  setQuickStatus(t('quick.applying'));
-  try {
-    const r = await window.api.quickSetupOllama(model);
-    if (!r.installed) {
-      setQuickStatus(r.hint || r.error || t('quick.failed'), 'error');
-      return;
-    }
-    setQuickStatus(t('quick.done', { model: r.selectedModel || model }), 'ok');
-    $<HTMLDivElement>('#quick-pick').hidden = true;
-    // 設定已經寫進 adapter,重載後成員設定的清單才看得到它
-    await reloadExtensions();
-  } catch (error) {
-    setQuickStatus(`${t('quick.failed')}\n${cleanIpcError(error)}`, 'error');
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function renderExtensions() {
-  const list = $<HTMLDivElement>('#ext-list');
-  if (!list) return;
-  const rows = [];
-  // 已載入的轉接器(內建 + 擴充)
-  for (const type of Object.values(cliTypes)) {
-    const st = cliStatus[type.id];
-    // 狀態怎麼說、下一步是什麼,全部來自 describeCliHealth:設定頁與成員的模型設定共用同一份,
-    // 同一個狀態不會再出現兩種說法。修復指令由後端的健康檢查提供(claude auth login、
-    // ollama serve…),不在介面寫死某一個 CLI;沒有單一指令的(例如還沒安裝)給官方說明頁。
-    const described = describeCliHealth(st, type);
-    const dot = `<span class="status-dot ${described.tone}"></span>`;
-    const sub = described.text;
-    const subTitle = described.detail ? ` title="${escapeHtml(described.detail)}"` : '';
-    const auth = envFixHtml(described.fix);
-    const badges = [`<span class="badge">${escapeHtml(typeLabel(type.type))}</span>`];
-    if (!type.supportsEdit) badges.push(`<span class="badge">${escapeHtml(t('ext.discussOnly'))}</span>`);
-    const entry = extSummary.entries.find((e) => e.file === type.file);
-    if (entry && entry.overrides) badges.push(`<span class="badge warn">${escapeHtml(t('ext.overrides'))}</span>`);
-    const modelError = st?.state === 'missing' ? '' : type.modelError;
-    if (modelError) badges.push(`<span class="badge warn">${escapeHtml(t('ext.modelListFailed'))}</span>`);
-    rows.push({ file: type.file, html: `${dot}<div class="ext-main"><div class="ext-title"><b>${escapeHtml(cliLabel(type, type.id))}</b>${badges.join('')}</div><div class="ext-sub"${subTitle || ` title="${escapeHtml(sub || '')}"`}>${escapeHtml(sub || '')}</div>${auth}${modelError ? `<div class="ext-err">${escapeHtml(modelError)}</div>` : ''}</div>` });
-  }
-  // 載入失敗的擴充
-  for (const e of extSummary.entries.filter((x) => x.error)) {
-    rows.push({ file: e.file, broken: true, html: `<span class="status-dot bad"></span><div class="ext-main"><div class="ext-title"><b>${escapeHtml(e.file)}</b><span class="badge bad">${escapeHtml(t('ext.loadFailed'))}</span></div><div class="ext-err">${escapeHtml(e.error)}</div></div>` });
-  }
-  list.innerHTML = '';
-  for (const r of rows) {
-    const el = document.createElement('div');
-    el.className = `ext-item${r.file ? ' clickable' : ''}${r.broken ? ' broken' : ''}`;
-    el.innerHTML = r.html;
-    if (r.file) { const file = r.file; el.title = t('ext.clickToEdit', { file }); el.onclick = () => { void openExtEditor(file); }; }
-    bindEnvFix(el);
-    list.appendChild(el);
-  }
-}
-
-function openTemplatePicker() {
-  $<HTMLInputElement>('#ext-search').value = '';
-  renderExtTemplates();
-  $<HTMLDivElement>('#ext-picker').classList.remove('hidden');
-}
-
-function renderExtTemplates() {
-  const box = $<HTMLDivElement>('#ext-templates');
-  box.innerHTML = '';
-  const query = $<HTMLInputElement>('#ext-search').value.trim().toLocaleLowerCase();
-  const templates = extSummary.templates.filter((template) => {
-    const kind = template.type === 'cli' ? 'cli' : template.type === 'openai' ? 'api' : 'other';
-    const matchesFilter = extTemplateFilter === 'all' || kind === extTemplateFilter;
-    const haystack = `${template.label || ''} ${template.description || ''}`.toLocaleLowerCase();
-    return matchesFilter && (!query || haystack.includes(query));
-  });
-
-  if (!templates.length) {
-    box.innerHTML = `<div class="template-empty"><b>${escapeHtml(t('extPicker.noMatch'))}</b><span>${escapeHtml(t('extPicker.noMatchHint'))}</span></div>`;
-    return;
-  }
-
-  const readyTemplates = templates.filter((template) => template.type === 'openai' && !template.file.startsWith('ollama-') && !isBlankTemplate(template));
-  const advancedTemplates = templates.filter((template) => !readyTemplates.includes(template));
-  appendTemplateGroup(box, t('extPicker.ready'), readyTemplates);
-  if (advancedTemplates.length) {
-    const advanced = document.createElement('details');
-    advanced.className = 'ext-template-advanced';
-    advanced.open = !!query || extTemplateFilter !== 'all';
-    const summary = document.createElement('summary');
-    summary.textContent = t('extPicker.custom');
-    advanced.appendChild(summary);
-    appendTemplateGroup(advanced, t('extPicker.other'), advancedTemplates.filter((template) => !isBlankTemplate(template)));
-    appendTemplateGroup(advanced, t('extPicker.blank'), advancedTemplates.filter(isBlankTemplate));
-    box.appendChild(advanced);
-  }
-}
-
-function isBlankTemplate(template: ExtTemplate): boolean {
-  return template.file.startsWith('blank-') || template.id.startsWith('my-');
-}
-
-function appendTemplateGroup(container: HTMLElement, title: string, templates: ExtTemplate[]): void {
-  if (!templates.length) return;
-  const section = document.createElement('section');
-  section.className = 'template-group';
-  const heading = document.createElement('div');
-  heading.className = 'template-group-title';
-  heading.textContent = title;
-  const list = document.createElement('div');
-  list.className = 'template-list';
-  for (const tpl of templates) {
-    const el = document.createElement('button');
-    el.className = 'template';
-    el.dataset.template = tpl.file;
-    el.title = tpl.description;
-    el.innerHTML = `<span class="row"><b>${escapeHtml(tpl.label)}</b></span><span class="hint">${escapeHtml(t(tpl.type === 'openai' ? 'extPicker.apiCredential' : 'extPicker.installedProgram'))}</span><span class="template-action">${escapeHtml(t('extPicker.use'))}</span>`;
-    el.querySelector('.row')!.prepend(icon(tpl.type === 'openai' ? 'cloud' : 'terminal'));
-    el.onclick = async () => {
-      el.disabled = true;
-      try {
-        const { file } = await window.api.ext.install(tpl.file);
-        $<HTMLDivElement>('#ext-picker').classList.add('hidden');
-        await refreshCatalog();
-        openExtEditor(file);
-      } catch (e) {
-        el.disabled = false;
-        alert(t('extPicker.installFailed', { reason: cleanIpcError(e) }));
-      }
-    };
-    list.appendChild(el);
-  }
-  section.append(heading, list);
-  container.appendChild(section);
-}
-
-async function openExtEditor(file: string): Promise<void> {
-  try {
-    const result = await window.api.ext.read(file);
-    const content = typeof result === 'string' ? result : result.content;
-    const migration = typeof result === 'object' && result ? result.migration : '';
-    const migrationError = typeof result === 'object' && result ? result.migrationError : '';
-    editingExtFile = file;
-    $('#ext-editor-title').textContent = t('extEditor.title');
-    $<HTMLInputElement>('#ext-file').value = file;
-    $<HTMLTextAreaElement>('#ext-content').value = content;
-    $<HTMLInputElement>('#ext-api-key').value = '';
-    $<HTMLInputElement>('#ext-api-key').type = 'password';
-    $('#ext-key-reveal').setAttribute('aria-pressed', 'false');
-    controlLabel($('#ext-key-reveal'), 'show', t('extEditor.showKey'));
-    $<HTMLDetailsElement>('#ext-extra-fields').open = false;
-    $<HTMLDetailsElement>('#ext-file-settings').open = false;
-    $<HTMLDetailsElement>('#ext-connection-fields').open = true;
-    if (file.endsWith('.json')) {
-      // JSON 壞掉時 showExtEditorTab 會退回「進階 JSON」分頁，讓使用者直接修
-      editingExtSpec = null;
-      showExtEditorTab('basic');
-      const spec = editingExtSpec as ExtSpec | null;
-      $<HTMLDetailsElement>('#ext-connection-fields').open = !spec || spec.type !== 'openai' || !spec.baseUrl || spec.baseUrl.includes('api.example.com') || spec.models == null || (Array.isArray(spec.models) && !spec.models.length);
-      if (spec?.label) $('#ext-editor-title').textContent = spec.label;
-      await refreshExtensionSecretStatus();
-    } else {
-      editingExtSpec = null;
-      showExtEditorTab('advanced');
-    }
-    if (migration) await refreshCatalog();
-    const entry = extSummary.entries.find((e) => e.file === file);
-    showExtResult(migrationError || (migration ? null : entry && entry.error), migration || null);
-    $<HTMLDivElement>('#ext-editor').classList.remove('hidden');
-  } catch (e) { alert(t('extEditor.openFailed', { reason: cleanIpcError(e) })); }
-}
-
-function showExtEditorTab(tab: string): void {
-  if (tab === 'basic' && editingExtFile && editingExtFile.endsWith('.js')) tab = 'advanced';
-  if (tab === 'basic') {
-    try {
-      editingExtSpec = JSON.parse($<HTMLTextAreaElement>('#ext-content').value);
-      fillExtBasic(editingExtSpec);
-    } catch (e) {
-      showExtResult(t('extEditor.jsonError', { reason: (e as Error).message }), null);
-      tab = 'advanced';
-    }
-  }
-  const basic = tab === 'basic';
-  $<HTMLDivElement>('#ext-basic').hidden = !basic;
-  $<HTMLDivElement>('#ext-advanced').hidden = basic;
-  $<HTMLDetailsElement>('#ext-file-settings').open = !basic;
-  $<HTMLButtonElement>('#ext-tab-basic').classList.toggle('active', basic);
-  $<HTMLButtonElement>('#ext-tab-advanced').classList.toggle('active', !basic);
-  $<HTMLButtonElement>('#ext-tab-basic').setAttribute('aria-selected', String(basic));
-  $<HTMLButtonElement>('#ext-tab-advanced').setAttribute('aria-selected', String(!basic));
-  $<HTMLButtonElement>('#ext-tab-basic').disabled = !!(editingExtFile && editingExtFile.endsWith('.js'));
-}
-
-function fillExtBasic(spec: ExtSpec | null | undefined): void {
-  const isJson = !!spec && typeof spec === 'object' && !Array.isArray(spec);
-  $<HTMLDivElement>('#ext-basic-unavailable').hidden = isJson;
-  $<HTMLDivElement>('#ext-basic-fields').hidden = !isJson;
-  if (!isJson) return;
-  $<HTMLInputElement>('#ext-id').value = spec.id || '';
-  $<HTMLInputElement>('#ext-label').value = spec.label || '';
-  $<HTMLSelectElement>('#ext-type').value = spec.type === 'openai' ? 'openai' : 'cli';
-  $<HTMLInputElement>('#ext-bin').value = spec.bin || '';
-  const simpleArgs = Array.isArray(spec.args) && spec.args.every((arg) => typeof arg === 'string');
-  $<HTMLTextAreaElement>('#ext-args').disabled = Array.isArray(spec.args) && !simpleArgs;
-  $<HTMLTextAreaElement>('#ext-args').value = simpleArgs ? (spec.args as string[]).join('\n') : '';
-  const structuredArgs = $<HTMLTextAreaElement>('#ext-args').disabled;
-  $('#ext-simple-args').hidden = structuredArgs;
-  $('#ext-structured-args').hidden = !structuredArgs;
-  $<HTMLInputElement>('#ext-base-url').value = spec.baseUrl || '';
-  $<HTMLInputElement>('#ext-api-env').value = spec.apiKeyEnv || '';
-  $<HTMLInputElement>('#ext-models').disabled = false;
-  $<HTMLInputElement>('#ext-models').dataset.original = JSON.stringify(spec.models == null ? [] : spec.models);
-  $<HTMLInputElement>('#ext-models').value = spec.models === 'auto' ? 'auto' : Array.isArray(spec.models) ? spec.models.map((model) => typeof model === 'string' ? model : model.id).filter(Boolean).join(', ') : '';
-  $('#ext-models-help').textContent = Array.isArray(spec.models) && spec.models.some((model) => model && typeof model === 'object') ? t('extEditor.modelsKept') : '';
-  // 以分鐘顯示;JSON 裡是 timeoutMs。記下顯示的值:使用者沒動這個欄位時,不能因為顯示時四捨五入就改掉原本的設定
-  const timeout = typeof spec.timeoutMs === 'number' && spec.timeoutMs > 0 ? spec.timeoutMs / 60000 : 0;
-  const timeoutField = $<HTMLInputElement>('#ext-timeout');
-  timeoutField.value = timeout ? String(Math.round(timeout * 10) / 10) : '';
-  timeoutField.dataset.shown = timeoutField.value;
-  updateExtTypeFields();
-}
-
-const TIMEOUT_MAX_MINUTES = 600;
-const PROVIDER_KEY_PAGES: Record<string, string> = {
-  'api.deepseek.com': 'https://platform.deepseek.com/api_keys',
-  'api.x.ai': 'https://console.x.ai/',
-  'api.moonshot.cn': 'https://platform.moonshot.cn/console/api-keys',
-  'api.moonshot.ai': 'https://platform.moonshot.ai/console/api-keys',
-  'openrouter.ai': 'https://openrouter.ai/settings/keys',
-};
-
-function updateExtTypeFields() {
-  const api = $<HTMLSelectElement>('#ext-type').value === 'openai';
-  $<HTMLDivElement>('#ext-cli-fields').hidden = api;
-  $<HTMLDivElement>('#ext-api-fields').hidden = !api;
-  $<HTMLDivElement>('#ext-cli-options').hidden = api;
-  $<HTMLDivElement>('#ext-api-options').hidden = !api;
-  $('#ext-url-field').hidden = !api;
-  const keyPage = $('#ext-get-key');
-  let url = '';
-  try { url = PROVIDER_KEY_PAGES[new URL($<HTMLInputElement>('#ext-base-url').value).hostname] || ''; } catch {}
-  keyPage.dataset.url = url;
-  keyPage.hidden = !api || !url;
-}
-
-function syncExtBasicToJson() {
-  if (!editingExtFile || editingExtFile.endsWith('.js')) return;
-  let spec;
-  try { spec = JSON.parse($<HTMLTextAreaElement>('#ext-content').value); } catch { spec = editingExtSpec || {}; }
-  spec.id = $<HTMLInputElement>('#ext-id').value.trim();
-  spec.label = $<HTMLInputElement>('#ext-label').value.trim();
-  spec.type = $<HTMLSelectElement>('#ext-type').value;
-  if (!$<HTMLTextAreaElement>('#ext-args').disabled) spec.args = $<HTMLTextAreaElement>('#ext-args').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  spec.bin = $<HTMLInputElement>('#ext-bin').value.trim();
-  spec.baseUrl = $<HTMLInputElement>('#ext-base-url').value.trim();
-  const env = $<HTMLInputElement>('#ext-api-env').value.trim();
-  if (env) spec.apiKeyEnv = env; else delete spec.apiKeyEnv;
-  const modelText = $<HTMLInputElement>('#ext-models').value.trim();
-  if (modelText === 'auto') spec.models = 'auto';
-  else {
-    const ids = modelText.split(',').map((id) => id.trim()).filter(Boolean);
-    let original = [];
-    try { original = JSON.parse($<HTMLInputElement>('#ext-models').dataset.original || '[]'); } catch {}
-    const byId = new Map((Array.isArray(original) ? original : []).filter((item) => item && typeof item === 'object').map((item) => [item.id, item]));
-    spec.models = ids.map((id) => byId.get(id) || id);
-  }
-  // 使用者改了這個欄位才寫:留空或不是正數就回到預設(不寫這個欄位);其餘限制在 1~600 分鐘,
-  // 太大的值會超過計時器上限、讓每個回合立刻逾時,太小的會四捨五入成 0、存檔時被驗證擋下
-  const timeoutField = $<HTMLInputElement>('#ext-timeout');
-  if (timeoutField.value !== timeoutField.dataset.shown) {
-    const minutes = Number(timeoutField.value);
-    if (timeoutField.value.trim() && Number.isFinite(minutes) && minutes > 0) spec.timeoutMs = Math.round(Math.min(Math.max(minutes, 1), TIMEOUT_MAX_MINUTES) * 60000);
-    else delete spec.timeoutMs;
-    timeoutField.dataset.shown = timeoutField.value; // 現在的 JSON 就是這個欄位的值;之後沒再改它就不動
-  }
-  if (!spec.capabilities) spec.capabilities = { attachments: spec.type === 'openai' ? ['textInline'] : ['filePath'], attachmentsNeedCwd: false };
-  editingExtSpec = spec;
-  $<HTMLTextAreaElement>('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
-  updateExtTypeFields();
-}
-
-function extensionSecretRef(spec: ExtSpec | null = editingExtSpec): string {
-  return (spec && spec.secretRef) || `adapter:${(spec && spec.id) || $<HTMLInputElement>('#ext-id').value.trim()}`;
-}
-
-async function refreshExtensionSecretStatus() {
-  if (!editingExtSpec || editingExtSpec.type !== 'openai') return;
-  try {
-    const status = await window.api.secrets.status(extensionSecretRef(), editingExtSpec.apiKeyEnv || '');
-    const badge = $('#ext-key-status');
-    badge.classList.toggle('configured', status.configured);
-    badge.textContent = status.configured ? `${t('extEditor.keySet', { hint: status.hint })}${status.source === 'environment' ? t('extEditor.keyEnv') : ''}` : t('extEditor.keyUnset');
-    $<HTMLButtonElement>('#ext-key-clear').disabled = status.source !== 'safeStorage';
-  } catch (e) { showExtResult(cleanIpcError(e), null); }
-}
-
-async function pickExtensionExecutable() {
-  const file = await window.api.pickExecutable();
-  if (!file) return;
-  $<HTMLInputElement>('#ext-bin').value = file;
-  syncExtBasicToJson();
-}
-
-async function clearExtensionSecret() {
-  try {
-    await window.api.secrets.clear(extensionSecretRef());
-    const spec = JSON.parse($<HTMLTextAreaElement>('#ext-content').value);
-    delete spec.secretRef;
-    editingExtSpec = spec;
-    $<HTMLTextAreaElement>('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
-    $<HTMLInputElement>('#ext-api-key').value = '';
-    syncExtBasicToJson();
-    await refreshExtensionSecretStatus();
-    showExtResult(null, t('extEditor.keyCleared'));
-  } catch (e) { showExtResult(cleanIpcError(e), null); }
-}
-
-async function testExtensionConnection() {
-  const button = $<HTMLButtonElement>('#ext-key-test');
-  button.disabled = true;
-  button.textContent = t('extEditor.testing');
-  try {
-    const saved = await saveExtension({ quiet: true });
-    if (!saved) return;
-    const result = await window.api.secrets.test(editingExtSpec?.id || '');
-    // 測試連線失敗時,hint 是照實說的那一句(例如「請先執行 ollama serve」),
-    // error 是原始訊息;下一步和 app 其他地方同一張卡片
-    showExtResult(result.ok ? null : result.hint || result.error, result.ok ? `✓ ${result.version || t('extEditor.connected')}` : null, result.ok ? null : result.fix);
-  } catch (e) { showExtResult(cleanIpcError(e), null); }
-  finally { button.disabled = false; button.textContent = t('extEditor.keyTest'); }
-}
-
-function showExtResult(error: string | null | undefined | false, ok: string | null, fix?: EnvFix | null): void {
-  const box = $<HTMLDivElement>('#ext-error');
-  box.hidden = !error;
-  box.innerHTML = error ? `<div>⚠ ${escapeHtml(error)}</div>${envFixHtml(fix)}` : '';
-  bindEnvFix(box);
-  $<HTMLDivElement>('#ext-ok').hidden = !ok;
-  $<HTMLDivElement>('#ext-ok').textContent = ok || '';
-}
-
-async function saveExtension({ quiet = false }: { quiet?: boolean } = {}): Promise<boolean> {
-  const file = $<HTMLInputElement>('#ext-file').value.trim();
-  try {
-    if (!file.endsWith('.js')) {
-      // 在「進階 JSON」分頁儲存時以 JSON 為準，不能拿基本欄位的舊值覆蓋
-      if (!$<HTMLDivElement>('#ext-basic').hidden) syncExtBasicToJson();
-      const spec = JSON.parse($<HTMLTextAreaElement>('#ext-content').value);
-      const key = $<HTMLInputElement>('#ext-api-key').value.trim();
-      if (spec.type === 'openai' && key) {
-        spec.secretRef = extensionSecretRef(spec);
-        await window.api.secrets.set(spec.secretRef, key);
-        $<HTMLInputElement>('#ext-api-key').value = '';
-        editingExtSpec = spec;
-        $<HTMLTextAreaElement>('#ext-content').value = JSON.stringify(spec, null, 2) + '\n';
-      }
-    }
-    const { error } = await window.api.ext.write(file, $<HTMLTextAreaElement>('#ext-content').value, editingExtFile);
-    editingExtFile = file;
-    $('#ext-editor-title').textContent = editingExtSpec?.label || t('extEditor.title');
-    await refreshCatalog();
-    await refreshExtensionSecretStatus();
-    if (error || !quiet) showExtResult(error, error ? null : t('extEditor.saved'));
-    return !error;
-  } catch (e) {
-    showExtResult(cleanIpcError(e), null);
-    return false;
-  }
-}
-
-async function deleteExtension() {
-  if (!editingExtFile || !confirm(t('extEditor.confirmDelete', { file: editingExtFile }))) return;
-  try {
-    await window.api.ext.remove(editingExtFile);
-  } catch (e) {
-    // 刪不掉就把編輯器留著:關掉視窗會讓人以為刪成功了
-    alert(t('extEditor.deleteFailed', { reason: cleanIpcError(e) }));
-    return;
-  }
-  $<HTMLDivElement>('#ext-editor').classList.add('hidden');
-  editingExtFile = null;
-  await refreshCatalog();
 }
 
 // ---------- 側欄 ----------
@@ -1273,6 +638,7 @@ function renderSidebar() {
   $<HTMLSelectElement>('#default-mode').value = config.settings.mode || 'divide';
   $<HTMLInputElement>('#max-transcript').value = String(config.settings.maxTranscriptChars ?? 60000);
   $<HTMLInputElement>('#max-parallel').value = String(config.settings.maxParallelJobs || 2);
+  $<HTMLInputElement>('#max-task-cost').value = config.settings.maxTaskCostUsd && config.settings.maxTaskCostUsd > 0 ? String(config.settings.maxTaskCostUsd) : '';
   $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
   $<HTMLInputElement>('#allow-git').checked = config.settings.allowGitCommit === true;
   $<HTMLInputElement>('#allow-git-push').checked = config.settings.allowGitPush === true;
@@ -1296,10 +662,14 @@ function saveSettings() {
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   config.settings.maxParallelJobs = Math.min(6, Math.max(1, Math.round(Number($<HTMLInputElement>('#max-parallel').value) || 2)));
+  const maxCost = Number($<HTMLInputElement>('#max-task-cost').value);
+  if (Number.isFinite(maxCost) && maxCost > 0) config.settings.maxTaskCostUsd = Math.round(maxCost * 1000) / 1000;
+  else delete config.settings.maxTaskCostUsd;
   $<HTMLSelectElement>('#mode').value = config.settings.mode;
   // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
   void saveConfig({ saved: true });
   renderSidebar();
+  void refreshVerifySuggestions();
 }
 
 // ---------- 成員編輯 ----------
@@ -1587,11 +957,6 @@ function deleteAgent() {
 }
 
 // ---------- 對話 ----------
-const ATTACH_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'txt', 'md', 'json', 'csv', 'log', 'pdf']);
-const ATTACH_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
-const pendingAttachments: PendingAttachment[] = [];
-const attachLimits: AttachLimits = { maxFiles: 10, maxFileBytes: 20 * 1024 * 1024, maxTotalBytes: 50 * 1024 * 1024 };
-
 async function sendMessage() {
   if (switchingJobs) return;
   const owner = shownJobId;
@@ -1636,7 +1001,7 @@ function setState(s: ChatState): void {
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
   refreshQueueControls();
   updateComposerHint();
-  if (openHistoryId) updateResumeButton();
+  updateResumeButton();
   updateSpeakingHighlight();
   renderLineupButton(); // 會議進行中不能換陣容
   if (Object.prototype.hasOwnProperty.call(s, 'question')) renderQuestion(s.question || null);
@@ -2103,7 +1468,7 @@ function onJobsChanged(state: JobsState): void {
   if (job && job.status !== 'queued' && !running) setState({ running: false });
   else refreshQueueControls();
   const finished = state.jobs.some((j) => before.has(j.id) && before.get(j.id) !== j.status && ['done', 'stopped', 'error'].includes(j.status));
-  if (finished && historyLoaded) void loadHistory(true, { quiet: true });
+  if (finished && isHistoryLoaded()) void loadHistory(true, { quiet: true });
 }
 
 function applyJobSwitch({ state, snapshot }: JobSelectResult): void {
@@ -2117,11 +1482,11 @@ function applyJobSwitch({ state, snapshot }: JobSelectResult): void {
     revokeThumbUrls(pendingAttachments.splice(0, pendingAttachments.length));
     renderAttachChips();
     clearAttachError();
-    activeSessionId = snapshot.sessionId || null;
+    setActiveSessionId(snapshot.sessionId || null);
     snapshot.messages.forEach((m) => renderMessage(m, { animate: false }));
     $<HTMLTextAreaElement>('#input').value = drafts.get(state.selectedId) || '';
     void syncPendingAttachments();
-    if (historyLoaded) renderHistoryList();
+    if (isHistoryLoaded()) renderHistoryList();
     $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
   }
   setState(snapshot);
@@ -2367,44 +1732,6 @@ function renderUserMessage(el: HTMLElement, m: ChatMessage): void {
   el.innerHTML = userHtml(m);
   highlightMentions(el.querySelector('.body'), m.mentions);
   hydrateAttachmentThumbs(el, m.attachments);
-}
-
-function attachmentsMarkup(list: AttachmentMeta[] | undefined): string {
-  if (!Array.isArray(list) || !list.length) return '';
-  return `<div class="msg-attachments">${list.map((item) => attachmentChipMarkup(item, false)).join('')}</div>`;
-}
-
-function attachmentChipMarkup(item: AttachmentMeta | PendingAttachment, removable: boolean): string {
-  const kind = item.kind || kindFromName(item.name, item.mime);
-  const isImage = kind === 'image' || kind === 'imageInline';
-  const thumb = item.thumbUrl
-    ? `<img class="attach-thumb" alt="" src="${escapeHtml(item.thumbUrl)}">`
-    : `<span class="attach-thumb file">${isImage ? '🖼' : '📄'}</span>`;
-  const remove = removable
-    ? `<button type="button" class="ghost small icon attach-remove" data-attach-id="${escapeHtml(item.id)}" title="${escapeHtml(t('attach.remove'))}" aria-label="${escapeHtml(t('attach.removeNamed', { name: item.name }))}">✕</button>`
-    : '';
-  return `<div class="attach-chip" data-attach-id="${escapeHtml(item.id || '')}">${thumb}<span class="attach-meta"><span class="attach-name" title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || t('attach.unnamed'))}</span><span class="attach-size">${escapeHtml(formatBytes(item.size))}</span></span>${remove}</div>`;
-}
-
-function hydrateAttachmentThumbs(root: HTMLElement | null, list: Array<AttachmentMeta | PendingAttachment> | undefined): void {
-  if (!root || !Array.isArray(list)) return;
-  for (const raw of list) {
-    const item = normalizeAttachment(raw);
-    if (!item.id) continue;
-    const img = root.querySelector(`.attach-chip[data-attach-id="${cssEscape(item.id)}"] img.attach-thumb`);
-    if (img && img.getAttribute('src')) continue;
-    loadAttachmentThumb(item).then((url) => {
-      if (!url) return;
-      const chip = root.querySelector(`.attach-chip[data-attach-id="${cssEscape(item.id)}"]`);
-      if (!chip) return;
-      const current = chip.querySelector('.attach-thumb');
-      const next = document.createElement('img');
-      next.className = 'attach-thumb';
-      next.alt = '';
-      next.src = url;
-      if (current) current.replaceWith(next);
-    }).catch(() => {});
-  }
 }
 
 function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
@@ -2823,377 +2150,6 @@ async function exportConversation() {
     exporting = false;
     updateUsageTotal();
   }
-}
-
-// ---------- Composer 附件 ----------
-function attachmentsApi(): RendererApi['attachments'] | null {
-  return (window.api && window.api.attachments) || null;
-}
-
-function applyAttachLimits(limits: unknown): void {
-  if (!limits || typeof limits !== 'object') return;
-  const raw = limits as Partial<AttachLimits>;
-  const maxFiles = Number(raw.maxFiles);
-  const maxFileBytes = Number(raw.maxFileBytes);
-  const maxTotalBytes = Number(raw.maxTotalBytes);
-  if (Number.isFinite(maxFiles) && maxFiles > 0) attachLimits.maxFiles = maxFiles;
-  if (Number.isFinite(maxFileBytes) && maxFileBytes > 0) attachLimits.maxFileBytes = maxFileBytes;
-  if (Number.isFinite(maxTotalBytes) && maxTotalBytes > 0) attachLimits.maxTotalBytes = maxTotalBytes;
-}
-
-function setupComposerAttachments() {
-  const box = document.querySelector<HTMLElement>('.composer-box');
-  const bar = document.querySelector<HTMLElement>('.composer-bar');
-  if (!box || !bar || $<HTMLButtonElement>('#attach-btn')) return;
-
-  const hint = document.createElement('div');
-  hint.className = 'composer-drop-hint';
-  hint.textContent = t('composer.dropHint');
-  box.prepend(hint);
-
-  const chips = document.createElement('div');
-  chips.id = 'attach-chips';
-  chips.className = 'attach-chips';
-  chips.setAttribute('aria-live', 'polite');
-  const error = document.createElement('div');
-  error.id = 'attach-error';
-  error.className = 'attach-error';
-  error.setAttribute('role', 'alert');
-  const input = $<HTMLTextAreaElement>('#input');
-  input.after(chips);
-  chips.after(error);
-
-  const button = document.createElement('button');
-  button.id = 'attach-btn';
-  button.type = 'button';
-  button.className = 'ghost small icon';
-  button.title = t('composer.attach');
-  button.setAttribute('aria-label', t('composer.attach'));
-  button.appendChild(icon('attach'));
-  button.onclick = () => pickAttachments();
-  bar.insertBefore(button, bar.querySelector<HTMLElement>('.spacer'));
-
-  const api = attachmentsApi();
-  if (!api || typeof api.pick !== 'function') {
-    const fileInput = document.createElement('input');
-    fileInput.id = 'attach-input';
-    fileInput.type = 'file';
-    fileInput.multiple = true;
-    fileInput.hidden = true;
-    fileInput.accept = '.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.json,.csv,.log,.pdf';
-    fileInput.addEventListener('change', async () => {
-      await addAttachmentFiles(fileInput.files);
-      fileInput.value = '';
-    });
-    box.appendChild(fileInput);
-  }
-
-  box.addEventListener('dragenter', (event) => { if (isFileDrag(event)) { event.preventDefault(); box.classList.add('dragover'); } });
-  box.addEventListener('dragover', (event) => { if (isFileDrag(event)) { event.preventDefault(); box.classList.add('dragover'); } });
-  box.addEventListener('dragleave', (event) => { if (!(event.relatedTarget instanceof Node) || !box.contains(event.relatedTarget)) box.classList.remove('dragover'); });
-  box.addEventListener('drop', async (event) => {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    box.classList.remove('dragover');
-    await addAttachmentFiles(event.dataTransfer?.files);
-  });
-  syncPendingAttachments();
-}
-
-function isFileDrag(event: DragEvent): boolean {
-  return !!(event.dataTransfer && [...event.dataTransfer.types].includes('Files'));
-}
-
-async function syncPendingAttachments() {
-  const owner = shownJobId;
-  const api = attachmentsApi();
-  if (!api || typeof api.list !== 'function') return;
-  try {
-    const result = await api.list();
-    if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result, { keepError: true });
-  } catch {}
-}
-
-async function pickAttachments() {
-  if (switchingJobs) return;
-  const owner = shownJobId;
-  const api = attachmentsApi();
-  if (api && typeof api.pick === 'function') {
-    try {
-      const result = await api.pick();
-      if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result);
-    } catch (error) {
-      if (owner === shownJobId && owner === window.api.jobs.current()) showAttachError(formatAttachError('', cleanIpcError(error)));
-    }
-    return;
-  }
-  const input = $<HTMLInputElement>('#attach-input');
-  if (input) input.click();
-}
-
-function applyPendingFromResult(result: AttachmentsResult | null | undefined, { keepError = false }: { keepError?: boolean } = {}): void {
-  if (!result) return;
-  applyAttachLimits(result.limits);
-  if (Array.isArray(result.attachments)) {
-    pendingAttachments.splice(0, pendingAttachments.length, ...result.attachments.map((item) => normalizeAttachment(item)));
-  } else if (Array.isArray(result.added)) {
-    for (const item of result.added) pendingAttachments.push(normalizeAttachment(item));
-  }
-  renderAttachChips();
-  if (result.canceled) return;
-  const errors = Array.isArray(result.errors) ? result.errors : [];
-  if (errors.length) {
-    showAttachError(formatAttachResultError(errors[0]));
-  } else if (!keepError) {
-    clearAttachError();
-  }
-}
-
-async function addAttachmentFiles(fileList: FileList | null | undefined): Promise<void> {
-  if (switchingJobs) return;
-  const owner = shownJobId;
-  const files = [...(fileList || [])].filter(Boolean);
-  if (!files.length) return;
-  const api = attachmentsApi();
-  if (api && typeof api.add === 'function') {
-    try {
-      const items = [];
-      for (const file of files) {
-        items.push(await fileToAddItem(file, api));
-      }
-      if (owner !== shownJobId || owner !== window.api.jobs.current()) return;
-      const result = await api.add(items);
-      if (owner === shownJobId && owner === window.api.jobs.current()) applyPendingFromResult(result);
-    } catch (error) {
-      if (owner !== shownJobId || owner !== window.api.jobs.current()) return;
-      const names = files.map((file) => file && file.name).filter(Boolean);
-      showAttachError(formatAttachError(names[0] || '', cleanIpcError(error)));
-    }
-    return;
-  }
-  const errors = [];
-  let total = pendingAttachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
-  for (const file of files) {
-    const name = file.name || t('attach.unnamedFile');
-    const ext = extensionOf(name);
-    const size = Number(file.size) || 0;
-    if (pendingAttachments.length >= attachLimits.maxFiles) {
-      errors.push(formatAttachError(name, t('attach.tooMany', { n: attachLimits.maxFiles })));
-      continue;
-    }
-    if (!ATTACH_EXTS.has(ext)) {
-      errors.push(formatAttachError(name, t('attach.unsupported')));
-      continue;
-    }
-    if (size > attachLimits.maxFileBytes) {
-      errors.push(formatAttachError(name, t('attach.tooLarge', { size: formatBytes(attachLimits.maxFileBytes) })));
-      continue;
-    }
-    if (total + size > attachLimits.maxTotalBytes) {
-      errors.push(formatAttachError(name, t('attach.totalTooLarge', { size: formatBytes(attachLimits.maxTotalBytes) })));
-      continue;
-    }
-    const mismatch = mimeConflictsWithName(name, file.type);
-    if (mismatch) {
-      errors.push(formatAttachError(name, mismatch));
-      continue;
-    }
-    try {
-      const added = await storeAttachmentStub(file);
-      pendingAttachments.push(added);
-      total += added.size || size;
-    } catch (error) {
-      errors.push(formatAttachError(name, cleanIpcError(error)));
-    }
-  }
-  renderAttachChips();
-  if (errors.length) showAttachError(errors[0]);
-  else clearAttachError();
-}
-
-async function fileToAddItem(file: File, api: RendererApi['attachments']): Promise<AttachmentInput> {
-  const name = file.name || t('attach.unnamed');
-  const filePath = typeof api.pathForFile === 'function' ? String(api.pathForFile(file) || '') : '';
-  if (filePath) return { name, path: filePath };
-  const data = await file.arrayBuffer();
-  return { name, data };
-}
-
-async function storeAttachmentStub(file: File): Promise<PendingAttachment> {
-  const id = (crypto.randomUUID && crypto.randomUUID()) || `att-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const item = normalizeAttachment({
-    id,
-    name: file.name,
-    mime: file.type || mimeFromName(file.name),
-    size: file.size,
-    kind: kindFromName(file.name, file.type),
-    file,
-  }, file);
-  if (item.kind === 'image' && file instanceof Blob) item.thumbUrl = await readFileDataUrl(file);
-  return item;
-}
-
-function normalizeAttachment(item: Partial<PendingAttachment> & { type?: string } | null | undefined, file?: File): PendingAttachment {
-  const src = item || {};
-  const name = src.name || (file && file.name) || t('attach.unnamed');
-  const mime = src.mime || src.type || (file && file.type) || mimeFromName(name);
-  const kind = src.kind || kindFromName(name, mime);
-  return {
-    id: src.id || '',
-    name,
-    mime,
-    size: Number(src.size != null ? src.size : file && file.size) || 0,
-    kind,
-    path: src.path || null,
-    relPath: src.relPath || null,
-    thumb: src.thumb || null,
-    thumbUrl: src.thumbUrl || null,
-    file: src.file || file || null,
-  };
-}
-
-function renderAttachChips() {
-  const row = $<HTMLDivElement>('#attach-chips');
-  const button = $<HTMLButtonElement>('#attach-btn');
-  if (!row) return;
-  row.innerHTML = pendingAttachments.map((item) => attachmentChipMarkup(item, true)).join('');
-  row.querySelectorAll<HTMLButtonElement>('.attach-remove').forEach((btn) => {
-    btn.onclick = () => { void removePendingAttachment(btn.dataset.attachId); };
-  });
-  if (button) button.disabled = pendingAttachments.length >= attachLimits.maxFiles;
-  hydrateAttachmentThumbs(row, pendingAttachments);
-  updateComposerHint();
-}
-
-async function removePendingAttachment(id: string | undefined): Promise<void> {
-  const index = pendingAttachments.findIndex((item) => item.id === id);
-  if (index < 0) return;
-  const [item] = pendingAttachments.splice(index, 1);
-  await forgetAttachments([item]);
-  renderAttachChips();
-  clearAttachError();
-}
-
-async function clearPendingAttachments() {
-  const items = pendingAttachments.splice(0, pendingAttachments.length);
-  await forgetAttachments(items);
-  renderAttachChips();
-  clearAttachError();
-}
-
-function revokeThumbUrls(items: PendingAttachment[] | undefined): void {
-  for (const item of items || []) {
-    if (item.thumbUrl && String(item.thumbUrl).startsWith('blob:')) URL.revokeObjectURL(item.thumbUrl);
-  }
-}
-
-async function forgetAttachments(items: PendingAttachment[] | undefined): Promise<void> {
-  revokeThumbUrls(items);
-  const api = attachmentsApi();
-  if (!api || typeof api.remove !== 'function') return;
-  for (const item of items || []) {
-    if (!item.id) continue;
-    try { await api.remove(item.id); } catch {}
-  }
-}
-
-async function loadAttachmentThumb(item: AttachmentMeta | PendingAttachment | null): Promise<string> {
-  if (!item) return '';
-  if (item.thumbUrl) return item.thumbUrl;
-  const kind = item.kind || kindFromName(item.name, item.mime);
-  if (kind !== 'image' && kind !== 'imageInline') return '';
-  const api = attachmentsApi();
-  if (api && typeof api.thumb === 'function' && (item.relPath || item.thumb || item.id)) {
-    return (await api.thumb(item)) || '';
-  }
-  if (item.file instanceof Blob) return readFileDataUrl(item.file);
-  return '';
-}
-
-function formatAttachResultError(entry: string | { name?: string; error?: string; message?: string } | null | undefined): string {
-  if (entry == null) return formatAttachError('', '');
-  if (typeof entry === 'string') return formatAttachError('', entry);
-  return formatAttachError(entry.name || '', entry.error || entry.message || '');
-}
-
-function formatAttachError(name: string, reason: string): string {
-  const file = String(name || '').trim();
-  let detail = String(reason || '').trim();
-  detail = detail.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-  const prefix = t('attach.cannotPrefix');
-  if (file && (detail.includes(`「${file}」`) || detail.includes(`"${file}"`) || detail.startsWith(prefix))) return detail;
-  if (file && detail) return t('attach.cannotReason', { name: file, reason: detail.replace(/^[:：,，]\s*/, '') });
-  if (file) return t('attach.cannot', { name: file });
-  if (detail) return detail.startsWith(prefix) ? detail : t('attach.cannotFile', { reason: detail });
-  return t('attach.unknown');
-}
-
-function mimeConflictsWithName(name: string, mime: string): string {
-  const type = String(mime || '').toLowerCase();
-  if (!type || type === 'application/octet-stream') return '';
-  const ext = extensionOf(name);
-  if (!ATTACH_EXTS.has(ext)) return '';
-  if (ATTACH_IMAGE_EXTS.has(ext)) {
-    const expected = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : mimeFromName(name);
-    return type === expected ? '' : t('attach.mismatch', { ext: ext.toUpperCase() });
-  }
-  if (ext === 'pdf') return type === 'application/pdf' ? '' : t('attach.mismatch', { ext: 'PDF' });
-  if (type.startsWith('image/') || type === 'application/pdf' || /executable|zip|octet/.test(type)) {
-    return t('attach.mismatch', { ext: ext.toUpperCase() });
-  }
-  return '';
-}
-
-function showAttachError(message: string): void {
-  const el = $<HTMLDivElement>('#attach-error');
-  if (!el) return;
-  el.textContent = message;
-}
-
-function clearAttachError() {
-  const el = $<HTMLDivElement>('#attach-error');
-  if (el) el.textContent = '';
-}
-
-function extensionOf(name: string | undefined): string {
-  const match = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
-  return match ? match[1] : '';
-}
-
-function kindFromName(name: string | undefined, mime?: string | null): string {
-  const ext = extensionOf(name);
-  if (ATTACH_IMAGE_EXTS.has(ext) || (mime && String(mime).startsWith('image/'))) return 'image';
-  if (ext === 'pdf' || mime === 'application/pdf') return 'pdf';
-  return 'text';
-}
-
-function mimeFromName(name: string | undefined): string {
-  const ext = extensionOf(name);
-  if (ext === 'png') return 'image/png';
-  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-  if (ext === 'webp') return 'image/webp';
-  if (ext === 'gif') return 'image/gif';
-  if (ext === 'pdf') return 'application/pdf';
-  if (ext === 'json') return 'application/json';
-  if (ext === 'csv') return 'text/csv';
-  if (ext === 'md') return 'text/markdown';
-  return 'text/plain';
-}
-
-function formatBytes(value: number | undefined): string {
-  const size = Number(value) || 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function readFileDataUrl(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error(t('attach.previewFailed')));
-    reader.readAsDataURL(file);
-  });
 }
 
 init();

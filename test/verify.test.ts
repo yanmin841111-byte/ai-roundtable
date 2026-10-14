@@ -7,7 +7,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { verifyChanges, verifyNotes, verificationRevision, SYNTAX_MAX_FILES } = require('../src/verify');
+const { verifyChanges, verifyNotes, verificationRevision, detectVerifyCommands, SYNTAX_MAX_FILES } = require('../src/verify');
 
 const tests: Array<{ name: string; fn: () => unknown }> = [];
 const test = (name: string, fn: () => unknown) => tests.push({ name, fn });
@@ -170,6 +170,50 @@ test('多道門檻:依序跑,一道沒過就停,並說出是哪一道、前面�
   // 空行與前後空白不算一道
   const spaced = await verifyChanges(dir, [], '\n  exit 0  \n\n');
   assert.deepStrictEqual(spaced.gates.map((g: any) => g.command), ['exit 0']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('自動偵測驗證指令:依專案設定檔與套件管理工具排出建議,忽略預設佔位 test script', async () => {
+  const npmDir = dirWith({
+    'package.json': JSON.stringify({
+      scripts: { lint: 'eslint .', typecheck: 'tsc --noEmit', test: 'node --test' },
+    }),
+  });
+  assert.deepStrictEqual(await detectVerifyCommands(npmDir), ['npm run lint', 'npm run typecheck', 'npm test']);
+  fs.rmSync(npmDir, { recursive: true, force: true });
+
+  const pnpmPlaceholderDir = dirWith({
+    'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+    'tsconfig.json': '{}\n',
+    'package.json': JSON.stringify({
+      devDependencies: { typescript: '^5.0.0' },
+      scripts: { test: 'echo "Error: no test specified" && exit 1' },
+    }),
+  });
+  assert.deepStrictEqual(await detectVerifyCommands(pnpmPlaceholderDir), ['pnpm exec tsc --noEmit']);
+  fs.rmSync(pnpmPlaceholderDir, { recursive: true, force: true });
+
+  const pyRustDir = dirWith({
+    'Cargo.toml': '[package]\nname = "demo"\n',
+    'pyproject.toml': '[tool.ruff]\nline-length = 100\n[tool.pytest.ini_options]\n',
+  });
+  assert.deepStrictEqual(await detectVerifyCommands(pyRustDir), ['cargo check', 'cargo test', 'ruff check .', 'pytest']);
+  fs.rmSync(pyRustDir, { recursive: true, force: true });
+});
+
+test('語法檢查支援 Python 與 Shell 腳本,不留下 __pycache__ 且不執行腳本', async () => {
+  const dir = dirWith({
+    'good.py': 'def add(a, b):\n    return a + b\n',
+    'bad.py': 'def broken(:\n    pass\n',
+    'return_outside.py': 'return 1\n',
+    'good.sh': '#!/bin/sh\necho "hello"\n',
+    'bad.sh': '#!/bin/sh\nif [ 1 -eq 1 ]; then\n  echo "unclosed"\n',
+  });
+  const r = await verifyChanges(dir, ['good.py', 'bad.py', 'return_outside.py', 'good.sh', 'bad.sh'], '');
+  assert.deepStrictEqual(r.syntax.map((s: any) => s.file).sort(), ['bad.py', 'bad.sh', 'return_outside.py']);
+  assert.strictEqual(r.checked, 5);
+  assert.strictEqual(fs.existsSync(path.join(dir, '__pycache__')), false, '不可留下 __pycache__');
+  assert.ok(!r.syntax.some((s: any) => s.error.includes(dir)), '錯誤訊息不留絕對路徑');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

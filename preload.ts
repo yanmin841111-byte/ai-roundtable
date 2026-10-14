@@ -55,6 +55,7 @@ const api: RendererApi = {
   revertTask: async (scope?: 'task' | 'repair') => invoke('task:revert', await jobId(), scope),
   taskVerification: async (messageId) => invoke('task:verification', await jobId(), messageId),
   reverifyTask: async (messageId, confirmedCommand) => invoke('task:reverify', await jobId(), messageId, confirmedCommand),
+  detectVerifyCommands: (cwd) => invoke('verify:detect', cwd),
   quickSetupOllama: (model) => invoke('ollama:quickSetup', model ? { model } : {}),
   modelCapability: (payload) => invoke('model:capability', payload),
   reset: async () => invoke('chat:reset', await jobId()),

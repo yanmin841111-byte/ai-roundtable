@@ -111,6 +111,8 @@ export interface AppSettings {
   composerHeight?: number;
   // 同時進行的獨立任務件數上限;同一個專案目錄、同一台本機模型的任務另外排隊
   maxParallelJobs?: number;
+  // 單次任務成本上限(USD,0 或未設代表不限制);達標時停止後續修復輪次並警告
+  maxTaskCostUsd?: number;
 }
 
 // 陣容:一組「誰上場、各自的角色、誰主持、什麼流程、討論幾輪」(見 src/lineups.ts)
@@ -753,6 +755,7 @@ export interface IpcContract {
   'task:revert': { args: [jobId: string, scope?: 'task' | 'repair']; result: RevertOutcome };
   'task:verification': { args: [jobId: string, messageId: string]; result: TaskVerificationStatus };
   'task:reverify': { args: [jobId: string, messageId: string, confirmedCommand: string]; result: { ok: boolean; error?: string } };
+  'verify:detect': { args: [cwd?: string]; result: { commands: string[] } };
   'ollama:quickSetup': { args: [payload?: { model?: string }]; result: OllamaSetupResult };
   // live 為 true 才會送出實際的對話請求(付費 API 會產生少量費用);否則只用免費的來源與快取
   'model:capability': { args: [payload: { adapterId: string; model: string; live?: boolean }]; result: ModelCapability | null };
@@ -844,6 +847,7 @@ export interface RendererApi {
   revertTask(scope?: 'task' | 'repair'): Promise<RevertOutcome>;
   taskVerification(messageId: string): Promise<TaskVerificationStatus>;
   reverifyTask(messageId: string, confirmedCommand: string): Promise<{ ok: boolean; error?: string }>;
+  detectVerifyCommands?(cwd?: string): Promise<{ commands: string[] }>;
   // 一鍵連接本機 Ollama。不帶 model 只偵測並列出已安裝模型;帶 model 則寫入設定
   quickSetupOllama(model?: string): Promise<OllamaSetupResult>;
   modelCapability(payload: { adapterId: string; model: string; live?: boolean }): Promise<ModelCapability | null>;

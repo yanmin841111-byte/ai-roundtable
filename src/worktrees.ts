@@ -14,6 +14,7 @@ import { gitAvailability } from './git-check';
 
 const COPY_FILE_MAX = 256 * 1024;
 const COPY_TOTAL_MAX = 20 * 1024 * 1024;
+const MERGE_TEXT_MAX = 256 * 1024;
 
 export interface MemberWorkspace {
   agentId: string;
@@ -113,7 +114,79 @@ export async function prepareMemberWorkspaces(cwd: string, agentIds: string[], s
   }
 }
 
-// 每位成員相對自己隔離目錄起點的改動。重疊的不合併;沒重疊的採用該成員的結果。
+// 檢查是否為適合三方文字合併的一般檔案(大小在上限內、不含 NUL 位元組),並一併讀出檔案權限
+async function readMergeableText(file: string): Promise<{ buf: Buffer; mode: number } | null> {
+  try {
+    const stat = await fs.promises.lstat(file);
+    if (!stat.isFile() || stat.size > MERGE_TEXT_MAX) return null;
+    const buf = await fs.promises.readFile(file);
+    if (buf.includes(0)) return null;
+    return { buf, mode: stat.mode & 0o777 };
+  } catch {
+    return null;
+  }
+}
+
+// 多位成員同時改了同一個檔案時,若各版本皆為文字檔(或各自新增完全相同的內容),
+// 嘗試以 git merge-file 進行三方合併並保留檔案權限。只要任一步驟有衝突或無法合併就回傳 null,維持原本的重疊保護。
+async function tryThreeWayMerge(
+  cwd: string,
+  rel: string,
+  members: MemberWorkspace[],
+): Promise<{ buf: Buffer; mode: number } | null> {
+  const basePath = path.join(cwd, rel);
+  let baseBuf: Buffer = Buffer.alloc(0);
+  let baseMode: number | null = null;
+  if (fs.existsSync(basePath)) {
+    const read = await readMergeableText(basePath);
+    if (!read) return null;
+    baseBuf = read.buf;
+    baseMode = read.mode;
+  }
+  const buffers: Buffer[] = [];
+  const modes: number[] = [];
+  for (const member of members) {
+    const memberFile = path.join(member.dir, rel);
+    if (!fs.existsSync(memberFile)) return null; // 其中一方刪除檔案時不做自動文字合併
+    const read = await readMergeableText(memberFile);
+    if (!read) return null;
+    buffers.push(read.buf);
+    modes.push(read.mode);
+  }
+  if (buffers.length < 2) return null;
+  let resolvedMode: number;
+  if (baseMode !== null) {
+    const changedModes = [...new Set(modes.filter((m) => m !== baseMode))];
+    if (changedModes.length > 1) return null;
+    resolvedMode = changedModes.length === 1 ? changedModes[0] : baseMode;
+  } else {
+    resolvedMode = modes.reduce((a, b) => a | b, modes[0]);
+  }
+  // 若所有成員改出完全相同的內容,直接採用並保留檔案權限
+  if (buffers.every((b) => b.equals(buffers[0]))) return { buf: buffers[0], mode: resolvedMode };
+  // 若基準不存在且內容不同,沒有共同祖先錨點,不自動合併
+  if (baseMode === null || !(await gitAvailability()).ok) return null;
+  const scratch = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ai-roundtable-merge-'));
+  try {
+    const baseTmp = path.join(scratch, 'base');
+    const oursTmp = path.join(scratch, 'ours');
+    const theirsTmp = path.join(scratch, 'theirs');
+    await fs.promises.writeFile(baseTmp, baseBuf);
+    await fs.promises.writeFile(oursTmp, buffers[0]);
+    for (let i = 1; i < buffers.length; i++) {
+      await fs.promises.writeFile(theirsTmp, buffers[i]);
+      const merged = await runGit(scratch, ['merge-file', '-q', oursTmp, baseTmp, theirsTmp]);
+      if (!merged.ok) return null;
+    }
+    return { buf: await fs.promises.readFile(oursTmp), mode: resolvedMode };
+  } catch {
+    return null;
+  } finally {
+    await fs.promises.rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// 每位成員相對自己隔離目錄起點的改動。重疊時先嘗試無衝突三方合併;仍有衝突才列為重疊不合併。
 export async function mergeMemberWorkspaces(
   cwd: string,
   prepared: PreparedWorkspaces,
@@ -123,6 +196,7 @@ export async function mergeMemberWorkspaces(
   const adopted: string[] = [];
   const failed: string[] = [];
   const byFile = new Map<string, string[]>();
+  const membersByFile = new Map<string, MemberWorkspace[]>();
   const changes = new Map<string, string[]>();
   for (const member of prepared.members) {
     const after = await snapshotDir(member.dir, undefined, true);
@@ -136,28 +210,72 @@ export async function mergeMemberWorkspaces(
       const owners = byFile.get(file) || [];
       owners.push(names.get(member.agentId) || member.agentId);
       byFile.set(file, owners);
+      const list = membersByFile.get(file) || [];
+      list.push(member);
+      membersByFile.set(file, list);
     }
   }
   if (failed.length) return { adopted, overlaps: [], failed };
   const overlapping = new Map([...byFile].filter(([, owners]) => owners.length > 1));
+  const parentBlocked = new Set<string>();
   for (const [file, owners] of byFile) {
     const segments = file.split('/');
     for (let length = 1; length < segments.length; length++) {
       const parent = segments.slice(0, length).join('/');
       const parentOwners = byFile.get(parent);
       if (!parentOwners || parentOwners.every((owner) => owners.includes(owner))) continue;
-      const names = [...new Set([...parentOwners, ...owners])];
-      overlapping.set(parent, names);
-      overlapping.set(file, names);
+      const mergedNames = [...new Set([...parentOwners, ...owners])];
+      overlapping.set(parent, mergedNames);
+      overlapping.set(file, mergedNames);
+      parentBlocked.add(parent);
+      parentBlocked.add(file);
+    }
+  }
+  const current = await snapshotDir(cwd);
+  if (!before || !current) {
+    const overlaps = [...overlapping].map(([file, owners]) => ({ file, names: owners }));
+    return { adopted, overlaps, failed: ['.'] };
+  }
+  // 嘗試對多位成員同時修改的同一檔案做三方無衝突合併
+  const autoMerged = new Map<string, { buf: Buffer; mode: number }>();
+  for (const [rel] of [...overlapping]) {
+    if (parentBlocked.has(rel)) continue;
+    const touching = membersByFile.get(rel) || [];
+    if (touching.length < 2) continue;
+    try {
+      if (current.get(rel) !== before.get(rel)) {
+        overlapping.delete(rel);
+        failed.push(rel);
+        continue;
+      }
+      await checkPath(cwd, rel);
+      for (const m of touching) await checkPath(m.dir, rel);
+      const merged = await tryThreeWayMerge(cwd, rel, touching);
+      if (merged !== null) {
+        autoMerged.set(rel, merged);
+        overlapping.delete(rel);
+      }
+    } catch {
+      overlapping.delete(rel);
+      failed.push(rel);
     }
   }
   const overlaps = [...overlapping].map(([file, owners]) => ({ file, names: owners }));
-  const blocked = new Set(overlaps.map((item) => item.file));
-  const current = await snapshotDir(cwd);
-  if (!before || !current) return { adopted, overlaps, failed: ['.'] };
+  const blocked = new Set([...overlaps.map((item) => item.file), ...failed]);
+  for (const [rel, merged] of autoMerged) {
+    const dest = path.join(cwd, rel);
+    try {
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      await fs.promises.writeFile(dest, merged.buf, { mode: merged.mode });
+      await fs.promises.chmod(dest, merged.mode);
+      adopted.push(rel);
+    } catch {
+      failed.push(rel);
+    }
+  }
   for (const member of prepared.members) {
     for (const rel of changes.get(member.agentId) || []) {
-      if (blocked.has(rel)) continue;
+      if (blocked.has(rel) || autoMerged.has(rel)) continue;
       const dest = path.join(cwd, rel);
       const src = path.join(member.dir, rel);
       try {

@@ -113,3 +113,71 @@ test('worktrees preserve dirty inputs and cleanup registrations; subdirectories 
     } finally { await discardMemberWorkspaces(subLanes); }
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test('disjoint edits to the same file are cleanly 3-way merged across 2 or 3 members', async (context) => {
+  if (!(await gitAvailability()).ok) { context.skip('git unavailable'); return; }
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-lanes-3way-'));
+  const baseText = [
+    'line 1: header',
+    'line 2',
+    'line 3',
+    'line 4: middle',
+    'line 5',
+    'line 6',
+    'line 7: footer',
+  ].join('\n') + '\n';
+  fs.writeFileSync(path.join(cwd, 'index.ts'), baseText);
+  const before = await snapshotDir(cwd);
+  const lanes = await prepareMemberWorkspaces(cwd, ['alice', 'bob', 'carol'], before);
+  try {
+    // Alice edits top
+    fs.writeFileSync(path.join(lanes.members[0].dir, 'index.ts'), baseText.replace('line 1: header', 'line 1: alice header'));
+    // Bob edits middle
+    fs.writeFileSync(path.join(lanes.members[1].dir, 'index.ts'), baseText.replace('line 4: middle', 'line 4: bob middle'));
+    // Carol edits bottom
+    fs.writeFileSync(path.join(lanes.members[2].dir, 'index.ts'), baseText.replace('line 7: footer', 'line 7: carol footer'));
+    const names = new Map([['alice', 'Alice'], ['bob', 'Bob'], ['carol', 'Carol']]);
+    const result = await mergeMemberWorkspaces(cwd, lanes, before, names);
+    assert.deepEqual(result.overlaps, []);
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.adopted, ['index.ts']);
+    const merged = fs.readFileSync(path.join(cwd, 'index.ts'), 'utf8');
+    assert.match(merged, /alice header/);
+    assert.match(merged, /bob middle/);
+    assert.match(merged, /carol footer/);
+  } finally {
+    await discardMemberWorkspaces(lanes);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('merging identical executable scripts or 3-way merged executable scripts preserves 0755 permissions', async (context) => {
+  if (!(await gitAvailability()).ok) { context.skip('git unavailable'); return; }
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-lanes-mode-'));
+  const baseScript = '#!/bin/sh\necho "top"\necho "middle"\necho "bottom"\n';
+  fs.writeFileSync(path.join(cwd, 'existing.sh'), baseScript, { mode: 0o755 });
+  fs.chmodSync(path.join(cwd, 'existing.sh'), 0o755);
+  const before = await snapshotDir(cwd);
+  const lanes = await prepareMemberWorkspaces(cwd, ['alice', 'bob'], before);
+  try {
+    // Both members add identical executable script run.sh with 0755
+    for (const member of lanes.members) {
+      const p = path.join(member.dir, 'run.sh');
+      fs.writeFileSync(p, '#!/bin/sh\necho "hi"\n', { mode: 0o755 });
+      fs.chmodSync(p, 0o755);
+    }
+    // Disjoint edits to existing.sh (which has 0755)
+    fs.writeFileSync(path.join(lanes.members[0].dir, 'existing.sh'), baseScript.replace('top', 'alice-top'));
+    fs.writeFileSync(path.join(lanes.members[1].dir, 'existing.sh'), baseScript.replace('bottom', 'bob-bottom'));
+    const result = await mergeMemberWorkspaces(cwd, lanes, before, new Map([['alice', 'Alice'], ['bob', 'Bob']]));
+    assert.deepEqual(result.overlaps, []);
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.adopted, ['existing.sh', 'run.sh']);
+    assert.equal(fs.statSync(path.join(cwd, 'run.sh')).mode & 0o777, 0o755);
+    assert.equal(fs.statSync(path.join(cwd, 'existing.sh')).mode & 0o777, 0o755);
+  } finally {
+    await discardMemberWorkspaces(lanes);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
