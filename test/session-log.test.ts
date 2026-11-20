@@ -349,5 +349,30 @@ t('帶 id 時覆寫同一份紀錄(繼續討論不會拆成多筆),壞 id 不寫
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+t('紀錄與列出歷史對話時保留 workDir 並建立全文搜尋摘要', () => {
+  const { listSessionWorkDirs } = require('../src/session-log');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-workdir-'));
+  const first = writeSession(dir, [
+    { kind: 'user', ts: 1, text: '修復登入流程' } as any,
+    { kind: 'agent', ts: 2, agentName: 'Claude', text: '問題出在 refreshToken 過期判斷' } as any,
+  ], { conversationId: 'c-wd', workDir: '/tmp/proj-alpha' });
+  assert.strictEqual(first.ok, true);
+  // 續接寫入時若未重傳 workDir,仍應保留原本記下的工作目錄
+  const second = writeSession(dir, [
+    { kind: 'user', ts: 1, text: '修復登入流程' } as any,
+    { kind: 'agent', ts: 2, agentName: 'Claude', text: '問題出在 refreshToken 過期判斷' } as any,
+    { kind: 'user', ts: 3, text: '補上單元測試' } as any,
+  ], { conversationId: 'c-wd', id: first.id });
+  assert.strictEqual(second.ok, true);
+  const detail = readSession(dir, first.id);
+  assert.strictEqual(detail.ok, true);
+  if (detail.ok) assert.strictEqual(detail.session.workDir, '/tmp/proj-alpha');
+  const listed = listSessions(dir).sessions;
+  assert.strictEqual(listed[0].workDir, '/tmp/proj-alpha');
+  assert.ok(listed[0].searchText?.includes('refreshToken'), '全文搜尋摘要應包含對話內文關鍵字');
+  assert.deepStrictEqual(listSessionWorkDirs(dir), ['/tmp/proj-alpha']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 fs.rmSync(base, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);

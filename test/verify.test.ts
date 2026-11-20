@@ -243,6 +243,43 @@ test('verification detection distinguishes empty projects from invalid paths, co
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('Git 專案的 verificationRevision 忽略 .gitignore 大型產物,並反映追蹤與未追蹤檔案變動', async () => {
+  const { execFileSync } = require('child_process');
+  const { verificationRevision } = require('../src/verify');
+  const dir = dirWith({
+    '.gitignore': 'release/\n',
+    'src/index.js': 'module.exports = 1;\n',
+  });
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir });
+    // 放入超過舊 20MB 上限的 .gitignore 打包產物(例如 release/*.dmg)
+    fs.mkdirSync(path.join(dir, 'release'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'release', 'bundle.dmg'), Buffer.alloc(22 * 1024 * 1024, 0x61));
+
+    const rev1 = await verificationRevision(dir);
+    assert.ok(rev1 && /^[0-9a-f]{64}$/.test(rev1), `應忽略 gitignore 大檔並算出指紋,實際為 ${rev1}`);
+
+    // 修改被忽略的產物不影響驗證指紋
+    fs.writeFileSync(path.join(dir, 'release', 'bundle.dmg'), Buffer.alloc(22 * 1024 * 1024, 0x62));
+    assert.strictEqual(await verificationRevision(dir), rev1, '被 .gitignore 忽略的產物變動不應使證據失效');
+
+    // 新增未追蹤原始碼與刪除已追蹤檔案都必須改變指紋
+    fs.writeFileSync(path.join(dir, 'src/extra.js'), 'module.exports = 2;\n');
+    const rev2 = await verificationRevision(dir);
+    assert.ok(rev2 && rev2 !== rev1, '新增未追蹤檔案必須更新指紋');
+
+    fs.unlinkSync(path.join(dir, 'src/index.js'));
+    const rev3 = await verificationRevision(dir);
+    assert.ok(rev3 && rev3 !== rev2, '刪除已追蹤檔案必須更新指紋');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 (async () => {
   let passed = 0;
   for (const { name, fn } of tests) { await fn(); passed++; console.log('ok -', name); }

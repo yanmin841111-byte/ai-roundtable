@@ -17,6 +17,7 @@ interface Envelope {
   title: string;
   agents: string[];
   conversationId: string | null;
+  workDir?: string;
   // 沒有逐則驗證;載入繼續討論時由 orchestrator 的 restoreMessage 補齊欄位
   messages: ChatMessage[];
 }
@@ -34,6 +35,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 
 const ENVELOPE_VERSION = 1;
 const TITLE_MAX = 80;
+const SEARCH_TEXT_MAX = 4000;
 const LIST_LIMIT = 200;
 // 檔名白名單:只接受單一檔名,不含任何目錄成分
 const ID_PATTERN = /^[\w.-]+\.json$/;
@@ -92,6 +94,18 @@ function deriveAgents(messages: readonly LooseMessage[]) {
   return names;
 }
 
+// 供歷史對話全文搜尋建立精簡摘要索引(限制長度避免大型對話撐大 IPC payload)
+function deriveSearchText(messages: readonly LooseMessage[]): string {
+  let acc = '';
+  for (const m of asList(messages)) {
+    const chunk = typeof m?.text === 'string' ? m.text.replace(/\s+/g, ' ').trim() : '';
+    if (!chunk) continue;
+    acc += (acc ? '\n' : '') + chunk;
+    if (acc.length >= SEARCH_TEXT_MAX) return acc.slice(0, SEARCH_TEXT_MAX);
+  }
+  return acc;
+}
+
 // 只看第一則訊息的 ts。不要「往後找第一則有 ts 的」——後面那些訊息的時間點
 // 和對話開始時間沒有必然關係,拿來當 createdAt 會給出比檔案本身還離譜的值。
 function deriveCreatedAt(messages: readonly LooseMessage[], fallback: unknown) {
@@ -131,12 +145,14 @@ function toEnvelope(parsed: any, fallbackDate: Date): Envelope {
   if (!parsed || typeof parsed !== 'object') throw new Error('session.notTranscript');
   if (!Array.isArray(parsed.messages)) throw new Error('session.noMessages');
   const messages = parsed.messages;
+  const workDir = typeof parsed.workDir === 'string' && parsed.workDir.trim() ? parsed.workDir.trim() : undefined;
   return {
     version: Number.isFinite(parsed.version) ? parsed.version : ENVELOPE_VERSION,
     createdAt: parsed.createdAt || deriveCreatedAt(messages, fallbackDate),
     title: (parsed.title && parsed.title !== LEGACY_UNTITLED ? parsed.title : '') || deriveTitle(messages),
     agents: Array.isArray(parsed.agents) ? parsed.agents : deriveAgents(messages),
     conversationId: parsed.conversationId || deriveConversationId(messages),
+    ...(workDir ? { workDir } : {}),
     messages,
   };
 }
@@ -147,7 +163,7 @@ function toEnvelope(parsed: any, fallbackDate: Date): Envelope {
 function writeSession(
   userDataDir: string,
   messages: readonly ChatMessage[],
-  { now, logger, conversationId, id }: { now?: unknown; logger?: Logger; conversationId?: string | null; id?: string | null } = {},
+  { now, logger, conversationId, id, workDir }: { now?: unknown; logger?: Logger; conversationId?: string | null; id?: string | null; workDir?: string | null } = {},
 ): WriteSessionResult {
   // 連檔名與 envelope 的組裝都要在 try 裡:呼叫端傳進壞掉的 now 或 userDataDir 時,
   // 這裡一樣只能回傳錯誤,絕不能讓記錄失敗把整個任務炸掉。
@@ -159,6 +175,14 @@ function writeSession(
     const existing = id == null ? null : resolveSessionPath(userDataDir, id);
     if (id != null && !existing) throw new Error('無效的紀錄代號');
     const file = existing || path.join(dir, `${stamp}-${crypto.randomUUID()}.json`);
+    let resolvedWorkDir = typeof workDir === 'string' && workDir.trim() ? workDir.trim() : null;
+    if (workDir === undefined && existing) {
+      try {
+        const stat = fs.statSync(existing);
+        const prev = stat.isFile() ? readEnvelope(existing, stat) : null;
+        if (prev && prev.ok && prev.envelope.workDir) resolvedWorkDir = prev.envelope.workDir;
+      } catch {}
+    }
     tmp = `${file}.tmp`;
     const list = asList(messages);
     const envelope: Envelope = {
@@ -168,6 +192,7 @@ function writeSession(
       agents: deriveAgents(list),
       // 附件存在 userData/attachments/<conversationId>/,刪這份紀錄時要連動清掉
       conversationId: conversationId || deriveConversationId(list),
+      ...(resolvedWorkDir ? { workDir: resolvedWorkDir } : {}),
       messages: [...list],
     };
     fs.mkdirSync(dir, { recursive: true });
@@ -227,7 +252,17 @@ function listSessions(userDataDir: string, { limit = LIST_LIMIT, locale = 'zh-Ha
     if (!parsed.ok) return { ...base, title: '', agents: [], messageCount: 0, error: localizeError(parsed.error, locale) };
     const e = parsed.envelope;
     const attachmentCount = e.messages.reduce((n, m: LooseMessage) => n + (Array.isArray(m?.attachments) ? m.attachments.length : 0), 0);
-    return { ...base, title: e.title, agents: e.agents, createdAt: e.createdAt, messageCount: e.messages.length, conversationId: e.conversationId || null, attachmentCount };
+    return {
+      ...base,
+      title: e.title,
+      agents: e.agents,
+      createdAt: e.createdAt,
+      messageCount: e.messages.length,
+      conversationId: e.conversationId || null,
+      workDir: e.workDir || null,
+      searchText: deriveSearchText(e.messages),
+      attachmentCount,
+    };
   });
   return { sessions };
 }
@@ -280,6 +315,24 @@ function listConversationIds(userDataDir: string): string[] {
     } catch {}
   }
   return [...ids];
+}
+
+// 啟動時清理崩潰殘留的 .roundtable-runtime:除了目前設定的工作目錄,也掃歷史對話曾用過的工作目錄
+function listSessionWorkDirs(userDataDir: string): string[] {
+  const dir = sessionsDir(userDataDir);
+  const dirs = new Set<string>();
+  let names: string[];
+  try { names = fs.readdirSync(dir).filter((name) => ID_PATTERN.test(name)); } catch { return []; }
+  for (const name of names) {
+    const full = path.join(dir, name);
+    try {
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) continue;
+      const parsed = readEnvelope(full, stat);
+      if (parsed.ok && parsed.envelope.workDir) dirs.add(parsed.envelope.workDir);
+    } catch {}
+  }
+  return [...dirs];
 }
 
 function formatTime(ts: string | number | undefined, locale: TextLocale) {
@@ -363,4 +416,4 @@ function messagesToMarkdown(messages: readonly ChatMessage[], locale: TextLocale
   return `${sections.join('\n\n')}\n`;
 }
 
-export { writeSession, listSessions, readSession, deleteSession, listConversationIds, messagesToMarkdown, usageMarkdown, resolveSessionPath };
+export { writeSession, listSessions, readSession, deleteSession, listConversationIds, listSessionWorkDirs, messagesToMarkdown, usageMarkdown, resolveSessionPath };

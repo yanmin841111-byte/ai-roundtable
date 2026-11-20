@@ -624,6 +624,59 @@ test('adapter 完成 read_file → replace_text 往返，稽核事件含機器�
   } finally { f.cleanup(); }
 });
 
+test('封鎖寫入 .roundtable 與 .roundtable-runtime 等會被自動執行的自有目錄與反例暫存檔', () => {
+  const f = fixture();
+  try {
+    const session = new FileToolSession(f.root);
+    for (const rel of [
+      '.roundtable/counterexamples.json',
+      '.roundtable-runtime/stage.sh',
+      '.roundtable-ce-0-exploit.mjs',
+    ]) {
+      const blocked = session.execute('write_file', {
+        path: rel, content: 'console.log("pwned")\n', createOnly: true, reason: '嘗試提權',
+      });
+      assert.strictEqual(blocked.ok, false, `${rel} 必須被封鎖`);
+      assert.strictEqual(fs.existsSync(path.join(f.root, rel)), false, `${rel} 不可被寫入`);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('OpenAI adapter 的記憶體 session 支援 clearSession、ephemeralSession 與 LRU 上限', async () => {
+  const f = fixture();
+  try {
+    const seenPrompts: any[] = [];
+    const fetchImpl = async (_url: any, options: any) => {
+      const body = JSON.parse(options.body);
+      seenPrompts.push(body.messages);
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: `reply-${seenPrompts.length}` } }] }) };
+    };
+    const spec = { id: 'local', type: 'openai', baseUrl: 'http://local/v1', models: ['m'], stream: false };
+    const adapter = createOpenAIAdapter(spec, { fetchImpl, maxSessions: 2 });
+
+    // ephemeralSession 不保留歷史(例如乾淨視角的審查與反例回合)
+    const eph = await adapter.run({ name: 'R', model: 'm' }, ctx(f.root, { prompt: 'once', ephemeralSession: true }));
+    assert.strictEqual(eph.sessionId, null);
+
+    const s1 = await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'first-s1' }));
+    const s2 = await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'first-s2' }));
+    assert.ok(s1.sessionId && s2.sessionId && s1.sessionId !== s2.sessionId);
+
+    // 再開第三個 session 時,最舊的 s1 被 LRU 淘汰;s2 仍保留上下文
+    const s3 = await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'first-s3' }));
+    assert.ok(s3.sessionId);
+    await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'second-s2', sessionId: s2.sessionId }));
+    assert.strictEqual(seenPrompts.at(-1).some((m: any) => m.content === 'first-s2'), true, 's2 應仍在快取內');
+    await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'second-s1', sessionId: s1.sessionId }));
+    assert.strictEqual(seenPrompts.at(-1).some((m: any) => m.content === 'first-s1'), false, 's1 超出上限後應已被淘汰');
+
+    // 明確呼叫 clearSession 後不再保留舊對話
+    adapter.clearSession!(s2.sessionId!);
+    await adapter.run({ name: 'A', model: 'm' }, ctx(f.root, { prompt: 'after-clear', sessionId: s2.sessionId }));
+    assert.strictEqual(seenPrompts.at(-1).some((m: any) => m.content === 'first-s2'), false, 'clearSession 後應釋放舊對話');
+  } finally { f.cleanup(); }
+});
+
 test('規格必須同時明確開啟 supportsEdit 與 fileTools', () => {
   for (const spec of [
     { baseUrl: 'http://local/v1', supportsEdit: true },

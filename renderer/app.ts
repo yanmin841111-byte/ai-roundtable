@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify';
 import * as Marker from '../src/shared';
 import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
-import { isPhaseInfo } from '../src/ipc-types';
+import { isPhaseInfo, recordProjectSettings, switchProjectSettings } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
 import { controlLabel, icon } from './icons';
 import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape, bindResizeHandle } from './util';
@@ -59,6 +59,7 @@ interface AgentShell {
   unreviewed: HTMLElement | null;
   reviewScope: HTMLElement;
   retry: HTMLButtonElement | null;
+  copyBtn: HTMLButtonElement | null;
   usage: CachedEl;
   statusLine: CachedEl;
 }
@@ -191,6 +192,7 @@ async function init() {
       setActiveSessionId(id);
       messages.forEach((m) => renderMessage(m, { animate: false }));
       setState(snapshot);
+      try { onJobsChanged(await window.api.jobs.list()); } catch {}
       $<HTMLDivElement>('#timeline').scrollTop = $<HTMLDivElement>('#timeline').scrollHeight;
       $<HTMLTextAreaElement>('#input').focus();
     },
@@ -262,7 +264,18 @@ async function init() {
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
     // ⌘J 開關終端。終端自己聚焦時的 ⌘J / ⌘T / ⌘W / ⌘K 由 renderer/terminal.ts 處理
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); void toggleTerminal(); }
+    const hasOpenModal = ['#settings', '#modal', '#history-modal', '#ext-picker', '#ext-editor', '#diff-modal', '#install-modal']
+      .some((sel) => !$(sel).classList.contains('hidden'));
+    if (!hasOpenModal && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      void createJob();
+    }
+    if (!hasOpenModal && (e.metaKey || e.ctrlKey) && e.key === '/') {
+      e.preventDefault();
+      $<HTMLTextAreaElement>('#input').focus();
+    }
   });
+  setupCopyControls();
   $<HTMLButtonElement>('#add-agent').onclick = () => openModal(null);
   $<HTMLButtonElement>('#modal-close').onclick = closeModal;
   $<HTMLButtonElement>('#modal-save').onclick = saveModal;
@@ -283,6 +296,7 @@ async function init() {
   $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; void saveConfig(); renderLineupButton(); };
   $<HTMLSelectElement>('#work-style').onchange = () => {
     config.settings.workStyle = $<HTMLSelectElement>('#work-style').value === 'general' ? 'general' : 'code';
+    recordProjectSettings(config.settings, config.settings.workDir);
     void saveConfig();
     updateComposerHint();
   };
@@ -679,15 +693,22 @@ function renderSidebar() {
 
 function saveSettings() {
   const previousWorkDir = config.settings.workDir;
-  config.settings.workDir = $<HTMLInputElement>('#work-dir').value.trim();
+  const nextWorkDir = $<HTMLInputElement>('#work-dir').value.trim();
+  config.settings.workDir = nextWorkDir;
   config.settings.discussionMode = $<HTMLSelectElement>('#discussion-mode').value === 'independent-first' ? 'independent-first' : 'sequential';
   config.settings.maxRounds = Math.max(config.settings.discussionMode === 'independent-first' ? 2 : 1, Number($<HTMLInputElement>('#max-rounds').value) || 3);
   config.settings.language = $<HTMLInputElement>('#language').value.trim() || '繁體中文';
   config.settings.leadAgentId = $<HTMLSelectElement>('#lead-agent').value || null;
   config.settings.mode = $<HTMLSelectElement>('#default-mode').value || 'divide';
-  config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
-  config.settings.allowGitCommit = $<HTMLInputElement>('#allow-git').checked;
-  config.settings.allowGitPush = $<HTMLInputElement>('#allow-git-push').checked;
+  if (nextWorkDir !== previousWorkDir) {
+    switchProjectSettings(config.settings, previousWorkDir, nextWorkDir);
+    $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
+  } else {
+    config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
+    config.settings.allowGitCommit = $<HTMLInputElement>('#allow-git').checked;
+    config.settings.allowGitPush = $<HTMLInputElement>('#allow-git-push').checked;
+    recordProjectSettings(config.settings, nextWorkDir);
+  }
   const maxTranscript = Number($<HTMLInputElement>('#max-transcript').value);
   config.settings.maxTranscriptChars = Number.isFinite(maxTranscript) && maxTranscript >= 0 ? maxTranscript : 60000;
   config.settings.maxParallelJobs = Math.min(6, Math.max(1, Math.round(Number($<HTMLInputElement>('#max-parallel').value) || 2)));
@@ -698,6 +719,7 @@ function saveSettings() {
   // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
   void saveConfig({ saved: true });
   renderSidebar();
+  updateComposerHint();
   if (config.settings.workDir !== previousWorkDir) void refreshVerifySuggestions();
   else renderVerifySuggestions();
 }
@@ -1399,9 +1421,11 @@ function renderJobs(): void {
     item.appendChild(open);
     if (closable && !['running', 'queued', 'waiting'].includes(job.status)) {
       const close = document.createElement('button');
+      close.type = 'button';
       close.className = 'job-close';
       close.title = t('jobs.close');
-      close.textContent = '✕';
+      close.setAttribute('aria-label', t('jobs.close'));
+      close.replaceChildren(icon('close'));
       close.onclick = () => { void closeJob(job.id); };
       item.appendChild(close);
     }
@@ -1758,8 +1782,122 @@ function toolAuditHtml(m: ChatMessage): string {
   return `<div class="bubble"><div class="body tool-audit"><div class="tool-audit-title">${escapeHtml(title)}</div>${rows}</div></div>`;
 }
 
+function makeMsgCopyButton(): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-copy-btn';
+  btn.setAttribute('aria-label', t('msg.copyMessage'));
+  btn.title = t('msg.copyMessage');
+  btn.replaceChildren(icon('copy'));
+  return btn;
+}
+
+async function writeClipboardText(content: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(content);
+    return true;
+  } catch {
+    try {
+      const area = document.createElement('textarea');
+      area.value = content;
+      area.setAttribute('readonly', '');
+      area.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none;';
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand('copy');
+      area.remove();
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function copyTextWithFeedback(btn: HTMLButtonElement, content: string, normalTitle: string): Promise<void> {
+  if (!content) return;
+  const ok = await writeClipboardText(content);
+  if (!ok) return;
+  btn.classList.add('copied');
+  btn.title = t('msg.copied');
+  btn.setAttribute('aria-label', t('msg.copied'));
+  btn.replaceChildren(icon('accept'));
+  setTimeout(() => {
+    btn.classList.remove('copied');
+    btn.title = normalTitle;
+    btn.setAttribute('aria-label', normalTitle);
+    btn.replaceChildren(icon('copy'));
+  }, 1400);
+}
+
+// 程式碼區塊的複製按鈕掛在 body 層級的單一浮動節點,不塞進 .body 內部:
+// 一來串流每秒改寫 innerHTML 不會閃爍重建,二來維持 .body 內完全沒有 <button> 的安全邊界契約。
+function setupCopyControls(): void {
+  const timeline = $<HTMLDivElement>('#timeline');
+  timeline.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>('.msg-copy-btn');
+    if (!btn) return;
+    const msgEl = btn.closest<HTMLElement>('.msg');
+    const id = msgEl?.dataset.id || '';
+    const raw = (id && messageData.get(id)?.text) || msgEl?.querySelector('.body')?.textContent || '';
+    void copyTextWithFeedback(btn, raw.trim(), t('msg.copyMessage'));
+  });
+
+  const codeBtn = document.createElement('button');
+  codeBtn.id = 'code-copy-float';
+  codeBtn.type = 'button';
+  codeBtn.className = 'code-copy-float';
+  codeBtn.hidden = true;
+  codeBtn.title = t('msg.copyCode');
+  codeBtn.setAttribute('aria-label', t('msg.copyCode'));
+  codeBtn.replaceChildren(icon('copy'));
+  document.body.appendChild(codeBtn);
+
+  let activePre: HTMLPreElement | null = null;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  const positionCodeBtn = (pre: HTMLPreElement) => {
+    const rect = pre.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 24 || rect.bottom < 0 || rect.top > window.innerHeight) {
+      codeBtn.hidden = true;
+      return;
+    }
+    codeBtn.style.top = `${Math.max(4, Math.round(rect.top + 6))}px`;
+    codeBtn.style.left = `${Math.max(4, Math.round(rect.right - 34))}px`;
+    codeBtn.hidden = false;
+  };
+  const clearHide = () => { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } };
+  const scheduleHide = () => {
+    clearHide();
+    hideTimer = setTimeout(() => { activePre = null; codeBtn.hidden = true; }, 140);
+  };
+
+  document.addEventListener('mouseover', (e) => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target === codeBtn || codeBtn.contains(target)) { clearHide(); return; }
+    const pre = target.closest<HTMLPreElement>('#timeline .body pre, #history-preview .body pre');
+    if (pre) {
+      clearHide();
+      activePre = pre;
+      codeBtn.title = t('msg.copyCode');
+      codeBtn.setAttribute('aria-label', t('msg.copyCode'));
+      positionCodeBtn(pre);
+    } else if (activePre && !codeBtn.hidden) {
+      scheduleHide();
+    }
+  });
+  timeline.addEventListener('scroll', () => { if (activePre && !codeBtn.hidden) positionCodeBtn(activePre); }, { passive: true });
+  codeBtn.addEventListener('mouseleave', () => scheduleHide());
+  codeBtn.onclick = () => {
+    if (!activePre) return;
+    const code = activePre.querySelector('code')?.textContent ?? activePre.textContent ?? '';
+    void copyTextWithFeedback(codeBtn, code, t('msg.copyCode'));
+  };
+}
+
 function renderUserMessage(el: HTMLElement, m: ChatMessage): void {
   el.innerHTML = userHtml(m);
+  const bubble = el.querySelector<HTMLElement>('.bubble');
+  if (bubble && (m.text || '').trim()) bubble.appendChild(makeMsgCopyButton());
   highlightMentions(el.querySelector('.body'), m.mentions);
   hydrateAttachmentThumbs(el, m.attachments);
 }
@@ -1822,6 +1960,14 @@ function renderAgentMessage(el: HTMLElement, m: ChatMessage): void {
       // 成功時 orchestrator 會把 retryable 清掉,按鈕隨下一次渲染消失;失敗才需要在這裡復原
       if (!result.ok) { retry.disabled = false; retry.title = result.error || ''; }
     };
+  }
+  if (shell.copyBtn) {
+    const hasCopyable = Boolean(plain) && m.status !== 'running';
+    shell.copyBtn.hidden = !hasCopyable;
+    if (hasCopyable && !shell.copyBtn.classList.contains('copied')) {
+      shell.copyBtn.title = t('msg.copyMessage');
+      shell.copyBtn.setAttribute('aria-label', t('msg.copyMessage'));
+    }
   }
   if (shell.unreviewed) {
     shell.unreviewed.hidden = !m.unreviewed;
@@ -1927,7 +2073,9 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     const statusLine = document.createElement('div');
     statusLine.className = 'bubble-status';
     statusLine.textContent = t('msg.streaming');
-    bubble.append(head, reviewScope, thinking, activities, body, error, fix, retry, unreviewed, usage, statusLine);
+    const copyBtn = makeMsgCopyButton();
+    copyBtn.hidden = true;
+    bubble.append(head, copyBtn, reviewScope, thinking, activities, body, error, fix, retry, unreviewed, usage, statusLine);
     el.append(avatar, bubble);
     el.dataset.shell = 'agent';
   } else if (!el.querySelector('.bubble-status')) {
@@ -1949,6 +2097,7 @@ function ensureAgentShell(el: HTMLElement): AgentShell {
     unreviewed: el.querySelector<HTMLElement>('.unreviewed-note'),
     reviewScope: el.querySelector<HTMLElement>('.review-scope') || insertReviewScope(el),
     retry: el.querySelector<HTMLButtonElement>('.retry-btn'),
+    copyBtn: el.querySelector<HTMLButtonElement>('.msg-copy-btn'),
     usage: el.querySelector<CachedEl>('.usage')!,
     statusLine: el.querySelector<CachedEl>('.bubble-status')!,
   };

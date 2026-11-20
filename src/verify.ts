@@ -11,7 +11,10 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { snapshotDir, diffSnapshots } from './snapshot';
+import { execFile } from 'child_process';
+import { snapshotDir, diffSnapshots, type Snapshot } from './snapshot';
+import { RUNTIME_DIR } from './attachments';
+import { CORPUS_DIR } from './corpus';
 import { runProcess, truncate } from './adapters/process';
 import { tx } from './text';
 import type { TextLocale } from './text';
@@ -145,17 +148,76 @@ export async function verifyChanges(
   };
 }
 
-export async function verificationRevision(cwd: string, maxBytes = 20 * 1024 * 1024): Promise<string | null> {
+const GIT_REVISION_MAX_FILES = 25_000;
+const DEFAULT_REVISION_MAX_BYTES = 50 * 1024 * 1024;
+const GIT_SKIP_SEGMENTS = new Set(['.git', '.hg', '.svn', '.DS_Store', RUNTIME_DIR, CORPUS_DIR]);
+
+function shouldSkipRevisionPath(rel: string): boolean {
+  const parts = rel.split('/');
+  if (!parts.length || parts[0].startsWith('.roundtable-ce-')) return true;
+  return parts.some((part) => !part || GIT_SKIP_SEGMENTS.has(part));
+}
+
+// Git 專案優先用 git ls-files 列出「已追蹤 + 未被 .gitignore 忽略的未追蹤檔」:
+// 否則 dist/、build/、release/*.dmg 這類建置產物很容易直接撐爆雜湊上限,
+// 或在驗證指令產生快取檔時讓證據誤判成過期。不是 Git 專案(或 git 執行失敗)時回 undefined 退回 snapshotDir。
+async function gitRevisionSnapshot(root: string): Promise<Snapshot | null | undefined> {
+  try { await fs.promises.lstat(path.join(root, '.git')); }
+  catch { return undefined; }
+  const stdout = await new Promise<string | undefined>((resolve) => {
+    execFile(
+      'git',
+      ['-C', root, '-c', 'core.quotepath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 10_000 },
+      (err, out) => resolve(err ? undefined : out),
+    );
+  });
+  if (stdout === undefined) return undefined;
+  const files = [...new Set(stdout.split('\0').filter((rel) => rel && !shouldSkipRevisionPath(rel)))];
+  if (files.length > GIT_REVISION_MAX_FILES) return null;
+  const out: Snapshot = new Map();
+  const batchSize = 256;
+  for (let i = 0; i < files.length; i += batchSize) {
+    const slice = files.slice(i, i + batchSize);
+    const stats = await Promise.all(slice.map(async (rel) => {
+      try { return { rel, st: await fs.promises.lstat(path.join(root, rel)), missing: false }; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { rel, st: null, missing: true };
+        return { rel, st: null, missing: false };
+      }
+    }));
+    for (const { rel, st, missing } of stats) {
+      if (missing) { out.set(rel, 'deleted'); continue; }
+      // 符號連結、submodule 目錄、特殊檔案一律拒絕宣稱完整指紋,與 snapshotDir(..., true) 一致
+      if (!st || !st.isFile()) return null;
+      out.set(rel, `${st.size}:${st.mtimeMs}`);
+    }
+  }
+  return out;
+}
+
+async function revisionSnapshot(root: string): Promise<{ snap: Snapshot | null; viaGit: boolean }> {
+  const gitSnap = await gitRevisionSnapshot(root);
+  if (gitSnap !== undefined) return { snap: gitSnap, viaGit: true };
+  return { snap: await snapshotDir(root, 10000, true), viaGit: false };
+}
+
+export async function verificationRevision(cwd: string, maxBytes = DEFAULT_REVISION_MAX_BYTES): Promise<string | null> {
   try {
     const root = await fs.promises.realpath(cwd);
     const identity = await fs.promises.stat(root);
-    const before = await snapshotDir(root, 10000, true);
+    const { snap: before, viaGit } = await revisionSnapshot(root);
     if (!before) return null;
     const hash = crypto.createHash('sha256');
     hash.update(JSON.stringify([root, identity.dev, identity.ino]));
     let bytes = 0;
     for (const file of [...before.keys()].sort()) {
-      const size = Number(before.get(file)!.split(':')[0]);
+      const marker = before.get(file)!;
+      if (marker === 'deleted') {
+        hash.update(JSON.stringify([file, 'deleted']));
+        continue;
+      }
+      const size = Number(marker.split(':')[0]);
       if (bytes + size > maxBytes) return null;
       hash.update(JSON.stringify([file, size]));
       const handle = await fs.promises.open(path.join(root, file), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -166,7 +228,8 @@ export async function verificationRevision(cwd: string, maxBytes = 20 * 1024 * 1
         hash.update(chunk);
       }
     }
-    const after = await snapshotDir(root, 10000, true);
+    const after = viaGit ? await gitRevisionSnapshot(root) : await snapshotDir(root, 10000, true);
+    if (!after) return null;
     const currentRoot = await fs.promises.realpath(cwd);
     const currentIdentity = await fs.promises.stat(currentRoot);
     if (currentRoot !== root || currentIdentity.dev !== identity.dev || currentIdentity.ino !== identity.ino || diffSnapshots(before, after)?.length !== 0) return null;

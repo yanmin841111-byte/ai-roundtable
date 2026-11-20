@@ -1,16 +1,35 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, net } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, net, Notification, Menu, screen } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
-import { execSync } from 'child_process';
 import { Store } from './src/store';
 import { Orchestrator } from './src/orchestrator';
 import { Registry, setRegistry, getAdapter } from './src/adapters';
-import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds } from './src/session-log';
+import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds, listSessionWorkDirs } from './src/session-log';
 import * as attachments from './src/attachments';
 import { SecretStore } from './src/secrets';
-import type { AgentConfig, AppConfig, AttachmentInput, AttachmentMeta, ChatSnapshot, EventChannel, InvokeChannel, IpcArgs, IpcEvents, IpcReturn, JobBlocker, JobStatus, JobSummary, JobsState, RevertOutcome } from './src/ipc-types';
+import {
+  applyProjectSettingsForDir,
+  normalizeProjectKey,
+  recordProjectSettings,
+  switchProjectSettings,
+  type AgentConfig,
+  type AppConfig,
+  type AttachmentInput,
+  type AttachmentMeta,
+  type ChatSnapshot,
+  type EventChannel,
+  type InvokeChannel,
+  type IpcArgs,
+  type IpcEvents,
+  type IpcReturn,
+  type JobBlocker,
+  type JobStatus,
+  type JobSummary,
+  type JobsState,
+  type RevertOutcome,
+  type WindowBounds,
+} from './src/ipc-types';
 import { tx, resolveTextLocale, setSystemLocale } from './src/text';
 import { CapabilityStore, setCapabilityStore } from './src/capabilities';
 import { workdirChanges } from './src/task-changes';
@@ -19,32 +38,17 @@ import { TerminalManager, MAX_SESSIONS as TERMINAL_MAX } from './src/terminal';
 import { findMentions } from './src/shared';
 import { JobScheduler, RunLedger, localEndpointKey, workdirKey } from './src/jobs';
 import { cancelInstall, installPlan, runInstall } from './src/cli-install';
+import { importShellEnvAsync, validateDirectoryToOpen } from './src/shell-env';
 import type { JobResources } from './src/jobs';
 
-// 從 Finder / Dock 啟動時環境變數很精簡:補上登入 shell 的 PATH 才找得到 claude / codex,
-// 也補上 shell 設定檔裡的其他變數(例如 DEEPSEEK_API_KEY),但不覆蓋已經存在的值。
-function importShellEnv() {
-  const extra = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.npm-global/bin')];
-  const marker = '__AI_ROUNDTABLE_ENV__';
-  try {
-    const out = execSync(`${process.env.SHELL || '/bin/zsh'} -ilc 'echo ${marker}; env'`, { encoding: 'utf8', timeout: 5000 });
-    const lines = out.slice(out.indexOf(marker) + marker.length).split('\n');
-    let key: any = null;
-    const shellEnv: Record<string, any> = {};
-    for (const line of lines) {
-      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-      if (m) { key = m[1]; shellEnv[key] = m[2]; } else if (key) shellEnv[key] += '\n' + line; // 多行值
-    }
-    if (shellEnv.PATH) extra.unshift(...shellEnv.PATH.split(':'));
-    for (const [k, v] of Object.entries(shellEnv)) {
-      if (k !== 'PATH' && process.env[k] === undefined && !/^(_|SHLVL|PWD|OLDPWD)$/.test(k)) process.env[k] = v;
-    }
-  } catch {}
-  const seen = new Set();
-  process.env.PATH = [...extra, ...(process.env.PATH || '').split(':')].filter((p: any) => p && !seen.has(p) && seen.add(p)).join(':');
-}
+// 在 Electron 初始化的同時平行匯入登入 shell 的環境變數,不阻塞主執行緒與視窗開啟
+const shellEnvReady = importShellEnvAsync();
+const isAutomationRun = () => !app.isPackaged && Boolean(process.env.AI_ROUNDTABLE_E2E_SCRIPT || process.env.AI_ROUNDTABLE_SHOT);
 
 let mainWindow: BrowserWindow | null = null;
+let quittingApp = false;
+let confirmedQuit = false;
+let boundsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let store: Store;
 let registry: Registry;
 let secrets: SecretStore;
@@ -69,6 +73,7 @@ interface Job {
   unread: boolean;
   // 還原 / 重新驗證佔著目錄時為 true:這時候的閒置事件不是「任務跑完了」
   maintenance: boolean;
+  notifiedQuestionId: string | null;
 }
 
 const jobs = new Map<string, Job>();
@@ -104,9 +109,34 @@ function resetPending(job: Job) {
 function persistTask(job: Job) {
   const snap = job.orchestrator.snapshot();
   if (!snap.messages.length) return;
-  const result = writeSession(userData(), snap.messages, { conversationId: snap.conversationId, id: job.sessionFileId });
+  const result = writeSession(userData(), snap.messages, {
+    conversationId: snap.conversationId,
+    id: job.sessionFileId,
+    workDir: jobWorkDir(job),
+  });
   if (result.ok) job.sessionFileId = result.id;
   send('session:saved', { jobId: job.id, id: job.sessionFileId });
+}
+
+function notifyBackground(job: Job, title: string, body: string) {
+  if (isAutomationRun() || !mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+  try {
+    if (process.platform === 'darwin') app.dock?.bounce('informational');
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title, body: body.replace(/\s+/g, ' ').trim().slice(0, 140), silent: false });
+    n.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      if (jobs.has(job.id) && selectedJobId !== job.id) {
+        selectedJobId = job.id;
+        job.unread = false;
+        emitJobs();
+      }
+    });
+    n.show();
+  } catch {}
 }
 
 // ---------- 多件任務 ----------
@@ -126,7 +156,7 @@ function createJob(): Job {
   const job: Job = {
     id: crypto.randomUUID(), orchestrator: null as unknown as Orchestrator, config: null, createdAt: Date.now(),
     pending: [], sessionFileId: null, activeTaskStart: null, queued: null, resources: null, staleBaseline: null, outcome: null,
-    unread: false, maintenance: false,
+    unread: false, maintenance: false, notifiedQuestionId: null,
   };
   const orchestrator = new Orchestrator({ get: () => jobConfig(job), userDataDir: store.userDataDir });
   job.orchestrator = orchestrator;
@@ -136,6 +166,12 @@ function createJob(): Job {
   });
   orchestrator.on('state', (state: IpcEvents['chat:state']['state']) => {
     send('chat:state', { jobId: job.id, state });
+    if (state.question && state.question.id !== job.notifiedQuestionId) {
+      job.notifiedQuestionId = state.question.id;
+      notifyBackground(job, text('main.notifyQuestionTitle'), `${state.question.agentName}: ${state.question.question}`);
+    } else if (!state.question) {
+      job.notifiedQuestionId = null;
+    }
     if (!state.running && scheduler.isHeld(job.id) && !job.maintenance) finishRun(job);
     else emitJobs();
   });
@@ -143,6 +179,7 @@ function createJob(): Job {
     job.activeTaskStart = null;
     job.sessionFileId = null;
     job.outcome = null;
+    job.notifiedQuestionId = null;
     resetPending(job);
     send('chat:reset', { jobId: job.id });
     emitJobs();
@@ -197,6 +234,10 @@ function finishRun(job: Job) {
     job.activeTaskStart = null;
     persistTask(job);
   }
+  if (job.outcome === 'done' || job.outcome === 'error') {
+    const title = jobSummary(job).title || 'AI Roundtable';
+    notifyBackground(job, text(job.outcome === 'done' ? 'main.notifyDoneTitle' : 'main.notifyErrorTitle'), title);
+  }
   releaseJob(job);
 }
 
@@ -214,7 +255,7 @@ function startJob(id: string) {
   job.outcome = null;
   job.activeTaskStart = job.orchestrator.messages.length;
   if (job.resources) recordRun(job, job.resources);
-  job.orchestrator.userMessage(body, mode, list)
+  void job.orchestrator.userMessage(body, mode, list)
     .catch((error: unknown) => {
       job.pending = [...list, ...job.pending];
       job.orchestrator.system(job.orchestrator.text('sys.error', { message: error instanceof Error ? error.message : String(error) }), { level: 'error' });
@@ -239,57 +280,146 @@ async function withDirectory<T>(job: Job, run: () => Promise<T>, blocked: (block
   try { return await run(); } finally { job.maintenance = false; releaseJob(job); }
 }
 
+function resolveInitialWindowBounds(): Partial<WindowBounds> {
+  const base = { width: 1320, height: 860 };
+  if (isAutomationRun()) return base;
+  const saved = store?.get().settings.windowBounds;
+  if (!saved || !Number.isFinite(saved.width) || !Number.isFinite(saved.height)) return base;
+  const width = Math.max(900, Math.round(saved.width));
+  const height = Math.max(600, Math.round(saved.height));
+  if (saved.x == null || saved.y == null || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) {
+    return { width, height };
+  }
+  const x = Math.round(saved.x);
+  const y = Math.round(saved.y);
+  try {
+    const area = screen.getDisplayMatching({ x, y, width, height }).workArea;
+    const visibleX = x + width > area.x + 80 && x < area.x + area.width - 80;
+    const visibleY = y + height > area.y + 80 && y < area.y + area.height - 80;
+    if (visibleX && visibleY) return { x, y, width, height };
+  } catch {}
+  return { width, height };
+}
+
+function scheduleSaveWindowBounds(win: BrowserWindow) {
+  if (isAutomationRun() || win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+  if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+  boundsSaveTimer = setTimeout(() => {
+    boundsSaveTimer = null;
+    if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+    try {
+      const b = win.getBounds();
+      const cfg = store.get();
+      cfg.settings.windowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      store.save(cfg);
+    } catch {}
+  }, 400);
+}
+
+function installAppMenu() {
+  if (process.platform !== 'darwin') return;
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    {
+      role: 'viewMenu',
+      submenu: [
+        ...(!app.isPackaged ? [{ role: 'reload' as const }, { role: 'toggleDevTools' as const }, { type: 'separator' as const }] : []),
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow() {
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(path.join(__dirname, 'renderer/icon.png'));
+  const initialBounds = resolveInitialWindowBounds();
   const win = new BrowserWindow({
-    width: 1320,
-    height: 860,
+    ...initialBounds,
+    width: initialBounds.width || 1320,
+    height: initialBounds.height || 860,
     minWidth: 900,
     minHeight: 600,
     title: 'AI Roundtable',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f7f7f4',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
   });
   win.loadFile(path.join(__dirname, 'renderer/index.html'));
-  // 端對端測試(npm run e2e):載入後在介面執行劇本,把結果印到 stdout,依結果決定結束代碼
-  const e2eScript = process.env.AI_ROUNDTABLE_E2E_SCRIPT;
-  if (e2eScript) win.webContents.setBackgroundThrottling(false);
-  if (e2eScript) win.webContents.once('did-finish-load', async () => {
-    let result: { ok?: boolean } | null = null;
-    try { result = await win.webContents.executeJavaScript(fs.readFileSync(e2eScript, 'utf8')); } catch (e) { result = { ok: false, ...{ error: e instanceof Error ? e.message : String(e) } }; }
-    // 等 stdout 真的寫出去再結束;寫不進去(EPIPE)也照樣收攤,不能讓 app 卡在這裡
-    await new Promise<void>((resolve) => {
-      process.stdout.write(`E2E_RESULT ${JSON.stringify(result)}\n`, () => resolve());
+  win.on('resize', () => scheduleSaveWindowBounds(win));
+  win.on('move', () => scheduleSaveWindowBounds(win));
+  win.on('close', (event) => {
+    if (confirmedQuit || isAutomationRun()) return;
+    if (![...jobs.values()].some(busy)) return;
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: [text('main.quitCancel'), text('main.quitConfirm')],
+      defaultId: 1,
+      cancelId: 0,
+      message: text('main.quitRunningTitle'),
+      detail: text('main.quitRunningDetail'),
     });
-    stopOrchestrator();
-    app.exit(result && result.ok ? 0 : 1);
+    if (choice === 0) {
+      quittingApp = false;
+      event.preventDefault();
+      return;
+    }
+    confirmedQuit = true;
   });
-  // 測試 harness 的多張截圖:劇本在 renderer 裡 console.log('__SHOT__ 名稱'),主程序看到就拍一張。
-  // 用 console 當通道是刻意的——不必為了測試在 preload 開新的 IPC 面,production 沒有多一吋介面。
-  const shotDir = process.env.AI_ROUNDTABLE_E2E_SHOT_DIR;
-  if (shotDir) win.webContents.on('console-message', (event) => {
-    const m = /^__SHOT__ (.+)$/.exec(event.message.trim());
-    if (!m) return;
-    const name = m[1].replace(/[^A-Za-z0-9._-]/g, '_');
-    void (async () => {
-      try {
-        const img = await win.webContents.capturePage();
-        fs.writeFileSync(path.join(shotDir, `${name}.png`), img.toPNG());
-        console.log(`__SHOT_OK__ ${name}`);
-      } catch (e) { console.log(`__SHOT_FAIL__ ${name} ${e instanceof Error ? e.message : String(e)}`); }
-    })();
-  });
+  win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
 
-  const shotFile = process.env.AI_ROUNDTABLE_SHOT;
-  if (shotFile) win.webContents.once('did-finish-load', () => setTimeout(async () => {
-    if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
-    await new Promise((r) => setTimeout(r, 500));
-    const img = await win.webContents.capturePage();
-    fs.writeFileSync(shotFile, img.toPNG());
-    console.log('screenshot saved');
-  }, 2500));
-  if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (event) => console.log(`[renderer:${event.level}] ${event.message} (${path.basename(event.sourceId || '')}:${event.lineNumber})`));
+  // 端對端測試與截圖掛鉤只在未打包的開發環境啟用,打包後全面關閉環境變數執行入口
+  if (!app.isPackaged) {
+    const e2eScript = process.env.AI_ROUNDTABLE_E2E_SCRIPT;
+    if (e2eScript) win.webContents.setBackgroundThrottling(false);
+    if (e2eScript) win.webContents.once('did-finish-load', async () => {
+      let result: { ok?: boolean } | null = null;
+      try { result = await win.webContents.executeJavaScript(fs.readFileSync(e2eScript, 'utf8')); } catch (e) { result = { ok: false, ...{ error: e instanceof Error ? e.message : String(e) } }; }
+      // 等 stdout 真的寫出去再結束;寫不進去(EPIPE)也照樣收攤,不能讓 app 卡在這裡
+      await new Promise<void>((resolve) => {
+        process.stdout.write(`E2E_RESULT ${JSON.stringify(result)}\n`, () => resolve());
+      });
+      confirmedQuit = true;
+      stopOrchestrator();
+      app.exit(result && result.ok ? 0 : 1);
+    });
+    // 測試 harness 的多張截圖:劇本在 renderer 裡 console.log('__SHOT__ 名稱'),主程序看到就拍一張。
+    // 用 console 當通道是刻意的——不必為了測試在 preload 開新的 IPC 面,production 沒有多一吋介面。
+    const shotDir = process.env.AI_ROUNDTABLE_E2E_SHOT_DIR;
+    if (shotDir) win.webContents.on('console-message', (event) => {
+      const m = /^__SHOT__ (.+)$/.exec(event.message.trim());
+      if (!m) return;
+      const name = m[1].replace(/[^A-Za-z0-9._-]/g, '_');
+      void (async () => {
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(path.join(shotDir, `${name}.png`), img.toPNG());
+          console.log(`__SHOT_OK__ ${name}`);
+        } catch (e) { console.log(`__SHOT_FAIL__ ${name} ${e instanceof Error ? e.message : String(e)}`); }
+      })();
+    });
+
+    const shotFile = process.env.AI_ROUNDTABLE_SHOT;
+    if (shotFile) win.webContents.once('did-finish-load', () => setTimeout(async () => {
+      if (process.env.AI_ROUNDTABLE_SHOT_JS) console.log('js:', await win.webContents.executeJavaScript(process.env.AI_ROUNDTABLE_SHOT_JS));
+      await new Promise((r) => setTimeout(r, 500));
+      const img = await win.webContents.capturePage();
+      fs.writeFileSync(shotFile, img.toPNG());
+      console.log('screenshot saved');
+    }, 2500));
+    if (process.env.AI_ROUNDTABLE_DEBUG) win.webContents.on('console-message', (event) => console.log(`[renderer:${event.level}] ${event.message} (${path.basename(event.sourceId || '')}:${event.lineNumber})`));
+  }
   const openExternal = (url: string) => {
     try {
       if (['https:', 'http:', 'mailto:'].includes(new URL(url).protocol)) void shell.openExternal(url).catch(() => {});
@@ -315,8 +445,8 @@ function stopOrchestrator() {
 function stopTerminals() { if (terminals) terminals.closeAll(); }
 
 app.whenReady().then(async () => {
-  importShellEnv();
   setSystemLocale(app.getLocale());
+  installAppMenu();
   store = new Store(app.getPath('userData'));
   secrets = new SecretStore(app.getPath('userData'), safeStorage);
   // 模型能力的測試結果要跨次開啟保留:付費 API 的實際測試不該每次開 app 都重做
@@ -337,8 +467,10 @@ app.whenReady().then(async () => {
     getLocale: () => resolveTextLocale(store.get().settings.uiLocale),
   });
   setRegistry(registry);
-  // 先在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
-  for (const { refreshModels } of registry.list()) if (refreshModels) Promise.resolve().then(refreshModels).catch(() => {});
+  // 等 shell 環境變數就緒後在背景讀模型清單(例如 cursor-agent --list-models),介面第一次要清單時就不用等
+  void shellEnvReady.then(() => {
+    for (const { refreshModels } of registry.list()) if (refreshModels) Promise.resolve().then(refreshModels).catch(() => {});
+  });
   selectedJobId = createJob().id;
 
   // 終端分頁:使用者自己動手的地方。輸出直接往 renderer 送,主程序不解讀也不記錄。
@@ -347,10 +479,18 @@ app.whenReady().then(async () => {
   terminals.on('exit', (payload: IpcEvents['terminal:exit']) => send('terminal:exit', payload));
 
   // 啟動清理:
-  //   1. 上次被強制關閉時可能在使用者的工作目錄留下 .roundtable-runtime,一定要清掉
+  //   1. 上次被強制關閉時可能在使用者的工作目錄(含多專案設定與歷史對話目錄)留下 .roundtable-runtime,一併清掉
   //   2. 從未寫進 session 的暫存對話附件視為孤兒;已存檔的附件不因時間自動刪除
   try {
-    attachments.clearRuntime(store.get().settings.workDir);
+    const cfg = store.get();
+    const runtimeDirs = new Set<string>([
+      cfg.settings.workDir,
+      ...Object.keys(cfg.settings.projectSettings || {}),
+      ...listSessionWorkDirs(userData()),
+    ].filter((d): d is string => typeof d === 'string' && d.trim().length > 0));
+    for (const dir of runtimeDirs) {
+      try { attachments.clearRuntime(dir); } catch {}
+    }
     attachments.cleanupOrphans(userData(), {
       keepIds: listConversationIds(userData()),
       activeId: jobs.get(selectedJobId)?.orchestrator.conversationId,
@@ -359,16 +499,48 @@ app.whenReady().then(async () => {
 
   handle('config:get', () => store.get());
   handle('config:save', (cfg) => {
-    const saved = store.save(cfg);
+    const prev = store.get().settings;
+    const next = structuredClone(cfg);
+    if (next?.settings) {
+      if (!next.settings.projectSettings && prev.projectSettings) {
+        next.settings.projectSettings = structuredClone(prev.projectSettings);
+      }
+      if (!next.settings.windowBounds && prev.windowBounds) {
+        next.settings.windowBounds = { ...prev.windowBounds };
+      }
+      const prevKey = normalizeProjectKey(prev.workDir);
+      const nextKey = normalizeProjectKey(next.settings.workDir);
+      if (prevKey && !next.settings.projectSettings?.[prevKey]) {
+        const snapshot = structuredClone(prev);
+        snapshot.projectSettings = next.settings.projectSettings;
+        recordProjectSettings(snapshot, prev.workDir);
+        next.settings.projectSettings = snapshot.projectSettings;
+      }
+      const fieldsUnchanged =
+        (next.settings.verifyCommand || '') === (prev.verifyCommand || '')
+        && (next.settings.workStyle || 'code') === (prev.workStyle || 'code')
+        && Boolean(next.settings.allowGitCommit) === Boolean(prev.allowGitCommit)
+        && Boolean(next.settings.allowGitPush) === Boolean(prev.allowGitPush);
+      if (nextKey && nextKey !== prevKey && fieldsUnchanged) {
+        switchProjectSettings(next.settings, null, next.settings.workDir);
+      } else if (nextKey) {
+        recordProjectSettings(next.settings, next.settings.workDir);
+      }
+    }
+    const saved = store.save(next);
     // 上限調高了,排隊中的任務可能現在就能開始
     scheduler.pump();
     emitJobs();
     return saved;
   });
   handle('cli:types', () => registry.catalog());
-  handle('cli:check', (opts) => registry.checkAll(opts || {}));
+  handle('cli:check', async (opts) => {
+    await shellEnvReady;
+    return registry.checkAll(opts || {});
+  });
   handle('cli:installPlan', (cliId) => installPlan(String(cliId)));
   handle('cli:install', async (payload) => {
+    await shellEnvReady;
     const cliId = String(payload?.cliId || '');
     const result = await runInstall(cliId, String(payload?.tool || ''), (line) => send('cli:installOutput', { cliId, line }), uiLocale());
     if (result.ok) result.health = (await registry.checkAll())[cliId];
@@ -412,7 +584,10 @@ app.whenReady().then(async () => {
     if (typeof adapter.testConnection !== 'function') return { ok: false, error: text('main.extNoTest') };
     return adapter.testConnection();
   });
-  handle('shell:openPath', (p) => shell.openPath(p));
+  handle('shell:openPath', async (p) => {
+    const checked = await validateDirectoryToOpen(p, uiLocale());
+    return checked.ok ? shell.openPath(checked.path) : checked.error;
+  });
   handle('chat:snapshot', (jobId) => jobSnapshot(jobOf(jobId)));
   handle('jobs:list', () => jobsState());
   // 目前這件還是空的就直接用它,不要留下一串空白任務
@@ -438,6 +613,7 @@ app.whenReady().then(async () => {
     resetPending(job);
     job.orchestrator.removeAllListeners();
     job.orchestrator.stop();
+    job.orchestrator.reset();
     jobs.delete(job.id);
     if (selectedJobId === job.id) selectedJobId = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt)[0].id;
     emitJobs();
@@ -503,13 +679,16 @@ app.whenReady().then(async () => {
     }
     const previousConfig = job.config;
     const current = structuredClone(store.get());
-    if (previousConfig) current.settings.workDir = previousConfig.settings.workDir;
+    applyProjectSettingsForDir(current.settings, previousConfig?.settings.workDir ?? current.settings.workDir);
     job.config = current;
     job.pending = [];
     const queued = { text: body, mode, attachments: sending, previousConfig };
     job.queued = queued;
     emitJobs();
     try {
+      // 環境尚未就緒時保留可取消的佇列狀態,先不佔排程名額。
+      await shellEnvReady;
+      if (job.queued !== queued) return undefined;
       const resources = await jobResources(job, speakers(job, body));
       if (job.queued !== queued) return undefined;
       job.resources = resources;
@@ -566,8 +745,15 @@ app.whenReady().then(async () => {
     job.activeTaskStart = null;
     resetPending(job); // 未送出的附件屬於舊對話的目錄,不能帶過去
     const snapshot = job.orchestrator.loadConversation(result.session);
-    // 舊紀錄沒有記下工作目錄:下次送出照目前的設定走
-    job.config = null;
+    // 有記下工作目錄且資料夾仍在時,直接固定回原本的專案目錄,避免跨專案續聊改錯目錄;舊紀錄沒有欄位則維持照目前設定走
+    const sessionWorkDir = typeof result.session.workDir === 'string' && result.session.workDir.trim() ? result.session.workDir.trim() : null;
+    if (sessionWorkDir && (() => { try { return fs.statSync(sessionWorkDir).isDirectory(); } catch { return false; } })()) {
+      const resumedCfg = structuredClone(store.get());
+      applyProjectSettingsForDir(resumedCfg.settings, sessionWorkDir);
+      job.config = resumedCfg;
+    } else {
+      job.config = null;
+    }
     job.outcome = null;
     job.sessionFileId = id;
     emitJobs();
@@ -630,7 +816,8 @@ app.whenReady().then(async () => {
     }
   });
   // 終端。開在目前的工作目錄——成員在哪裡動手,使用者就在哪裡下指令。
-  handle('terminal:create', (payload) => {
+  handle('terminal:create', async (payload) => {
+    await shellEnvReady;
     const result = terminals.create({
       cwd: payload?.cwd || store.get().settings.workDir,
       cols: payload?.cols,
@@ -690,5 +877,20 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('window-all-closed', () => { stopOrchestrator(); stopTerminals(); cancelInstall(); app.quit(); });
-app.on('before-quit', () => { stopOrchestrator(); stopTerminals(); cancelInstall(); });
+app.on('before-quit', () => {
+  quittingApp = true;
+});
+app.on('window-all-closed', () => {
+  stopTerminals();
+  if (process.platform !== 'darwin' || confirmedQuit || quittingApp || isAutomationRun()) {
+    stopOrchestrator();
+    cancelInstall();
+    app.quit();
+  }
+});
+app.on('will-quit', () => {
+  if (boundsSaveTimer) { clearTimeout(boundsSaveTimer); boundsSaveTimer = null; }
+  stopOrchestrator();
+  stopTerminals();
+  cancelInstall();
+});

@@ -93,6 +93,7 @@ npm run harness:ui      # 全假成員,通常數分鐘,結果固定,CI 也會跑
                         #   cli-install        沒安裝的內建 CLI 從設定頁與成員設定都能打開安裝視窗(不實際安裝)
                         #   repair-broke       壞修復自動撤回,保留執行階段成果與使用者原有改動
                         #   report-integrity   回報、稽核、磁碟與評測證據一致,回退不掩蓋失敗過程
+                        #   multi-task        等待 shell 時可取消;多任務排隊、隔離與接力執行
 npm run harness:reports # 單獨跑證據保存回歸,不使用真實模型
 npm run harness:live    # 真的本機模型改檔案。需要 ollama serve 正在跑
 npm run harness:login   # CLI 裝了但沒登入時的提示。需要機器上有 claude 與 codex,沒有就跳過

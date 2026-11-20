@@ -106,11 +106,29 @@ function buildUserContent(prompt: string, attachments: RunAttachment[] | undefin
   return images.length ? [{ type: 'text', text: prompt }, ...images] : prompt;
 }
 
-function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any = {}): Adapter {
+function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale, maxSessions: optMaxSessions }: any = {}): Adapter {
   const locale = (): TextLocale => getLocale?.() || 'zh-Hant';
   const doFetch: any = fetchImpl || ((...a: Parameters<typeof fetch>) => fetch(...a));
   const staticModels = spec.models === 'auto' ? null : normalizeModels(spec.models);
-  const sessions = new Map(); // sessionId -> [{ role, content }]
+  const sessions = new Map<string, any[]>(); // sessionId -> [{ role, content }],依最近存取順序維護 LRU
+  const rawMaxSessions = optMaxSessions ?? spec.maxSessions;
+  const maxSessions = Number.isInteger(rawMaxSessions) && rawMaxSessions > 0 ? rawMaxSessions : 100;
+  const getSessionHistory = (id: string) => {
+    const existing = sessions.get(id);
+    if (!existing) return undefined;
+    sessions.delete(id);
+    sessions.set(id, existing);
+    return existing;
+  };
+  const setSessionHistory = (id: string, value: any[]) => {
+    if (sessions.has(id)) sessions.delete(id);
+    sessions.set(id, value);
+    while (sessions.size > maxSessions) {
+      const oldest = sessions.keys().next().value;
+      if (oldest === undefined) break;
+      sessions.delete(oldest);
+    }
+  };
   const maxHistory = Number.isInteger(spec.maxHistoryMessages) && spec.maxHistoryMessages > 0 ? spec.maxHistoryMessages : 80;
   // 沒宣告時只送文字:很多相容端點(DeepSeek、多數 Ollama 模型)不收圖片。支援圖片的請在設定加上 imageInline。
   const capabilities = normalizeCapabilities(spec.capabilities, ['textInline']);
@@ -247,6 +265,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     endpoint: spec.baseUrl,
     resolveModel: (model: string) => resolveModelId(currentModels(), model || spec.defaultModel || ''),
     modelCapability,
+    clearSession: (sessionId: string) => { if (sessionId) sessions.delete(sessionId); },
     run: (agent: any, ctx: any) => runChat(agent, ctx),
   };
   return adapter;
@@ -339,7 +358,7 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
     const eff = resolveEffort(models, model, agent.effort);
     if (eff.note) ctx.onActivity({ id: 'run-options', kind: 'note', title: eff.note, status: 'done' });
 
-    const history = (spec.history !== false && ctx.sessionId && sessions.get(ctx.sessionId)) || [];
+    const history = (spec.history !== false && !ctx.ephemeralSession && ctx.sessionId && getSessionHistory(ctx.sessionId)) || [];
     const vars = { model, effort: eff.effort || '', agentName: agent.name || '' };
     const effortBody = spec.effortBody || { reasoning_effort: '{effort}' };
     const stream = spec.stream !== false;
@@ -547,14 +566,14 @@ function createOpenAIAdapter(spec: any, { fetchImpl, getSecret, getLocale }: any
       if (executedBeforeRetry.length) result.toolEvents = [...executedBeforeRetry, ...(result.toolEvents || [])];
     }
 
-    let sessionId = ctx.sessionId || null;
-    if (!result.error && spec.history !== false) {
+    let sessionId = ctx.ephemeralSession ? null : ctx.sessionId || null;
+    if (!result.error && spec.history !== false && !ctx.ephemeralSession) {
       sessionId = sessionId || crypto.randomUUID();
       // 審查回合(唯讀)的工具往返只留最後的回答。會改檔的回合保留寫入的呼叫:
       // 修復回合沒有工具可以重讀,成員只能從記憶裡看到自己寫了什麼。
       const exchange = readTools && !writeTools ? collapseToolTurn(result.exchange, result.text) : result.exchange;
       const turn = forgetEphemeral(exchange, ctx.ephemeral, tx(ctx.locale || locale(), 'api.ephemeralDropped'));
-      sessions.set(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory), ctx.locale || locale()), ctx.locale || locale()));
+      setSessionHistory(sessionId, compactHistoryImages(compactHistoryTools(trimHistory([...history, ...turn], maxHistory), ctx.locale || locale()), ctx.locale || locale()));
       ctx.onSession(sessionId);
     }
     const normalized = usageRecords.map((record) => normalizeUsage(record, 'openai'));

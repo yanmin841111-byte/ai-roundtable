@@ -11,6 +11,39 @@ import path from 'path';
 import { runApp, report } from '../app';
 import { scriptedMember } from '../fixtures';
 
+async function stopDuringShellStartup() {
+  const env = { SHELL: '' };
+  const result = await runApp({
+    env,
+    members: [scriptedMember({ id: 'member', name: 'Member' })],
+    beforeLaunch: ({ tmp }) => {
+      env.SHELL = path.join(tmp, 'slow-shell');
+      fs.writeFileSync(env.SHELL, '#!/bin/sh\n/bin/sleep 4\nexec /bin/sh -c "$4"\n', { mode: 0o700 });
+    },
+    scenario: async () => {
+      const g: any = globalThis;
+      const api = window.api;
+      await g.ready();
+      const body = '@Member cancel while loading shell';
+      const sending = api.send(body, 'discuss', []);
+      // Let a premature scheduler dispatch finish if the send is not waiting for the shell.
+      await Promise.race([sending, new Promise(resolve => setTimeout(resolve, 750))]);
+      const stopped = await api.stop();
+      g.check(stopped.canceledText === body, '等待環境時可以取消任務並取回文字');
+      await sending;
+      await api.checkCli();
+      const snap = await api.snapshot();
+      g.check(!snap.running && snap.messages.length === 0, '環境就緒後不會啟動已取消的任務');
+      const messages = await g.send('@Member send after cancel', 'discuss');
+      g.check(messages.some((message: { kind: string }) => message.kind === 'agent'), '取消後仍能正常送出新任務');
+      return { ok: true };
+    },
+  });
+  report('等待 shell 環境時停止任務', result);
+  if (!result.ok) process.exitCode = 1;
+  result.cleanup();
+}
+
 async function main() {
   const r = await runApp({
     members: [scriptedMember({ id: 'slow', name: '慢', delayMs: 10000 })],
@@ -165,4 +198,4 @@ async function relay() {
   result.cleanup();
 }
 
-main().then(relay).catch((error) => { console.error(error); process.exitCode = 1; });
+stopDuringShellStartup().then(main).then(relay).catch((error) => { console.error(error); process.exitCode = 1; });

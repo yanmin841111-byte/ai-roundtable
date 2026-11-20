@@ -2,7 +2,7 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import crypto from 'crypto';
-import { runTurn, getAdapter, effectiveCanEdit, knownCapability } from './adapters';
+import { runTurn, getAdapter, getRegistry, effectiveCanEdit, knownCapability } from './adapters';
 import { hasMarker, hasAgreement, stripMarker, findMentions, parseAsk, stripAsk } from './shared';
 import type { ParsedAsk } from './shared';
 import { isPhaseInfo } from './ipc-types';
@@ -553,6 +553,16 @@ class Orchestrator extends EventEmitter {
     clearRuntime(this.taskCwd || this.config.settings.workDir, this.conversationId);
   }
 
+  private releaseAdapterSessions() {
+    const ids = Object.values(this.sessions).filter(Boolean);
+    this.sessions = {};
+    if (!ids.length) return;
+    for (const adapter of getRegistry().list()) {
+      if (typeof adapter.clearSession !== 'function') continue;
+      for (const id of ids) { try { adapter.clearSession(id); } catch {} }
+    }
+  }
+
   reset() {
       this.verificationTarget = null;
     this.stop();
@@ -565,7 +575,7 @@ class Orchestrator extends EventEmitter {
     this.staged = [];
     this.attachmentsSeen.clear();
     this.messages = [];
-    this.sessions = {};
+    this.releaseAdapterSessions();
     this.lastSeen = {};
     this.taskStartIndex = 0;
     this.directedQueue = [];
@@ -588,7 +598,7 @@ class Orchestrator extends EventEmitter {
     this.attachments = [];
     this.staged = [];
     this.attachmentsSeen.clear();
-    this.sessions = {};
+    this.releaseAdapterSessions();
     this.lastSeen = {};
     this.taskStartIndex = 0;
     this.directedQueue = [];
@@ -2135,6 +2145,7 @@ class Orchestrator extends EventEmitter {
       allowGit: this.config.settings.allowGitCommit === true,
       allowGitPush: this.config.settings.allowGitPush === true,
       ephemeral,
+      ...(freshContext ? { ephemeralSession: true } : {}),
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter, staged).filter((a) => !(noImages && a.kind === 'image')) : [],
       onProc: (p) => { this.procs.add(p); p.on('close', () => this.procs.delete(p)); },

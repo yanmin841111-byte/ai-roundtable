@@ -93,7 +93,7 @@ async function copilotMember(locale: 'zh-Hant' | 'en') {
       harness.check(!canEdit.disabled, 'Copilot supports editing permission controls');
       harness.$('#f-name').value = 'Copilot';
       harness.check(model.options.length > 4, `Copilot lists the CLI models (${model.options.length} options)`);
-      harness.check(Array.from(model.options).some((item: any) => item.value === 'gpt-5-mini' && /低成本|low cost/.test(item.textContent || '')), 'Low-cost Copilot models are labeled');
+      harness.check(Array.from(model.options).some((item: any) => ['gpt-5-mini', 'claude-haiku-4.5', 'gpt-5.4-mini'].includes(item.value) && /低成本|low cost/.test(item.textContent || '')), 'Low-cost Copilot models are labeled');
       model.value = '__custom__';
       model.dispatchEvent(new Event('change'));
       harness.$('#f-model').value = 'custom-model-x';

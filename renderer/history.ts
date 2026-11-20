@@ -1,6 +1,7 @@
 // 歷史對話面板與預覽視窗。
 import { t, joinNames, localeTag } from './i18n';
-import { $, escapeHtml, cleanIpcError } from './util';
+import { icon } from './icons';
+import { $, escapeHtml, cleanIpcError, shortPath } from './util';
 import type { AttachmentMeta, ChatMessage, ChatState, PhaseValue, SessionSummary, UsageInfo } from './api';
 
 export interface HistoryOptions {
@@ -104,7 +105,12 @@ export function renderHistoryList(): void {
   const query = (searchEl?.value || '').trim().toLowerCase();
   const visible = query
     ? historySessions.filter((s) => {
-      const hay = [s.title || '', ...(Array.isArray(s.agents) ? s.agents : [])].join(' ').toLowerCase();
+      const hay = [
+        s.title || '',
+        ...(Array.isArray(s.agents) ? s.agents : []),
+        s.workDir || '',
+        s.searchText || '',
+      ].join(' ').toLowerCase();
       return hay.includes(query);
     })
     : historySessions;
@@ -130,14 +136,17 @@ export function renderHistoryList(): void {
     const meta = document.createElement('span');
     meta.className = 'history-meta';
     const details = [formatHistoryTime(session.createdAt), t('history.count', { n: Number(session.messageCount) || 0 })];
+    if (session.workDir) details.push(shortPath(session.workDir));
     if (Array.isArray(session.agents) && session.agents.length) details.push(joinNames(session.agents));
     meta.textContent = details.filter(Boolean).join(' · ');
     main.append(title, meta);
     main.onclick = () => { void openHistory(session); };
     const remove = document.createElement('button');
+    remove.type = 'button';
     remove.className = 'history-delete';
     remove.title = t('history.delete');
-    remove.textContent = '✕';
+    remove.setAttribute('aria-label', t('history.delete'));
+    remove.replaceChildren(icon('close'));
     remove.onclick = () => { void removeHistory(session); };
     item.append(main, remove);
     const error = historyErrors.get(session.id) || session.error;
@@ -160,7 +169,8 @@ async function openHistory(summary: SessionSummary): Promise<void> {
     const session = result.session;
     openHistoryId = summary.id;
     $('#history-modal-title').textContent = session.title || summary.title || t('history.untitled');
-    const meta = [formatHistoryTime(session.createdAt), ...(session.agents || []), t('history.messages', { n: (session.messages || []).length })];
+    const dir = session.workDir || summary.workDir;
+    const meta = [formatHistoryTime(session.createdAt), dir ? shortPath(dir) : '', ...(session.agents || []), t('history.messages', { n: (session.messages || []).length })];
     $<HTMLDivElement>('#history-modal-meta').textContent = meta.filter(Boolean).join(' · ');
     renderHistoryPreview(session.messages || []);
     updateResumeButton();

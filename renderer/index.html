@@ -20,12 +20,12 @@
 
       <div class="side-scroll">
         <div class="side-section">
-          <div class="side-head"><span data-i18n="side.jobs">任務</span><button id="job-new" class="ghost small" data-i18n="jobs.new" data-i18n-title="jobs.newTitle" title="開一件新任務">+ 新任務</button></div>
+          <div class="side-head"><span data-i18n="side.jobs">任務</span><button id="job-new" class="ghost small" data-icon="plus" data-i18n="jobs.new" data-i18n-title="jobs.newTitle" title="開一件新任務">新任務</button></div>
           <div id="job-list" class="job-list"></div>
         </div>
 
         <div class="side-section">
-          <div class="side-head"><span data-i18n="side.members">成員</span><div class="row"><button id="lineup-btn" class="ghost small lineup-btn" aria-haspopup="true" aria-expanded="false" aria-controls="lineup-menu">陣容</button><button id="add-agent" class="ghost small" data-i18n="side.add">+ 新增</button></div></div>
+          <div class="side-head"><span data-i18n="side.members">成員</span><div class="row"><button id="lineup-btn" class="ghost small lineup-btn" aria-haspopup="true" aria-expanded="false" aria-controls="lineup-menu">陣容</button><button id="add-agent" class="ghost small" data-icon="plus" data-i18n="side.add">新增</button></div></div>
           <div id="lineup-menu" class="lineup-menu" hidden></div>
           <div id="lineup-note" class="lineup-note" role="status" hidden></div>
           <div id="agent-list"></div>
@@ -34,7 +34,7 @@
         <div class="side-section history-section">
           <div class="side-head history-head">
             <button id="history-toggle" class="history-toggle" aria-expanded="false"><span class="history-arrow">▸</span> <span data-i18n="side.history">歷史對話</span></button>
-            <button id="history-refresh" class="ghost small icon" data-i18n-title="side.refresh" title="重新整理" hidden>↻</button>
+            <button id="history-refresh" class="ghost small icon" data-icon="refresh" data-i18n-title="side.refresh" data-i18n-aria-label="side.refresh" title="重新整理" aria-label="重新整理" hidden></button>
           </div>
           <div id="history-panel" hidden>
             <input id="history-search" class="history-search" type="search" data-i18n-placeholder="history.searchPlaceholder" placeholder="篩選標題或成員…" hidden />
@@ -116,10 +116,10 @@
         <div class="drag-region"></div>
         <span class="term-glyph" aria-hidden="true">›_</span>
         <div id="term-tabs" class="term-tabs" role="tablist" data-i18n-aria-label="term.tabs" aria-label="終端分頁"></div>
-        <button id="term-new" class="ghost small icon" data-i18n-title="term.new" title="新分頁(⌘T)">＋</button>
+        <button id="term-new" class="ghost small icon" data-icon="plus" data-i18n-title="term.new" data-i18n-aria-label="term.new" title="新分頁(⌘T)" aria-label="新分頁(⌘T)"></button>
         <div class="spacer"></div>
         <button id="term-clear" class="ghost small" data-i18n="term.clear" data-i18n-title="term.clearTitle" title="清空畫面(⌘K)">清空</button>
-        <button id="term-hide" class="ghost small icon" data-i18n-title="term.hide" title="收起終端(⌘J)">✕</button>
+        <button id="term-hide" class="ghost small icon" data-icon="close" data-i18n-title="term.hide" data-i18n-aria-label="term.hide" title="收起終端(⌘J)" aria-label="收起終端(⌘J)"></button>
       </div>
       <div id="term-cwd" class="term-cwd"></div>
       <div id="term-error" class="term-error" hidden></div>
@@ -142,7 +142,7 @@
           <span id="settings-title">一般</span>
           <span id="settings-saved" class="saved-hint" data-i18n="settings.saved" hidden>✓ 已儲存</span>
           <div class="spacer"></div>
-          <button id="settings-close" class="ghost small icon" data-i18n-title="settings.close" title="關閉(Esc)">✕</button>
+          <button id="settings-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button>
         </div>
         <div class="settings-body">
           <section class="settings-page" data-page="general">
@@ -151,7 +151,7 @@
               <div class="row">
                 <input id="work-dir" type="text" spellcheck="false" />
                 <button id="pick-dir" class="ghost small" data-i18n="settings.pickDir" data-i18n-title="settings.pickDirTitle" title="選擇資料夾">選擇…</button>
-                <button id="open-dir" class="ghost small" data-i18n-title="settings.openDirTitle" title="在 Finder 開啟">↗</button>
+                <button id="open-dir" class="ghost small icon" data-icon="external" data-i18n-title="settings.openDirTitle" data-i18n-aria-label="settings.openDirTitle" title="在 Finder 開啟" aria-label="在 Finder 開啟"></button>
               </div>
             </div>
             <div class="setting">
@@ -235,8 +235,8 @@
             <div class="page-actions">
               <span class="hint" data-i18n="settings.clisHint">內建 Claude Code、Codex CLI、Cursor CLI、GitHub Copilot CLI;其他 AI 可用擴充接入。點擊擴充即可編輯。</span>
               <div class="spacer"></div>
-              <button id="ext-add" class="primary small" data-i18n="settings.extAdd" data-i18n-title="settings.extAddTitle" title="從範本新增 CLI 或 API">+ 新增</button>
-              <button id="ext-reload" class="ghost small" data-i18n="settings.extReload" data-i18n-title="settings.extReloadTitle" title="重新載入擴充並重新檢查">↻ 重新載入</button>
+              <button id="ext-add" class="primary small" data-icon="plus" data-i18n="settings.extAdd" data-i18n-title="settings.extAddTitle" title="從範本新增 CLI 或 API">新增</button>
+              <button id="ext-reload" class="ghost small" data-icon="refresh" data-i18n="settings.extReload" data-i18n-title="settings.extReloadTitle" title="重新載入擴充並重新檢查">重新載入</button>
             </div>
             <div id="ext-list" class="ext-list"></div>
             <button id="ext-docs" class="link small" data-i18n="settings.extDocs">擴充撰寫說明 ↗</button>
@@ -272,11 +272,11 @@
           <section class="settings-page" data-page="data" hidden>
             <div class="setting row-setting">
               <div class="setting-label"><b data-i18n="settings.sessions">對話紀錄</b><span data-i18n="settings.sessionsDesc">每次任務結束自動保存成 JSON,可在左側「歷史對話」檢視或繼續討論</span></div>
-              <button id="sessions-btn" class="ghost small" data-i18n="settings.openFolder">📁 開啟資料夾</button>
+              <button id="sessions-btn" class="ghost small" data-icon="folder" data-i18n="settings.openFolder">開啟資料夾</button>
             </div>
             <div class="setting row-setting">
               <div class="setting-label"><b data-i18n="settings.extDir">擴充資料夾</b><span data-i18n="settings.extDirDesc">放自訂 CLI / API 設定檔(.json / .js)</span></div>
-              <button id="ext-open-dir" class="ghost small" data-i18n="settings.openFolder">📁 開啟資料夾</button>
+              <button id="ext-open-dir" class="ghost small" data-icon="folder" data-i18n="settings.openFolder">開啟資料夾</button>
             </div>
           </section>
         </div>
@@ -287,7 +287,7 @@
   <!-- 歷史對話預覽;可載入成目前對話繼續討論 -->
   <div id="history-modal" class="modal hidden">
     <div class="modal-card wide history-modal-card">
-      <div class="modal-head"><span id="history-modal-title" data-i18n="history.title">歷史對話</span><button id="history-modal-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="history-modal-title" data-i18n="history.title">歷史對話</span><button id="history-modal-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button></div>
       <div id="history-modal-meta" class="history-modal-meta"></div>
       <div id="history-preview" class="modal-body history-preview"></div>
       <div class="modal-foot">
@@ -303,9 +303,9 @@
     <div class="modal-card wide diff-modal-card">
       <div class="modal-head">
         <span data-i18n="diff.title">檔案改動</span>
-        <button id="diff-refresh" class="ghost small" data-i18n="diff.refresh">↻ 重新整理</button>
+        <button id="diff-refresh" class="ghost small" data-icon="refresh" data-i18n="diff.refresh">重新整理</button>
         <div class="spacer"></div>
-        <button id="diff-close" class="ghost small">✕</button>
+        <button id="diff-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button>
       </div>
       <div id="diff-summary" class="diff-summary"></div>
       <div id="diff-body" class="modal-body diff-body"></div>
@@ -315,7 +315,7 @@
   <!-- 成員編輯視窗 -->
   <div id="modal" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-head"><span id="modal-title" data-i18n="agent.editTitle">編輯成員</span><button id="modal-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="modal-title" data-i18n="agent.editTitle">編輯成員</span><button id="modal-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button></div>
       <div class="modal-body">
         <div class="row gap">
           <label class="field grow"><span data-i18n="agent.name">名稱</span><input id="f-name" type="text" /></label>
@@ -370,7 +370,7 @@
   <!-- 擴充範本選擇 -->
   <div id="ext-picker" class="modal hidden">
     <div class="modal-card wide">
-      <div class="modal-head"><span data-i18n="extPicker.title">新增 CLI / API</span><button id="ext-picker-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span data-i18n="extPicker.title">新增 CLI / API</span><button id="ext-picker-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button></div>
       <div class="modal-body">
         <div class="ext-local-route">
           <div><b data-i18n="extPicker.local">這台電腦的 AI</b><span class="hint">Ollama</span></div>
@@ -392,7 +392,7 @@
   <!-- 擴充編輯器 -->
   <div id="ext-editor" class="modal hidden">
     <div class="modal-card wide">
-      <div class="modal-head"><span id="ext-editor-title" data-i18n="extEditor.title">編輯擴充</span><button id="ext-editor-close" class="ghost small">✕</button></div>
+      <div class="modal-head"><span id="ext-editor-title" data-i18n="extEditor.title">編輯擴充</span><button id="ext-editor-close" class="ghost small icon" data-icon="close" data-i18n-title="settings.close" data-i18n-aria-label="settings.close" title="關閉(Esc)" aria-label="關閉(Esc)"></button></div>
       <div class="modal-body">
         <div class="ext-editor-tabs" role="tablist" data-i18n-aria-label="extEditor.tabs" aria-label="擴充編輯模式">
           <button id="ext-tab-basic" class="active" type="button" role="tab" aria-selected="true" data-i18n="extEditor.basic">基本設定</button>
@@ -459,7 +459,7 @@
   <!-- 內建 CLI 安裝:指令由主程序依系統決定,這裡只顯示與確認 -->
   <div id="install-modal" class="modal hidden">
     <div class="modal-card install-card" role="dialog" aria-modal="true" aria-labelledby="install-title">
-      <div class="modal-head"><span id="install-title">安裝</span><button id="install-close" class="ghost small icon" type="button" data-i18n-title="install.close" title="關閉">✕</button></div>
+      <div class="modal-head"><span id="install-title">安裝</span><button id="install-close" class="ghost small icon" type="button" data-icon="close" data-i18n-title="install.close" data-i18n-aria-label="install.close" title="關閉" aria-label="關閉"></button></div>
       <div class="modal-body">
         <ol id="install-steps" class="install-steps">
           <li data-step="install"><span>1</span><b data-i18n="install.step.install">安裝</b></li>

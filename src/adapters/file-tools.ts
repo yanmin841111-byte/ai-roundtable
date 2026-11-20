@@ -134,13 +134,15 @@ const VCS_INTERNAL_NAMES = new Set(['.git', '.hg', '.svn']);
 // 這些檔案的共同點是「使用者不會特地去看,但某個日常動作會執行它」——
 // git commit、npm install、開啟資料夾、下一次 CI。改動藏在這裡最不可能被發現。
 const AUTO_EXEC_DIR_NAMES = new Set([
-  '.husky',        // core.hooksPath,每次 git commit / push
-  '.vscode',       // tasks.json 的 runOn: folderOpen
-  '.idea',         // JetBrains 的 run configuration
-  '.claude',       // settings.json 的 hooks
-  '.github',       // workflows,下一次 push 就跑
-  '.devcontainer', // postCreateCommand
-  'node_modules',  // 直接被 require/import
+  '.husky',              // core.hooksPath,每次 git commit / push
+  '.vscode',             // tasks.json 的 runOn: folderOpen
+  '.idea',               // JetBrains 的 run configuration
+  '.claude',             // settings.json 的 hooks
+  '.github',             // workflows,下一次 push 就跑
+  '.devcontainer',       // postCreateCommand
+  'node_modules',        // 直接被 require/import
+  '.roundtable',         // counterexamples.json 會在下一次任務基準線自動執行
+  '.roundtable-runtime', // app 執行期暫存目錄,成員不可寫入覆寫
 ]);
 
 // 根層才擋:專案深處剛好叫 Makefile 的測試素材不該被牽連。
@@ -151,7 +153,7 @@ const AUTO_EXEC_ROOT_FILES = new Set([
   'makefile', 'gnumakefile',
   '.pre-commit-config.yaml', '.pre-commit-config.yml',
 ]);
-const AUTO_EXEC_ROOT_PREFIXES = ['lefthook.'];
+const AUTO_EXEC_ROOT_PREFIXES = ['lefthook.', '.roundtable-ce-'];
 
 function assertNotAutoExecuted(root: string, target: string): void {
   const parts = path.relative(root, target).split(path.sep).filter(Boolean);

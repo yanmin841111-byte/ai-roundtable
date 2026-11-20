@@ -2,7 +2,7 @@
 // 套用、比對的規則在 src/lineups.ts;這裡只負責畫面。
 import { t } from './i18n';
 import { $ } from './util';
-import { controlLabel } from './icons';
+import { controlLabel, icon } from './icons';
 import { applyLineup, lineupFromConfig, lineupMatches, suggestLineupMembers, LINEUP_NAME_MAX, LINEUPS_MAX } from '../src/lineups';
 import type { SuggestedMembers } from '../src/lineups';
 import type { AppConfig, Lineup } from './api';
@@ -158,7 +158,7 @@ function renderMenu(): void {
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'lineup-delete';
-    del.textContent = '✕';
+    del.replaceChildren(icon('close'));
     del.title = t('lineup.delete', { name: l.name });
     del.setAttribute('aria-label', t('lineup.delete', { name: l.name }));
     del.onclick = () => remove(l);

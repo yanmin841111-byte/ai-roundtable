@@ -69,6 +69,3 @@ catch {
   if {[llength $status] >= 4 && [lindex $status 2] == 0} { set code [lindex $status 3] }
 }
 exit $code
-}
-catch { exec kill -HUP $shellpid }
-exit 0

@@ -38,5 +38,6 @@ Reports of the following are welcome:
 ## Recommendations
 
 - Use a dedicated folder under git as the working directory; do not point it at your home directory or an important project.
+- Before running coding tasks in an untrusted cloned repository, check for `.roundtable/counterexamples.json` (whose counterexample scripts run during baseline checks) and review any configured verification commands.
 - Only install extensions you can read and trust.
 - Enter API keys in the extension editor (encrypted with the operating system's secure storage) or use environment variables; do not write them into extension files.

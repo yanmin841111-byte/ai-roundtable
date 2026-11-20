@@ -59,6 +59,8 @@ export interface RunContext extends TurnCallbacks {
   // prompt 裡只有這一回合需要的一段(原封不動包含在 prompt 裡)。照常送出;
   // 自己保存對話記憶的 adapter 存檔時要換成一行說明,不然之後每回合都會重送。
   ephemeral?: string;
+  // 乾淨 context 回合(審查、反例評估等):不讀取也不保存 adapter 內部 session 記憶
+  ephemeralSession?: boolean;
 }
 
 // 轉接器自己回報的結果;欄位都可以省略,usage 是各家原始格式
@@ -117,6 +119,8 @@ export interface Adapter {
   endpoint?: string;
   // OpenAI 相容 adapter:查模型能力。live 為 true 才送出實際的對話請求(付費 API 會產生費用)
   modelCapability?(model: string, opts?: { live?: boolean }): Promise<ModelCapability | null>;
+  // 釋放指定對話或全部記憶體內 session(例如任務重設或關閉時)
+  clearSession?(sessionId: string): void;
   run(agent: AgentConfig, ctx: RunContext): Promise<RunResult>;
 }
 

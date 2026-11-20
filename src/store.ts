@@ -61,8 +61,16 @@ class Store {
     this.config = this.load();
   }
   load(): AppConfig {
+    let text: string;
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      text = fs.readFileSync(this.file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') this.backupCorruptConfig();
+      return defaultConfig();
+    }
+    try {
+      const raw = JSON.parse(text);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid config root');
       const def = defaultConfig();
       const agents = Array.isArray(raw.agents) ? raw.agents : def.agents;
       const settings = { ...def.settings, ...(raw.settings || {}) };
@@ -70,12 +78,38 @@ class Store {
       if (settings.mode === 'relay') settings.mode = agents.filter((agent: { enabled?: boolean }) => agent.enabled !== false).length >= 2 ? 'guarded' : 'divide';
       return { agents, settings, lineups: sanitizeLineups(raw.lineups) };
     } catch {
+      this.backupCorruptConfig();
       return defaultConfig();
     }
   }
+  private backupCorruptConfig(): void {
+    try {
+      if (!fs.existsSync(this.file)) return;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(this.file, `${this.file}.corrupt-${stamp}.bak`);
+    } catch {}
+  }
   save(config: AppConfig): AppConfig {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify(config, null, 2));
+    const dir = path.dirname(this.file);
+    fs.mkdirSync(dir, { recursive: true });
+    let mode: number | undefined;
+    try {
+      const st = fs.statSync(this.file);
+      mode = st.mode;
+      // rename 在 POSIX 目錄可寫時會直接覆蓋 0444 唯讀檔;先明確檢查檔案本身可寫,
+      // 既守住使用者設成唯讀的預期,也讓權限錯誤原樣回報給介面
+      fs.accessSync(this.file, fs.constants.W_OK);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    const tmp = `${this.file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(config, null, 2), mode !== undefined ? { encoding: 'utf8', mode } : 'utf8');
+      fs.renameSync(tmp, this.file);
+    } catch (error) {
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+      throw error;
+    }
     this.config = config;
     return this.config;
   }

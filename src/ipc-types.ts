@@ -84,6 +84,84 @@ export function normalizeDiscussionMode(value: unknown): DiscussionMode {
   return value === 'independent-first' ? value : 'sequential';
 }
 
+export interface ProjectSettings {
+  verifyCommand?: string;
+  workStyle?: 'general' | 'code';
+  allowGitCommit?: boolean;
+  allowGitPush?: boolean;
+}
+
+export interface WindowBounds {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+}
+
+const MAX_PROJECT_SETTINGS = 100;
+
+export function normalizeProjectKey(workDir: string | null | undefined): string {
+  const trimmed = String(workDir || '').trim();
+  if (!trimmed) return '';
+  const stripped = trimmed.replace(/[\\/]+$/, '');
+  return stripped || '/';
+}
+
+export function recordProjectSettings(settings: AppSettings, targetDir = settings.workDir): void {
+  const key = normalizeProjectKey(targetDir);
+  if (!key) return;
+  const map: Record<string, ProjectSettings> = { ...(settings.projectSettings || {}) };
+  delete map[key];
+  map[key] = {
+    verifyCommand: settings.verifyCommand || '',
+    workStyle: settings.workStyle === 'general' ? 'general' : 'code',
+    allowGitCommit: settings.allowGitCommit === true,
+    allowGitPush: settings.allowGitPush === true,
+  };
+  const keys = Object.keys(map);
+  while (keys.length > MAX_PROJECT_SETTINGS) {
+    const oldest = keys.shift();
+    if (oldest) delete map[oldest];
+  }
+  settings.projectSettings = map;
+}
+
+export function switchProjectSettings(
+  settings: AppSettings,
+  previousWorkDir: string | null | undefined,
+  nextWorkDir: string | null | undefined,
+): void {
+  const prevKey = normalizeProjectKey(previousWorkDir);
+  const nextKey = normalizeProjectKey(nextWorkDir);
+  if (prevKey) recordProjectSettings(settings, previousWorkDir || '');
+  if (!nextKey || nextKey === prevKey) return;
+  const saved = settings.projectSettings?.[nextKey];
+  if (saved) {
+    settings.verifyCommand = saved.verifyCommand || '';
+    settings.workStyle = saved.workStyle === 'general' ? 'general' : 'code';
+    settings.allowGitCommit = saved.allowGitCommit === true;
+    settings.allowGitPush = saved.allowGitPush === true;
+  } else {
+    // 切到從未設定過的新資料夾:清空驗證指令與 Git 授權,避免上一個專案的指令或推送權限誤用在新專案
+    settings.verifyCommand = '';
+    settings.allowGitCommit = false;
+    settings.allowGitPush = false;
+  }
+  recordProjectSettings(settings, nextWorkDir || '');
+}
+
+export function applyProjectSettingsForDir(settings: AppSettings, workDir: string): void {
+  const key = normalizeProjectKey(workDir);
+  const saved = key ? settings.projectSettings?.[key] : undefined;
+  const sameProject = key === normalizeProjectKey(settings.workDir);
+  settings.workDir = workDir;
+  if (sameProject && !saved) return; // 尚未遷移的全域設定仍屬於原目錄
+  settings.verifyCommand = saved?.verifyCommand ?? (sameProject ? settings.verifyCommand : '');
+  settings.workStyle = saved?.workStyle ?? (sameProject ? settings.workStyle : 'code');
+  settings.allowGitCommit = saved?.allowGitCommit ?? (sameProject && settings.allowGitCommit === true);
+  settings.allowGitPush = saved?.allowGitPush ?? (sameProject && settings.allowGitPush === true);
+}
+
 export interface AppSettings {
   workDir: string;
   maxRounds: number;
@@ -105,6 +183,10 @@ export interface AppSettings {
   allowGitPush?: boolean;
   // 工作模式:'code' 是寫程式(自動驗證、測試鎖都生效),'general' 是一般任務(文件、分析、腦力激盪)
   workStyle?: 'general' | 'code';
+  // 依工作目錄記住各自的驗證指令、工作模式與 Git 授權,多專案並行或切換時不互相覆蓋
+  projectSettings?: Record<string, ProjectSettings>;
+  // 視窗大小與位置(下次啟動時還原)
+  windowBounds?: WindowBounds;
   // 終端面板的寬度(px)。下次打開時維持上次拉好的寬度
   terminalWidth?: number;
   sidebarWidth?: number;
@@ -517,6 +599,8 @@ export interface ChatState {
 export interface SessionSummary {
   id: string;
   conversationId?: string | null;
+  workDir?: string | null;
+  searchText?: string;
   attachmentCount?: number;
   title?: string;
   createdAt?: string | number;
@@ -527,6 +611,7 @@ export interface SessionSummary {
 
 export interface SessionDetail {
   conversationId?: string | null;
+  workDir?: string | null;
   title?: string;
   createdAt?: string | number;
   agents?: string[];
