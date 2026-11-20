@@ -6,6 +6,12 @@
 
 ## [未發布]
 
+## [0.3.0] - 2026-11-21
+
+- 新安裝預設使用「快速實作」：由一位成員執行、驗證，失敗時可修正一次。「嚴格審查」加入獨立審查；「只討論」不改檔。升級保留既有流程，未記錄討論方式的舊設定仍採循序討論。
+- 驗證指令、工作類型與 Git 權限依專案保存。切回既有任務時，驗證使用該任務的工作目錄。
+- OpenAI 相容成員可在使用者同意後預覽本機網頁。成員設定改以 Antigravity CLI 取代 Gemini CLI。
+
 ## [0.2.2] - 2026-10-03
 
 ### 新增
@@ -150,7 +156,8 @@
 - `secrets.json` 損壞時先備份原檔,不會被新的 key 覆寫。
 - 附件、歷史紀錄、擴充檔的路徑一律在主程序驗證。
 
-[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.2...HEAD
+[未發布]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...v0.2.1
 [0.2.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...481bb88

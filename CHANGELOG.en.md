@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
+- New installations default to Quick implementation: one member implements, verifies, and can retry once after failure. Strict review adds an independent review; Discuss only does not edit files. Upgrades preserve existing workflows, including sequential discussion for older configurations without a discussion preference.
+- Verification commands, work styles, and Git permissions are saved per project. Resuming a task runs verification in that task's working directory.
+- OpenAI-compatible members can preview a local web page with user consent. Antigravity CLI replaces Gemini CLI in member setup.
+
 ## [0.2.2] - 2026-10-03
 
 ### Added
@@ -150,7 +156,8 @@ First release.
 - A corrupt `secrets.json` is backed up first instead of being overwritten by the next key.
 - Paths for attachments, history and extension files are always validated in the main process.
 
-[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/yanmin841111-byte/ai-roundtable/compare/481bb88...v0.2.1
 [0.2.0]: https://github.com/yanmin841111-byte/ai-roundtable/compare/v0.1.0...481bb88
