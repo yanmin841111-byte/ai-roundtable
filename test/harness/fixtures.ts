@@ -34,6 +34,7 @@ export function scriptedMember(opts: {
   canEdit?: boolean;
   /** 執行階段寫進工作目錄的檔案(相對路徑 → 內容) */
   writes?: Record<string, string>;
+  testWrites?: Record<string, string>;
   /** 執行階段的回報文字 */
   report?: string;
   /** 修復階段寫進工作目錄的檔案:用來重現「修復反而改壞了」 */
@@ -57,6 +58,7 @@ export function scriptedMember(opts: {
     counterexampleClarification: opts.counterexampleClarification,
     recheck: opts.recheck || null,
     writes: opts.writes || null,
+    testWrites: opts.testWrites || null,
     report: opts.report || null,
     fixWrites: opts.fixWrites || null,
     fixReport: opts.fixReport || null,

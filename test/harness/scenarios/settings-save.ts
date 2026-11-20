@@ -34,6 +34,8 @@ async function writable() {
       allowGit.checked = true;
       allowGit.dispatchEvent(new Event('change'));
       const allowPush = g.$('#allow-git-push') as HTMLInputElement;
+      const browserPreview = g.$('#browser-preview-url') as HTMLInputElement;
+      g.check(browserPreview.value === '', 'AI browser preview is off by default');
       g.check(!allowPush.checked, 'Local commit permission does not enable pushes');
       await g.waitFor(async () => {
         const settings = (await (window as any).api.getConfig()).settings;
@@ -48,6 +50,12 @@ async function writable() {
       }, 8000, '改完設定之後有回應');
       g.check(/已儲存/.test(hint.textContent || ''), `存得進去就說已儲存(顯示:${hint.textContent})`);
       g.check(!hint.classList.contains('failed'), '成功時不帶失敗樣式');
+      browserPreview.value = 'http://localhost:5173/demo';
+      browserPreview.dispatchEvent(new Event('change'));
+      await g.waitFor(async () => (await window.api.getConfig()).settings.browserPreviewUrl === 'http://localhost:5173/demo', 5000, 'Local browser preview URL saved');
+      browserPreview.value = 'https://example.test';
+      browserPreview.dispatchEvent(new Event('change'));
+      g.check(hint.classList.contains('failed') && browserPreview.value === 'http://localhost:5173/demo', 'A non-local URL cannot replace the saved preview');
       g.$('#settings-close').click();
       g.$('#settings-btn').click();
       g.check(allowGit.checked && allowPush.checked, 'Both permissions restored independently');
@@ -62,7 +70,7 @@ async function writable() {
   });
   const ok = report('設定存得進去時說已儲存', r);
   const saved = JSON.parse(fs.readFileSync(path.join(r.userData, 'config.json'), 'utf8'));
-  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first' && saved.settings.allowGitCommit === true && saved.settings.allowGitPush === true;
+  const written = saved.settings.maxRounds === 2 && saved.settings.discussionMode === 'independent-first' && saved.settings.allowGitCommit === true && saved.settings.allowGitPush === true && saved.settings.browserPreviewUrl === 'http://localhost:5173/demo';
   console.log(written ? '  ok - 設定檔確實被寫進去了' : '  失敗:說存好了,檔案卻沒有改');
   r.cleanup();
   assert.ok(ok && written, r.error || '對照組失敗');

@@ -103,7 +103,7 @@ function verificationText(summary: TaskSummary, locale: TextLocale): string {
 
 
 // 結果卡:形狀不對就不顯示卡片(純文字版照樣在 text 裡)
-const TASK_OUTCOMES = new Set(['approved', 'repaired', 'unresolved', 'unreviewed', 'failed', 'advisory']);
+const TASK_OUTCOMES = new Set(['approved', 'repaired', 'unresolved', 'unreviewed', 'failed', 'advisory', 'observations']);
 const FILE_STATUSES = new Set(['added', 'modified', 'deleted', 'renamed']);
 export function restoreTaskSummary(raw: any): TaskSummary | null {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.members) || !Array.isArray(raw.files) || !raw.usage || typeof raw.usage !== 'object') return null;

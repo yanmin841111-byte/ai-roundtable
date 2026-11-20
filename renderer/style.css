@@ -1202,3 +1202,6 @@ body.resizing-x .term-body, body.resizing-y .term-body { pointer-events: none; }
   border-color: var(--accent-border);
 }
 
+.composer-verify:not([hidden]) { display: flex; align-items: center; gap: .5rem; padding: 2px 10px 6px; font-size: .75rem; }
+#composer-verify-status { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#strict-tests-option[hidden] { display: none; }

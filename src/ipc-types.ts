@@ -85,10 +85,23 @@ export function normalizeDiscussionMode(value: unknown): DiscussionMode {
 }
 
 export interface ProjectSettings {
+  browserPreviewUrl?: string;
   verifyCommand?: string;
   workStyle?: 'general' | 'code';
   allowGitCommit?: boolean;
   allowGitPush?: boolean;
+}
+
+export function parseBrowserPreviewUrl(value: unknown): URL | null {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+        || !url.port || url.username || url.password) return null;
+    return url;
+  } catch {
+    return null;
+  }
 }
 
 export interface WindowBounds {
@@ -113,6 +126,7 @@ export function recordProjectSettings(settings: AppSettings, targetDir = setting
   const map: Record<string, ProjectSettings> = { ...(settings.projectSettings || {}) };
   delete map[key];
   map[key] = {
+    browserPreviewUrl: settings.browserPreviewUrl || '',
     verifyCommand: settings.verifyCommand || '',
     workStyle: settings.workStyle === 'general' ? 'general' : 'code',
     allowGitCommit: settings.allowGitCommit === true,
@@ -137,6 +151,7 @@ export function switchProjectSettings(
   if (!nextKey || nextKey === prevKey) return;
   const saved = settings.projectSettings?.[nextKey];
   if (saved) {
+    settings.browserPreviewUrl = saved.browserPreviewUrl || '';
     settings.verifyCommand = saved.verifyCommand || '';
     settings.workStyle = saved.workStyle === 'general' ? 'general' : 'code';
     settings.allowGitCommit = saved.allowGitCommit === true;
@@ -144,6 +159,7 @@ export function switchProjectSettings(
   } else {
     // 切到從未設定過的新資料夾:清空驗證指令與 Git 授權,避免上一個專案的指令或推送權限誤用在新專案
     settings.verifyCommand = '';
+    settings.browserPreviewUrl = '';
     settings.allowGitCommit = false;
     settings.allowGitPush = false;
   }
@@ -156,6 +172,7 @@ export function applyProjectSettingsForDir(settings: AppSettings, workDir: strin
   const sameProject = key === normalizeProjectKey(settings.workDir);
   settings.workDir = workDir;
   if (sameProject && !saved) return; // 尚未遷移的全域設定仍屬於原目錄
+  settings.browserPreviewUrl = saved?.browserPreviewUrl ?? (sameProject ? settings.browserPreviewUrl : '');
   settings.verifyCommand = saved?.verifyCommand ?? (sameProject ? settings.verifyCommand : '');
   settings.workStyle = saved?.workStyle ?? (sameProject ? settings.workStyle : 'code');
   settings.allowGitCommit = saved?.allowGitCommit ?? (sameProject && settings.allowGitCommit === true);
@@ -163,6 +180,7 @@ export function applyProjectSettingsForDir(settings: AppSettings, workDir: strin
 }
 
 export interface AppSettings {
+  browserPreviewUrl?: string;
   workDir: string;
   maxRounds: number;
   discussionMode?: DiscussionMode;
@@ -398,6 +416,7 @@ export interface PendingAttachment extends AttachmentMeta {
 }
 
 export interface ChatMessage {
+  discussionConclusion?: boolean;
   id: string;
   kind: 'agent' | 'user' | 'system';
   level?: string;
@@ -449,7 +468,7 @@ export interface ChatMessage {
 //   unreviewed 沒有人審查成功
 //   failed     執行階段就失敗了
 //   advisory   程式任務中的唯讀成員:回報只供參考,不送審也不阻擋
-export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed' | 'advisory';
+export type TaskOutcome = 'approved' | 'repaired' | 'unresolved' | 'unreviewed' | 'failed' | 'advisory' | 'observations';
 
 export interface TaskVerification {
   revision?: string;

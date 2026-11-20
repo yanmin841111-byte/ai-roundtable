@@ -140,6 +140,11 @@ Open also works). After that it opens normally.
 
 After you send a task, depending on the mode:
 
+The composer offers **Quick implementation**, **Strict review**, and **Discuss only**.
+Quick implementation uses one writable CLI member and verifies the result. Strict review skips planning votes: an implementer may write tests first, then implements; the app verifies the changes and a separate member reviews them with fresh context. Suggestions stay visible but only failed checks or reproduced counterexamples trigger one automatic repair. Strict review does not load the project's counterexample corpus; executable examples are accepted only from CLI reviewers with edit/command permission. A failed review is not an approval.
+
+The composer shows the project check and lets you apply a detected command without running it immediately. New configurations default to independent first-round proposals. A completed discussion can hand its conclusion to quick implementation. Existing lineups and the older collaboration workflows remain available in settings.
+
 - **Multi-AI checks (two or more members)**: discussion needs unanimous
   agreement; the lead's plan must list acceptance criteria and receive every
   other member's approval before execution. Plan reviews distinguish concrete

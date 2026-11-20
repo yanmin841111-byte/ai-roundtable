@@ -5,7 +5,15 @@ import os from 'os';
 import path from 'path';
 import { Store } from '../src/store';
 import { validateDirectoryToOpen, parseShellEnvOutput, importShellEnvAsync } from '../src/shell-env';
-import { applyProjectSettingsForDir, recordProjectSettings, switchProjectSettings, type AppSettings } from '../src/ipc-types';
+import { applyProjectSettingsForDir, parseBrowserPreviewUrl, recordProjectSettings, switchProjectSettings, type AppSettings } from '../src/ipc-types';
+
+test('browser preview accepts only local HTTP(S) development URLs without credentials', () => {
+  assert.equal(parseBrowserPreviewUrl('http://localhost:5173/demo')?.href, 'http://localhost:5173/demo');
+  assert.equal(parseBrowserPreviewUrl('https://[::1]:5173')?.hostname, '[::1]');
+  for (const url of ['https://localhost.example:5173', 'http://192.168.1.1:5173', 'file:///tmp/page.html', 'http://localhost', 'http://a:b@127.0.0.1:5173']) {
+    assert.equal(parseBrowserPreviewUrl(url), null, url);
+  }
+});
 
 test('Store.save uses atomic replacement, respects read-only config.json, and backs up corrupt config on load', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-store-'));
@@ -88,6 +96,7 @@ test('projectSettings helpers isolate verifyCommand, workStyle, and git flags pe
     language: '繁體中文',
     maxTranscriptChars: 60000,
     verifyCommand: 'npm test',
+    browserPreviewUrl: 'http://localhost:5173',
     workStyle: 'code',
     allowGitCommit: true,
     allowGitPush: false,
@@ -98,6 +107,7 @@ test('projectSettings helpers isolate verifyCommand, workStyle, and git flags pe
   switchProjectSettings(settings, '/projects/node-svc', '/projects/py-svc');
   settings.workDir = '/projects/py-svc';
   assert.equal(settings.verifyCommand, '');
+  assert.equal(settings.browserPreviewUrl, '');
   assert.equal(settings.allowGitCommit, false);
 
   settings.verifyCommand = 'pytest';
@@ -108,6 +118,7 @@ test('projectSettings helpers isolate verifyCommand, workStyle, and git flags pe
   switchProjectSettings(settings, '/projects/py-svc', '/projects/node-svc/');
   settings.workDir = '/projects/node-svc/';
   assert.equal(settings.verifyCommand, 'npm test');
+  assert.equal(settings.browserPreviewUrl, 'http://localhost:5173');
   assert.equal(settings.workStyle, 'code');
   assert.equal(settings.allowGitCommit, true);
 
@@ -124,6 +135,7 @@ test('projectSettings helpers isolate verifyCommand, workStyle, and git flags pe
     applyProjectSettingsForDir(old, '/projects/old');
     assert.equal(old.workDir, '/projects/old');
     assert.equal(old.verifyCommand, '');
+    assert.equal(old.browserPreviewUrl, '');
     assert.equal(old.allowGitCommit, false);
     assert.equal(old.allowGitPush, false);
     assert.equal(old.workStyle, projectSettings ? 'general' : 'code');

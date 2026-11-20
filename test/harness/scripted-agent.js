@@ -21,6 +21,7 @@ process.stdin.on('end', () => {
     分工: 'divide', 'Divide the work': 'divide',
     計畫審核: 'planReview', 'Plan approval': 'planReview',
     執行: 'execute', Execute: 'execute',
+    寫測試: 'tests', 'Write tests': 'tests',
     交叉審查: 'review', 'Cross-review': 'review',
     修復: 'fix', Repair: 'fix',
     總結: 'summary', Summary: 'summary',
@@ -63,7 +64,7 @@ process.stdin.on('end', () => {
   }
 
   // 執行回合寫 writes,修復回合寫 fixWrites:要驗「修復反而把東西改壞」就靠後者
-  const toWrite = key === 'execute' ? config.writes : key === 'fix' ? config.fixWrites : null;
+  const toWrite = key === 'execute' ? config.writes : key === 'fix' ? config.fixWrites : key === 'tests' ? config.testWrites : null;
   if (toWrite) {
     const fs = require('fs');
     const path = require('path');
@@ -76,6 +77,7 @@ process.stdin.on('end', () => {
   const out = {
     divide: config.plan ? JSON.stringify(config.plan) : '{"summary":"沒有指定分工","assignments":[]}',
     execute: config.report || '這回合沒有被指派工作',
+    tests: 'Tests phase completed',
     review: config.recheck && /這是修復後的複查|This is the re-check after repair|自上次審查後沒有新增修復|No new repair has occurred/.test(input) ? config.recheck : config.review,
     fix: config.fixReport || '沒有需要修復的項目',
     summary: '總結:流程已跑完',

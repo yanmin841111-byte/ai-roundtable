@@ -5,12 +5,14 @@ import crypto from 'crypto';
 import { Store } from './src/store';
 import { Orchestrator } from './src/orchestrator';
 import { Registry, setRegistry, getAdapter } from './src/adapters';
+import { capturePreview } from './src/browser-preview';
 import { writeSession, messagesToMarkdown, listSessions, readSession, deleteSession, listConversationIds, listSessionWorkDirs } from './src/session-log';
 import * as attachments from './src/attachments';
 import { SecretStore } from './src/secrets';
 import {
   applyProjectSettingsForDir,
   normalizeProjectKey,
+  parseBrowserPreviewUrl,
   recordProjectSettings,
   switchProjectSettings,
   type AgentConfig,
@@ -146,6 +148,31 @@ const jobWorkDir = (job: Job) => jobConfig(job).settings.workDir;
 const busy = (job: Job) => !!job.queued || scheduler.isHeld(job.id) || job.orchestrator.running;
 const blockedText = (blocker: JobBlocker | 'busy') => text(`main.jobBlocked.${blocker}`);
 
+let previewPending = false;
+async function inspectBrowser(job: Job, agent: AgentConfig, endpoint: string, image: boolean, signal: AbortSignal) {
+  const url = parseBrowserPreviewUrl(jobConfig(job).settings.browserPreviewUrl);
+  if (!url) throw new Error(text('main.previewInvalid'));
+  const win = mainWindow;
+  if (!win || win.isDestroyed() || previewPending) throw new Error(text('main.previewBusy'));
+  const recipient = new URL(endpoint).origin;
+  previewPending = true;
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      message: text('main.previewTitle'),
+      detail: text(image ? 'main.previewShareImage' : 'main.previewShare', { url: url.href, agent: agent.name, recipient }),
+      buttons: [text('main.previewDeny'), text('main.previewAllow')],
+      defaultId: 0, cancelId: 0, signal,
+    });
+    signal.throwIfAborted();
+    if (response !== 1) throw new Error(text('main.previewDenied'));
+    if (win.isDestroyed()) throw new Error(text('main.previewBusy'));
+    return await capturePreview(win, url, image, signal);
+  } finally {
+    previewPending = false;
+  }
+}
+
 function jobOf(jobId: string): Job {
   const job = jobs.get(jobId);
   if (!job) throw new Error(text('main.jobMissing'));
@@ -158,7 +185,10 @@ function createJob(): Job {
     pending: [], sessionFileId: null, activeTaskStart: null, queued: null, resources: null, staleBaseline: null, outcome: null,
     unread: false, maintenance: false, notifiedQuestionId: null,
   };
-  const orchestrator = new Orchestrator({ get: () => jobConfig(job), userDataDir: store.userDataDir });
+  const orchestrator = new Orchestrator({
+    get: () => jobConfig(job), userDataDir: store.userDataDir,
+    inspectBrowser: (agent, endpoint, image, signal) => inspectBrowser(job, agent, endpoint, image, signal),
+  });
   job.orchestrator = orchestrator;
   orchestrator.on('message', (message: IpcEvents['chat:message']['message']) => {
     send('chat:message', { jobId: job.id, message });
@@ -518,6 +548,7 @@ app.whenReady().then(async () => {
       }
       const fieldsUnchanged =
         (next.settings.verifyCommand || '') === (prev.verifyCommand || '')
+        && (next.settings.browserPreviewUrl || '') === (prev.browserPreviewUrl || '')
         && (next.settings.workStyle || 'code') === (prev.workStyle || 'code')
         && Boolean(next.settings.allowGitCommit) === Boolean(prev.allowGitCommit)
         && Boolean(next.settings.allowGitPush) === Boolean(prev.allowGitPush);
@@ -526,6 +557,7 @@ app.whenReady().then(async () => {
       } else if (nextKey) {
         recordProjectSettings(next.settings, next.settings.workDir);
       }
+      if (next.settings.browserPreviewUrl && !parseBrowserPreviewUrl(next.settings.browserPreviewUrl)) throw new Error(text('main.previewInvalid'));
     }
     const saved = store.save(next);
     // 上限調高了,排隊中的任務可能現在就能開始
@@ -689,7 +721,7 @@ app.whenReady().then(async () => {
       // 環境尚未就緒時保留可取消的佇列狀態,先不佔排程名額。
       await shellEnvReady;
       if (job.queued !== queued) return undefined;
-      const resources = await jobResources(job, speakers(job, body));
+      const resources = await jobResources(job, speakers(job, mode === 'implement-conclusion' ? '' : body));
       if (job.queued !== queued) return undefined;
       job.resources = resources;
       scheduler.submit(job.id, resources);

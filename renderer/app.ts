@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify';
 import * as Marker from '../src/shared';
 import * as ModelRules from '../src/model-rules';
 import type { Model } from '../src/model-rules';
-import { isPhaseInfo, recordProjectSettings, switchProjectSettings } from '../src/ipc-types';
+import { applyProjectSettingsForDir, isPhaseInfo, normalizeProjectKey, parseBrowserPreviewUrl, recordProjectSettings, switchProjectSettings } from '../src/ipc-types';
 import { t, applyStaticText, resolveLocale, setLocale, getLocale, localeTag, joinNames } from './i18n';
 import { controlLabel, icon } from './icons';
 import { $, fmt, exactNumber, shortPath, initials, escapeHtml, randomColor, cleanIpcError, cssEscape, bindResizeHandle } from './util';
@@ -143,7 +143,7 @@ async function init() {
       config.agents = next.agents;
       config.settings = next.settings;
       config.lineups = next.lineups;
-      $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
+      syncWorkflow();
       $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
       renderSidebar();
       updateComposerHint();
@@ -288,17 +288,99 @@ async function init() {
   $<HTMLButtonElement>('#pick-dir').onclick = pickWorkDir;
   $<HTMLButtonElement>('#open-dir').onclick = () => void openFolder(() => window.api.openPath($<HTMLInputElement>('#work-dir').value));
   $<HTMLInputElement>('#work-dir').addEventListener('input', clearVerifySuggestions);
-  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#max-task-cost', '#verify-command', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
+  for (const id of ['#work-dir', '#max-rounds', '#discussion-mode', '#language', '#lead-agent', '#default-mode', '#max-transcript', '#max-parallel', '#max-task-cost', '#verify-command', '#browser-preview-url', '#allow-git', '#allow-git-push']) $(id).addEventListener('change', saveSettings);
   $<HTMLTextAreaElement>('#verify-command').addEventListener('input', () => renderVerifySuggestions());
   document.querySelectorAll<HTMLInputElement>('input[name="theme"], input[name="font-size"], input[name="ui-locale"]').forEach((el) => el.addEventListener('change', saveAppearance));
-  $<HTMLSelectElement>('#mode').value = config.settings.mode || 'divide';
+  syncWorkflow();
   $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
-  $<HTMLSelectElement>('#mode').onchange = () => { config.settings.mode = $<HTMLSelectElement>('#mode').value; $<HTMLSelectElement>('#default-mode').value = config.settings.mode; void saveConfig(); renderLineupButton(); };
+  const chooseWorkflow = () => {
+    config.settings.mode = composerMode();
+    $<HTMLSelectElement>('#default-mode').value = config.settings.mode;
+    syncWorkflow();
+    void saveConfig();
+    renderLineupButton();
+    renderComposerVerify();
+    updateComposerHint();
+  };
+  $<HTMLSelectElement>('#mode').onchange = chooseWorkflow;
+  $<HTMLInputElement>('#strict-tests').onchange = chooseWorkflow;
   $<HTMLSelectElement>('#work-style').onchange = () => {
     config.settings.workStyle = $<HTMLSelectElement>('#work-style').value === 'general' ? 'general' : 'code';
     recordProjectSettings(config.settings, config.settings.workDir);
     void saveConfig();
+    renderComposerVerify();
     updateComposerHint();
+  };
+}
+
+function composerMode(): string {
+  const mode = $<HTMLSelectElement>('#mode').value;
+  return mode === 'strict' && $<HTMLInputElement>('#strict-tests').checked ? 'strict-tests' : mode;
+}
+
+function syncWorkflow(): void {
+  const mode = config.settings.mode || 'solo';
+  $<HTMLSelectElement>('#mode').value = mode === 'strict-tests' ? 'strict' : mode;
+  $<HTMLInputElement>('#strict-tests').checked = mode === 'strict-tests';
+  $('#strict-tests-option').hidden = mode !== 'strict-tests' && mode !== 'strict';
+}
+
+let composerDetection: { dir: string; commands: string[]; error?: string; loading: boolean } | undefined;
+function renderComposerVerify(): void {
+  const box = $('#composer-verify');
+  const dir = selectedJob()?.workDir || config.settings.workDir;
+  const settings = { ...config.settings };
+  applyProjectSettingsForDir(settings, dir);
+  box.hidden = !dir || settings.workStyle === 'general' || composerMode() === 'discuss';
+  if (box.hidden) return;
+  const label = $('#composer-verify-status');
+  const action = $<HTMLButtonElement>('#composer-verify-action');
+  action.hidden = true;
+  const command = settings.verifyCommand?.trim();
+  if (command) {
+    label.textContent = t('composer.verifyCurrent', { command: command.split('\n').join(' · ') });
+    label.title = command;
+    return;
+  }
+  label.title = '';
+  if (composerDetection?.dir !== dir) {
+    const request: NonNullable<typeof composerDetection> = { dir, commands: [], loading: true };
+    composerDetection = request;
+    const detect = async () => {
+      try {
+        if (!window.api.detectVerifyCommands) throw new Error(t('settings.verifyUnavailable'));
+        const result = await window.api.detectVerifyCommands(dir);
+        if (!Array.isArray(result?.commands) || !result.commands.every(cmd => typeof cmd === 'string')) throw new Error(t('settings.verifyInvalidResponse'));
+        request.commands = result.commands;
+      } catch (error) { if (composerDetection === request) composerDetection.error = cleanIpcError(error); }
+      request.loading = false;
+      if (composerDetection === request) renderComposerVerify();
+    };
+    void detect();
+  }
+  const detection = composerDetection;
+  label.textContent = detection.error ? t('settings.verifyFailed', { reason: detection.error }) : t('composer.verifyNone');
+  const suggestion = detection.commands[0];
+  if (!detection.error && !suggestion) return;
+  action.hidden = false;
+  action.disabled = !!running || selectedJob()?.status === 'queued';
+  action.textContent = detection.error ? t('msg.retry') : t('composer.verifyApply', { command: suggestion });
+  action.onclick = async () => {
+    if (dir !== (selectedJob()?.workDir || config.settings.workDir) || switchingJobs) return;
+    if (detection.error) { composerDetection = undefined; renderComposerVerify(); return; }
+    const next = structuredClone(config);
+    const project = { ...next.settings };
+    applyProjectSettingsForDir(project, dir);
+    project.verifyCommand = suggestion;
+    recordProjectSettings(project, dir);
+    next.settings.projectSettings = project.projectSettings;
+    if (normalizeProjectKey(dir) === normalizeProjectKey(next.settings.workDir)) next.settings.verifyCommand = suggestion;
+    action.disabled = true;
+    try { await window.api.saveConfig(next); }
+    catch (error) { action.disabled = false; showAttachError(cleanIpcError(error)); return; }
+    config.settings.projectSettings = next.settings.projectSettings;
+    config.settings.verifyCommand = next.settings.verifyCommand;
+    renderSidebar();
   };
 }
 
@@ -682,6 +764,7 @@ function renderSidebar() {
   $<HTMLInputElement>('#max-parallel').value = String(config.settings.maxParallelJobs || 2);
   $<HTMLInputElement>('#max-task-cost').value = config.settings.maxTaskCostUsd && config.settings.maxTaskCostUsd > 0 ? String(config.settings.maxTaskCostUsd) : '';
   $<HTMLTextAreaElement>('#verify-command').value = config.settings.verifyCommand || '';
+  $<HTMLInputElement>('#browser-preview-url').value = config.settings.browserPreviewUrl || '';
   $<HTMLInputElement>('#allow-git').checked = config.settings.allowGitCommit === true;
   $<HTMLInputElement>('#allow-git-push').checked = config.settings.allowGitPush === true;
   renderWorkdirChip();
@@ -694,6 +777,13 @@ function renderSidebar() {
 function saveSettings() {
   const previousWorkDir = config.settings.workDir;
   const nextWorkDir = $<HTMLInputElement>('#work-dir').value.trim();
+  const previewInput = $<HTMLInputElement>('#browser-preview-url');
+  const preview = previewInput.value.trim();
+  if (nextWorkDir === previousWorkDir && preview && !parseBrowserPreviewUrl(preview)) {
+    previewInput.value = config.settings.browserPreviewUrl || '';
+    showSaveFailed(t('settings.browserPreviewInvalid'));
+    return;
+  }
   config.settings.workDir = nextWorkDir;
   config.settings.discussionMode = $<HTMLSelectElement>('#discussion-mode').value === 'independent-first' ? 'independent-first' : 'sequential';
   config.settings.maxRounds = Math.max(config.settings.discussionMode === 'independent-first' ? 2 : 1, Number($<HTMLInputElement>('#max-rounds').value) || 3);
@@ -705,6 +795,7 @@ function saveSettings() {
     $<HTMLSelectElement>('#work-style').value = config.settings.workStyle === 'general' ? 'general' : 'code';
   } else {
     config.settings.verifyCommand = $<HTMLTextAreaElement>('#verify-command').value.trim();
+    config.settings.browserPreviewUrl = preview;
     config.settings.allowGitCommit = $<HTMLInputElement>('#allow-git').checked;
     config.settings.allowGitPush = $<HTMLInputElement>('#allow-git-push').checked;
     recordProjectSettings(config.settings, nextWorkDir);
@@ -715,7 +806,7 @@ function saveSettings() {
   const maxCost = Number($<HTMLInputElement>('#max-task-cost').value);
   if (Number.isFinite(maxCost) && maxCost > 0) config.settings.maxTaskCostUsd = Math.round(maxCost * 1000) / 1000;
   else delete config.settings.maxTaskCostUsd;
-  $<HTMLSelectElement>('#mode').value = config.settings.mode;
+  syncWorkflow();
   // 畫面照記憶體裡的設定重畫;存不進去的事由 saveConfig 自己說,不要讓畫面跟著卡住
   void saveConfig({ saved: true });
   renderSidebar();
@@ -1031,7 +1122,7 @@ async function sendMessage() {
   renderAttachChips();
   clearAttachError();
   try {
-    await window.api.send(text, $<HTMLSelectElement>('#mode').value, attachments);
+    await window.api.send(text, composerMode(), attachments);
     revokeThumbUrls(toClear);
   } catch (error) {
     if (owner !== shownJobId || owner !== window.api.jobs.current()) {
@@ -1048,6 +1139,7 @@ async function sendMessage() {
 
 function setState(s: ChatState): void {
   running = !!s.running;
+  document.querySelectorAll<HTMLButtonElement>('.implement-conclusion').forEach(button => { button.disabled = running || selectedJob()?.status === 'queued'; });
   const pill = $<HTMLDivElement>('#phase-pill');
   pill.textContent = running ? phaseText(s.phase) : t('phase.idle');
   pill.className = 'phase ' + (running ? 'busy' : 'idle');
@@ -1343,7 +1435,26 @@ function renderMessage(m: ChatMessage, { animate = false }: { animate?: boolean 
   el.className = `msg ${m.kind} ${m.level || ''} ${m.kind === 'system' && m.tag ? `tag-${m.tag}` : ''} ${m.status === 'running' ? 'streaming' : ''}${el.classList.contains('enter') ? ' enter' : ''}${el.classList.contains('msg-continue') ? ' msg-continue' : ''}`;
   if (m.agentId) el.dataset.agentId = m.agentId;
   else delete el.dataset.agentId;
-  if (m.kind === 'agent') renderAgentMessage(el, m);
+  if (m.kind === 'agent') {
+    renderAgentMessage(el, m);
+    if (m.discussionConclusion && m.text && !el.querySelector('.implement-conclusion')) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost small implement-conclusion';
+      button.textContent = t('composer.implement');
+      button.disabled = running || selectedJob()?.status === 'queued';
+      button.onclick = async () => {
+        if (switchingJobs || running || selectedJob()?.status === 'queued') return;
+        if (pendingAttachments.length) { showAttachError(t('composer.conclusionAttachments')); return; }
+        button.disabled = true;
+        try {
+          await window.api.send(`${t('composer.implementTask')}\n\n${m.text}`, 'implement-conclusion', []);
+        } catch (error) { showAttachError(cleanIpcError(error)); }
+        finally { button.disabled = running || selectedJob()?.status === 'queued'; }
+      };
+      el.querySelector('.bubble')?.appendChild(button);
+    }
+  }
   else if (m.kind === 'user') renderUserMessage(el, m);
   else if (m.tag === 'task-summary' && m.taskSummary) renderTaskSummary(el, m.taskSummary, m.id, m.planResumable === true);
   else { el.innerHTML = systemHtml(m); bindEnvFix(el); }
@@ -1434,6 +1545,7 @@ function renderJobs(): void {
 }
 
 function renderWorkdirChip(): void {
+  renderComposerVerify();
   const pinned = selectedJob()?.workDir || '';
   const workDir = pinned || config.settings.workDir || '';
   const chip = $<HTMLButtonElement>('#workdir-chip');

@@ -36,8 +36,8 @@ function defaultConfig(): AppConfig {
     settings: {
       workDir: path.join(os.homedir(), 'AI_Roundtable_Workspace'),
       maxRounds: 3,
-      discussionMode: 'sequential',
-      mode: 'divide',
+      discussionMode: 'independent-first',
+      mode: 'solo',
       leadAgentId: null,
       language: '繁體中文',
       // 不支援 resume 的成員每回合都要重送對話紀錄,超過這個字元數就截斷中段,避免撞上 context 上限

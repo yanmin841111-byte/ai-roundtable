@@ -1,5 +1,6 @@
 // 協調器:安排多個 AI 成員輪流發言、達成共識後分工執行、交叉審查、再修復一輪。
 import { EventEmitter } from 'events';
+import type { BrowserPreview } from './browser-preview';
 import fs from 'fs';
 import crypto from 'crypto';
 import { runTurn, getAdapter, getRegistry, effectiveCanEdit, knownCapability } from './adapters';
@@ -51,6 +52,7 @@ const RELAY_HANDOFF_CHARS = 3000; // 每一棒交接帶給後面的回報長度;
 export interface ConfigSource {
   get(): AppConfig;
   userDataDir: string;
+  inspectBrowser?(agent: AgentConfig, endpoint: string, image: boolean, signal: AbortSignal): Promise<BrowserPreview>;
 }
 
 class Orchestrator extends EventEmitter {
@@ -186,7 +188,7 @@ class Orchestrator extends EventEmitter {
     // 有了新訊息,之前失敗的回合就不再是「最近一次」,前情與附件也不同了,不再提供重試
     this.clearRetryable();
     const list = Array.isArray(attachments) ? attachments : [];
-    const mentioned = findMentions(text, this.agents);
+    const mentioned = mode === 'implement-conclusion' && !this.running ? [] : findMentions(text, this.agents);
     // metadata 跟著訊息走,歷史對話重開才看得到附件;絕不放 base64 內容
     const msg = this.pushMessage({
       kind: 'user',
@@ -435,9 +437,10 @@ class Orchestrator extends EventEmitter {
 
   // 結果卡:誰做完了、審查結論、改了哪些檔案、花了多少時間與 token。
   // 這些資料原本散在整條對話裡;任務結束時整理成一張卡。只給人看,不進給模型的會議紀錄。
-  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, counterexamples, repairedCounterexamples, testsTouched, repairBroke, rollback, guarded = false, guardStage = 'review', advisory = new Set<string>() }: {
+  async pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged = [], reviews, fix, baseline, verify, counterexamples, repairedCounterexamples, testsTouched, repairBroke, rollback, guarded = false, evidenceReview = false, guardStage = 'review', advisory = new Set<string>() }: {
     startedAt: number; startIndex: number; reports: ExecReport[]; failed: ExecReport[]; salvaged?: ExecReport[]; reviews: Review[]; fix: FixOutcome; baseline: TaskBaseline | null; verify?: VerifyResult; counterexamples?: CounterexampleRun[]; repairedCounterexamples?: CounterexampleRun[]; testsTouched?: boolean; repairBroke?: boolean; rollback?: TaskSummary['rollback'];
     guarded?: boolean;
+    evidenceReview?: boolean;
     guardStage?: 'plan' | 'review';
     advisory?: Set<string>;
   }) {
@@ -457,6 +460,8 @@ class Orchestrator extends EventEmitter {
         return latest.some((review) => review.target.agent.id === report.agent.id && reviewVerdict(review.text, review.error) === 'issues') ? 'unresolved' : 'unreviewed';
       }
       const verdicts = [...reviews, ...rereviews].filter((rv) => rv.target.agent.id === report.agent.id).map((rv) => reviewVerdict(rv.text, rv.error));
+      if (evidenceReview && fix.repaired?.some(({ item }) => item.agent.id === report.agent.id)) return 'repaired';
+      if (evidenceReview && verdicts.includes('issues')) return 'observations';
       if (verdicts.includes('issues')) {
         // 修好之後複查通過,才是真的「審查通過」;複查沒跑成就維持「已修復(未再審查)」
         return rereviews.some((rv) => rv.target.agent.id === report.agent.id && reviewVerdict(rv.text, rv.error) === 'pass') ? 'approved' : 'repaired';
@@ -613,21 +618,37 @@ class Orchestrator extends EventEmitter {
       const startedAt = Date.now();
       const startIndex = this.taskStartIndex;
       const guarded = mode === 'guarded';
+      const strict = mode === 'strict' || mode === 'strict-tests';
+      const solo = mode === 'solo' || mode === 'implement-conclusion';
+      const coding = mode === 'implement-conclusion' || this.config.settings.workStyle !== 'general';
+      let implementer: AgentConfig | undefined;
+      if (solo || strict) {
+        if (!coding) { this.system(this.text('sys.soloCodeOnly'), { level: 'warn' }); return; }
+        const writers = agents.filter((agent) => {
+          const type = getAdapter(agent.cli)?.type;
+          return effectiveCanEdit(agent) && (strict ? hasQualifiedReviewer(agents, agent.id) : type === 'builtin' || type === 'cli');
+        });
+        implementer = writers.find((agent) => agent.id === this.lead.id) || writers[0];
+        if (!implementer) { this.system(this.text(strict ? 'sys.strictWriter' : 'sys.soloWriter'), { level: 'warn' }); return; }
+        this.system(this.text(strict ? 'sys.strictStart' : 'sys.soloStart', { name: implementer.name }));
+      }
       if (guarded && new Set(agents.map((agent) => agent.id)).size < 2) {
         await this.guardPlanStopped('sys.guardMembers');
         return;
       }
-      const agreed = previous ? true : await this.discussPhase(agents, task);
+      const agreed = solo || strict || previous ? true : await this.discussPhase(agents, task);
       if (this.stopped) return;
       if (guarded && !agreed) {
         await this.guardPlanStopped('sys.guardDiscussion');
         return;
       }
-      if (mode === 'divide' || mode === 'tdd' || mode === 'relay' || guarded) {
+      if (mode === 'divide' || mode === 'tdd' || mode === 'relay' || guarded || solo || strict) {
         if (!agreed) this.system(this.text('sys.maxRoundsDivide', { max: this.config.settings.maxRounds }));
         // 多 AI 把關依計畫順序一棒接一棒:有先後依賴的工作才不會讀到正在被改的檔案
         const relay = mode === 'relay' || guarded;
-        const plan = guarded ? await this.approvePlanPhase(agents, task, previous) : await this.assignPhase(agents, task, relay);
+        const plan: Plan | null = implementer
+          ? { assignments: [{ _agentId: implementer.id, task }] }
+          : guarded ? await this.approvePlanPhase(agents, task, previous) : await this.assignPhase(agents, task, relay);
         if (this.stopped) return;
         // 分工失敗不該讓整場會議無聲中止。討論已經發生了,至少把它總結起來,
         // 否則使用者看完一輪完整討論只拿到一句「已中止」,成果全部丟掉。
@@ -643,21 +664,21 @@ class Orchestrator extends EventEmitter {
         // 大的工作目錄快照要花上一秒。這段時間按了停止,不能再啟動執行者——它們會照樣改檔
         if (this.stopped) return;
         // 自動驗證、測試鎖、棘輪都是「寫程式」模式才有的東西:文件、分析、腦力激盪跑它們沒有意義
-        const coding = this.config.settings.workStyle !== 'general';
         // 棘輪的基準線:任何人動手之前先量一次。沒有它,「執行就弄壞了」和「本來就是壞的」分不出來
-        const before = coding ? await this.baselinePhase(cwd) : null;
+        const before = coding ? await this.baselinePhase(cwd, !solo && !strict) : null;
         if (this.stopped) return;
         // 測試先行(tdd):先讓每位成員把驗收條件寫成測試,再實作。
         // 實作回合鎖住剛寫好的測試——不然「讓測試通過」最短的路就是改測試(見 src/test-lock.ts)。
-        const testFirst = mode === 'tdd';
+        const testFirst = mode === 'tdd' || mode === 'strict-tests';
         let writtenTests: string[] = [];
+        const soloTests = solo && snapBefore ? changedTests([...snapBefore.keys()]) : [];
         if (testFirst) {
           writtenTests = await this.testsPhase(agents, plan, snapBefore, cwd);
           if (this.stopped) return;
         }
         const execution: Awaited<ReturnType<Orchestrator['executePhase']>> & { pending?: Issue[] } = relay
           ? await this.relayPhase(agents, plan)
-          : await this.executePhase(agents, plan, writtenTests);
+          : await this.executePhase(solo && implementer ? [implementer] : agents, plan, solo ? soloTests : writtenTests, solo);
         const { reports, failed, conflicts: laneConflicts, unmerged = [] } = execution;
         if (this.stopped) return;
         const gitAfter = await gitStatus(cwd);
@@ -687,17 +708,24 @@ class Orchestrator extends EventEmitter {
         const advisory = guarded && coding && reviewed.some((report) => effectiveCanEdit(report.agent))
           ? new Set(reviewed.filter((report) => !effectiveCanEdit(report.agent)).map((report) => report.agent.id)) : new Set<string>();
         const reviewTargets = reviewed.filter((report) => !advisory.has(report.agent.id));
-        const reviews = await this.reviewPhase(agents, reviewTargets, changed, failed, guarded ? pickReviewPairs(agents, reviewTargets, true) : undefined, verify, touchedTests, conflicts, guarded);
+        const reviews = solo ? [] : await this.reviewPhase(agents, reviewTargets, changed, failed, guarded ? pickReviewPairs(agents, reviewTargets, true) : undefined, verify, touchedTests, conflicts, guarded);
         if (this.stopped) return;
-        this.markUnreviewed(reviewed, reviews);
+        if (!solo) this.markUnreviewed(reviewed, reviews);
         // 審查者舉出的反例:app 自己跑一次,確認得了的才拿去當修復回合的關卡
-        const counterexamples = coding ? await this.counterexamplePhase(reviews, cwd, before?.runs || [], '', guarded ? { agents, task } : undefined) : [];
+        // A text-only reviewer cannot use a counterexample to acquire shell privileges.
+        const executableReviews = strict ? reviews.filter(({ reviewer }) => {
+          const type = getAdapter(reviewer.cli)?.type;
+          return effectiveCanEdit(reviewer) && (type === 'cli' || type === 'builtin');
+        }) : reviews;
+        const counterexamples = coding && !solo ? await this.counterexamplePhase(executableReviews, cwd, before?.runs || [], '', guarded ? { agents, task } : undefined) : [];
         if (this.stopped) return;
+        const repairReviews = strict ? reviews.filter(rv => reviewVerdict(rv.text, rv.error) === 'failed') : reviews;
+        const repairLocks = solo ? soloTests : strict ? [...new Set([...touchedTests, ...writtenTests])] : touchedTests;
         const fix = guarded
           ? await this.guardedFixPhase(agents, reviews, reviewTargets, verify, touchedTests, cwd, counterexamples, snapBefore, coding, failed, conflicts, task)
-          : await this.fixPhase(reviews, reviewed, verify, touchedTests, cwd, counterexamples);
+          : await this.fixPhase(repairReviews, reviewed, verify, repairLocks, cwd, counterexamples, false, solo || strict);
         if (this.stopped) return;
-        if (!guarded) await this.rereviewPhase(agents, reviews, fix, snapBefore, cwd, touchedTests, coding, counterexamples);
+        if (!guarded) await this.rereviewPhase(agents, strict ? [] : reviews, fix, snapBefore, cwd, touchedTests, coding, counterexamples);
         if (this.stopped) return;
         fix.unresolved.push(...(execution.pending || []));
         for (const report of [...reports, ...failed].filter((report) => unmerged.includes(report.agent.id))) {
@@ -709,6 +737,10 @@ class Orchestrator extends EventEmitter {
         const repairedCounterexamples = fix.counterexamples as CounterexampleRun[] | undefined;
         const allCounterexamples = [...counterexamples, ...(fix.discoveredCounterexamples as CounterexampleRun[] || [])];
         const afterCe = repairedCounterexamples || counterexamples;
+        if (strict) for (const run of counterexamples.filter(run => classifyConfirmation(run) === 'confirmed' && !afterCe.some(after => after.id === run.id && after.passed && !after.unusable))) {
+          const target = reviewed.find(report => report.agent.id === run.targetId) || reviewed[0];
+          if (target && !fix.unresolved.some(issue => issue.agent.id === target.agent.id)) fix.unresolved.push({ agent: target.agent, task: target.task, notes: [run.title || this.text('ce.untitled')] });
+        }
         // 棘輪:把三個時間點的關卡向量攤開來比(見 src/ratchet.ts)。
         // 舊的判斷只比「執行後 vs 修復後」,看不見執行階段本身就把東西弄壞的情況;
         // 基準線那一層就是為了看見它(實驗 7 的 poker-fix 單人組把 35/39 打成 1/39)。
@@ -721,8 +753,10 @@ class Orchestrator extends EventEmitter {
         const repairBroke = decision.reason === 'repair-regressed';
         // 語法錯誤照舊一定要收:那不是「比較差」,是根本載不起來
         const unloadable = !!(afterFix || verify)?.syntax.length;
-        const scope = decision.scope !== 'none' ? decision.scope : (unloadable && canRevertRepair ? 'repair' : 'task');
-        const contained = await this.containUnloadable(cwd, afterFix || verify, scope, decision.scope !== 'none' || unloadable);
+        const soloTestsChanged = solo && (fix.testsTouched ?? touchedTests).length > 0;
+        if (soloTestsChanged) this.system(this.text('sys.soloTestsChanged'), { level: 'warn', tag: 'test-lock' });
+        const scope = soloTestsChanged ? 'task' : decision.scope !== 'none' ? decision.scope : (unloadable && canRevertRepair ? 'repair' : 'task');
+        const contained = await this.containUnloadable(cwd, afterFix || verify, scope, soloTestsChanged || decision.scope !== 'none' || unloadable);
         if (this.stopped) return;
         if (contained.rollback) {
           const affected = scope === 'task'
@@ -737,12 +771,16 @@ class Orchestrator extends EventEmitter {
         // 確認過的反例留進專案的語料庫。回退過就不收:那次改動已經不在了,
         // 而反例描述的是當時那份程式的問題,留下來只會讓之後的基準線莫名其妙是紅的。
         if (coding && !contained.rollback) this.saveCounterexamples(cwd, allCounterexamples, task);
-        await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
+        if (!solo && !strict) await this.summaryPhase(task, 'divide', { failed, gitChanges, ...fix });
         if (this.stopped) return;
-        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, counterexamples: allCounterexamples, repairedCounterexamples, testsTouched: (fix.testsTouched || touchedTests).length > 0, repairBroke, rollback: contained.rollback, guarded, advisory });
+        await this.pushTaskSummary({ startedAt, startIndex, reports, failed, salvaged, reviews, fix, baseline, verify: contained.verify, counterexamples: allCounterexamples, repairedCounterexamples, testsTouched: (fix.testsTouched || touchedTests).length > 0 || (solo && touchedTests.length > 0), repairBroke, rollback: contained.rollback, guarded, evidenceReview: strict, advisory });
       } else {
         if (!agreed) this.system(this.text('sys.maxRoundsSummary', { max: this.config.settings.maxRounds }));
-        await this.summaryPhase(task, 'discuss', {});
+        const conclusion = await this.summaryPhase(task, 'discuss', {});
+        if (mode === 'discuss' && !this.stopped && !conclusion.error && conclusion.text.trim()) {
+          const message = this.messages.find(m => m.id === conclusion.id);
+          if (message) this.updateMessage(message, { discussionConclusion: true }, true);
+        }
       }
     });
   }
@@ -1014,7 +1052,7 @@ class Orchestrator extends EventEmitter {
   }
 
   // 階段三:各成員平行執行自己的工作
-  async executePhase(agents: AgentConfig[], plan: Plan, lockedPaths: string[] = []): Promise<{ reports: ExecReport[]; failed: ExecReport[]; conflicts?: Array<{ file: string; names: string[] }>; unmerged?: string[] }> {
+  async executePhase(agents: AgentConfig[], plan: Plan, lockedPaths: string[] = [], solo = false): Promise<{ reports: ExecReport[]; failed: ExecReport[]; conflicts?: Array<{ file: string; names: string[] }>; unmerged?: string[] }> {
     this.setPhase({ code: 'execute' });
     const cwd = this.taskCwd || this.config.settings.workDir;
     const group = crypto.randomUUID(); // 同一批平行發言,介面會並排顯示
@@ -1050,7 +1088,7 @@ class Orchestrator extends EventEmitter {
         effectiveCanEdit(agent) ? this.text('prompt.executeCanEdit') : this.text('prompt.executeReadOnly'),
         effectiveCanEdit(agent) ? this.text('prompt.noScratch') : null,
         // 測試先行:測試已經寫好而且鎖住了,實作要讓它們通過
-        lockedPaths.length ? this.text('prompt.executeTestFirst', { list: lockedPaths.join('、') }) : null,
+        lockedPaths.length ? this.text(solo ? 'prompt.soloTestLock' : 'prompt.executeTestFirst', { list: lockedPaths.join('、') }) : null,
         this.text('prompt.executeReport'),
         '',
         taskText,
@@ -1219,9 +1257,9 @@ class Orchestrator extends EventEmitter {
   //
   // 基準線只是紀錄,不是要求:本來就沒過的關卡不會變成這次任務的責任。
   // 棘輪比的是「有沒有變糟」,不是「有沒有全過」。
-  async baselinePhase(cwd: string): Promise<{ verify?: VerifyResult; runs: CounterexampleRun[]; state: GateState }> {
+  async baselinePhase(cwd: string, includeCorpus = true): Promise<{ verify?: VerifyResult; runs: CounterexampleRun[]; state: GateState }> {
     const command = (this.config.settings.verifyCommand || '').trim();
-    const corpus = corpusCounterexamples(loadCorpus(cwd));
+    const corpus = includeCorpus ? corpusCounterexamples(loadCorpus(cwd)) : [];
     if (!command && !corpus.length) return { runs: [], state: { entries: [] } };
     this.setPhase({ code: 'verify' });
     const verify = command
@@ -1786,7 +1824,7 @@ class Orchestrator extends EventEmitter {
     return this.counterexamplePhase(checked, cwd, runs, `coverage-${round}-`, { agents, task });
   }
 
-  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string, counterexamples: CounterexampleRun[] = [], guarded = false): Promise<FixOutcome> {
+  async fixPhase(reviews: Review[], reviewed: ExecReport[] = [], verify?: VerifyResult, touchedTests: string[] = [], cwd?: string, counterexamples: CounterexampleRun[] = [], guarded = false, solo = false): Promise<FixOutcome> {
     const evidenceOnly = guarded && counterexamples.some((run) => run.assessmentPending);
     // 審查本身失敗(CLI 逾時、崩潰、沒有輸出)不能當成「沒問題」
     const reviewFailed = reviews.filter((rv) => reviewVerdict(rv.text, rv.error) === 'failed');
@@ -1865,8 +1903,8 @@ class Orchestrator extends EventEmitter {
       const repairer = !guarded && reviewer && rechecker ? reviewer : it.agent;
       if (repairer !== it.agent) this.system(this.text('sys.repairHandoff', { author: it.agent.name, repairer: repairer.name, reviewer: rechecker!.name }), { tag: 'repair' });
       const prompt = [
-        this.text('prompt.fix'),
-        this.text(guarded ? 'prompt.guardFix' : 'prompt.fixLast'),
+        this.text(solo ? 'prompt.soloFix' : 'prompt.fix'),
+        solo ? null : this.text(guarded ? 'prompt.guardFix' : 'prompt.fixLast'),
         evidenceOnly ? this.text('prompt.fixConfirmedOnly') : null,
         readOnlyRevision ? this.text('prompt.guardReviseReadOnly') : this.text('prompt.noScratch'),
         repairer !== it.agent ? this.text('prompt.repairHandoff', { name: it.agent.name }) : null,
@@ -2009,7 +2047,7 @@ class Orchestrator extends EventEmitter {
       mode === 'divide' ? this.text('prompt.summary.divide') : this.text('prompt.summary.discuss'),
       ...notes,
     ].join('\n\n');
-    await this.turn(this.lead, prompt, { phase: { code: 'summary' }, hideAgreed: true });
+    return this.turn(this.lead, prompt, { phase: { code: 'summary' }, hideAgreed: true });
   }
 
   // ---------- 提示詞 ----------
@@ -2145,6 +2183,9 @@ class Orchestrator extends EventEmitter {
       allowGit: this.config.settings.allowGitCommit === true,
       allowGitPush: this.config.settings.allowGitPush === true,
       ephemeral,
+      ...(this.config.settings.browserPreviewUrl && this.store.inspectBrowser ? {
+        inspectBrowser: (endpoint: string, image: boolean, signal: AbortSignal) => this.store.inspectBrowser!(agent, endpoint, image, signal),
+      } : {}),
       ...(freshContext ? { ephemeralSession: true } : {}),
       // imageInline 型的 adapter 從這裡取實際影像;其餘 adapter 忽略即可
       attachments: attachmentBlock ? this.attachmentsFor(adapter, staged).filter((a) => !(noImages && a.kind === 'image')) : [],

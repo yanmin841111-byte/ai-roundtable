@@ -28,6 +28,52 @@ function ctx(root: string, extra: any = {}) {
   };
 }
 
+test('browser preview is opt-in, shares approved data only once per turn, and does not keep raw preview in resume history', async () => {
+  const requests: Array<{ body: any; redirect?: string }> = [];
+  const call = (id: string, args = '{}') => ({
+    id, type: 'function', function: { name: 'inspect_browser', arguments: args },
+  });
+  let responseCalls: unknown[] = [];
+  const adapter = createOpenAIAdapter({
+    id: 'preview', type: 'openai', baseUrl: 'https://api.test/v1', models: ['m'], stream: false,
+    capabilities: { attachments: ['imageInline'] },
+  }, {
+    fetchImpl: async (_url: string, options: RequestInit) => {
+      requests.push({ body: JSON.parse(String(options.body)), redirect: options.redirect });
+      const toolCalls = responseCalls;
+      responseCalls = [];
+      return Response.json({ choices: [{ message: toolCalls.length ? { tool_calls: toolCalls } : { content: 'Done' } }] });
+    },
+  });
+  const member = { name: 'Q', model: 'm', canEdit: false };
+  await adapter.run(member, ctx('.'));
+  assert.equal(requests[0].body.tools, undefined);
+  let captures = 0;
+  responseCalls = [call('invalid', '{"url":"https://other.test"}'), call('approved'), call('duplicate')];
+  const result = await adapter.run(member, ctx('.', { inspectBrowser: async (endpoint: string, image: boolean) => {
+    assert.equal(endpoint, 'https://api.test/v1/chat/completions');
+    assert.equal(image, true);
+    captures++;
+    return { text: 'page sample', console: ['console sample'], image: 'data:image/jpeg;base64,shot' };
+  } }));
+  assert.equal(result.error, null);
+  assert.equal(captures, 1);
+  assert.equal(requests[1].body.tools[0].function.name, 'inspect_browser');
+  const shared = requests[2];
+  assert.equal(shared.redirect, 'error');
+  const replies = shared.body.messages.filter((m: { role: string }) => m.role === 'tool').map((m: { content: string }) => JSON.parse(m.content));
+  assert.deepEqual(replies.map((reply: { ok: boolean }) => reply.ok), [false, true, false]);
+  assert.deepEqual(replies[1], { ok: true, text: 'page sample', console: ['console sample'] });
+  assert.match(JSON.stringify(shared.body.messages.at(-1)), /data:image\/jpeg;base64,shot/);
+  await adapter.run(member, ctx('.', { sessionId: result.sessionId }));
+  assert.doesNotMatch(JSON.stringify(requests.at(-1)?.body), /page sample|console sample|base64,shot/);
+
+  responseCalls = [call('denied')];
+  await adapter.run(member, ctx('.', { inspectBrowser: async () => { throw new Error('User declined'); } }));
+  assert.match(JSON.stringify(requests.at(-1)?.body.messages), /User declined/);
+  assert.equal(requests.at(-1)?.redirect, undefined);
+});
+
 test('read_file 的 limit 超過上限就夾到上限回傳,不整次拒絕', () => {
   const f = fixture();
   try {

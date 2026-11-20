@@ -44,6 +44,7 @@ export interface RunContext extends TurnCallbacks {
   cwd: string;
   timeoutMs?: number;
   attachments?: RunAttachment[];
+  inspectBrowser?(endpoint: string, image: boolean, signal: AbortSignal): Promise<import('../browser-preview').BrowserPreview>;
   // 只有 orchestrator 確認 divide 流程有另一位 reviewer 時才設為 true。
   // adapter 規格與成員 canEdit 即使都開啟，缺這個閘門仍不會把寫入工具送給模型。
   fileToolsEnabled?: boolean;

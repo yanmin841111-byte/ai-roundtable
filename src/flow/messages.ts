@@ -57,6 +57,7 @@ export function restoreMessage(m: any, locale: TextLocale = 'zh-Hant'): LiveMess
   // 載入的歷史對話不提供重試:附件與 CLI 的 session 都已經跟當時不同,重跑的不是同一件事
   msg.retryable = false;
   msg.planResumable = false;
+  delete msg.discussionConclusion;
   // 修復建議是當下的環境狀態,不是紀錄的一部分:存檔之後可能早就修好了,
   // 而紀錄檔可能被手動改過——不能讓它決定按鈕上填進終端的指令
   delete (msg as { fix?: unknown }).fix;

@@ -72,4 +72,95 @@ async function main() {
   if (!r.ok || ran || !reverted) process.exitCode = 1;
 }
 
-main().catch((e) => { console.error(e); process.exitCode = 1; });
+async function solo(caseName: 'clean' | 'repair' | 'test-change') {
+  const test = "require('node:assert/strict').equal(require('./answer'), 2);\n";
+  const target = 'answer.js';
+  const r = await runApp({
+    members: [
+      scriptedMember({ id: 'readonly', name: 'Lead' }),
+      scriptedMember({
+        id: 'writer', name: 'Writer', canEdit: true,
+        writes: caseName === 'test-change' ? { 'answer.test.cjs': '/* bypassed */\n' }
+          : { [target]: caseName === 'repair' ? 'module.exports = 3;\n' : 'module.exports = 2;\n' },
+        fixWrites: { [target]: 'module.exports = 2;\n' },
+      }),
+    ],
+    files: { [target]: caseName === 'clean' ? 'module.exports = 1 + 1;\n' : `module.exports = ${caseName === 'repair' ? 1 : 2};\n`, 'answer.test.cjs': test },
+    git: true,
+    settings: { workStyle: 'code', mode: 'solo', uiLocale: 'en', verifyCommand: 'node answer.test.cjs' },
+    constants: { caseName },
+    scenario: async (H) => {
+      const g: any = globalThis;
+      await g.ready();
+      g.check(g.$('#mode').value === 'solo' && g.$('#mode option[value=solo]').textContent === 'Quick implementation', 'composer shows localized quick mode');
+      const messages = await g.send('Set the answer to 2 without changing the existing test.', g.$('#mode').value);
+      const turns = messages.filter((m: any) => m.kind === 'agent');
+      const phases = turns.map((m: any) => m.phase?.code).join(',');
+      const summary = messages.find((m: any) => m.tag === 'task-summary')?.taskSummary;
+      g.check(turns.every((m: any) => m.agentName === 'Writer'), 'read-only lead does not take a turn');
+      g.check(phases === (H.caseName === 'repair' ? 'execute,repair' : 'execute'), 'no planning, review or summary model turn');
+      g.check(summary?.verify === 'passed' && !summary.guard && !summary.members[0].reviewers.length, 'result reports verification, not AI approval');
+      if (H.caseName === 'repair') {
+        g.check(messages.some((m: any) => m.tag === 'verify' && m.text.includes('Automatic verification failed')), 'initial gate failure is visible');
+      }
+      if (H.caseName === 'test-change') {
+        g.check(summary.testsTouched && summary.rollback?.scope === 'task' && summary.rollback.status === 'complete', 'modified pre-existing test triggers rollback');
+        g.check(summary.members[0].outcome === 'unresolved', 'rollback does not report delivery');
+      }
+    },
+  });
+  try {
+    const diskOk = r.read(target) === 'module.exports = 2;\n' && r.read('answer.test.cjs') === test
+      && r.numstat() === (caseName === 'test-change' ? '' : '1\t1\tanswer.js');
+    if (!report(`Solo verification: ${caseName}`, r) || !diskOk) {
+      if (!diskOk) console.error('Disk contents or git diff disagree with expected solo result');
+      process.exitCode = 1;
+    }
+  } finally { r.cleanup(); }
+}
+
+async function intentWorkflow() {
+  const r = await runApp({
+    members: [scriptedMember({ id: 'writer', name: 'Writer', canEdit: true, writes: { 'answer.js': 'module.exports = 2;\n' },
+      testWrites: { 'answer.test.cjs': 'require("assert").strictEqual(require("./answer"),2);\n' } }),
+      scriptedMember({ id: 'reviewer', name: 'Reviewer', review: 'Prefer a different variable name.' })],
+    files: { 'answer.js': 'module.exports = 1;\n', 'package.json': '{"scripts":{"test":"node answer.test.cjs"}}' },
+    settings: { mode: 'solo', workStyle: 'code', uiLocale: 'en', discussionMode: 'independent-first' },
+    scenario: async () => {
+      const g: any = globalThis;
+      await g.ready();
+      const choose = (value: string) => {
+        g.$('#mode').value = value;
+        g.$('#mode').dispatchEvent(new Event('change'));
+      };
+      g.check([...g.$('#mode').options].filter(o => !o.hidden).length === 3, 'composer offers three workflow intents');
+      await g.waitFor(() => !g.$('#composer-verify-action').hidden && g.$('#composer-verify-action').textContent.includes('npm test'), 5000, 'detected command is offered on composer');
+      g.$('#composer-verify-action').click();
+      await g.waitFor(() => g.$('#composer-verify-status').textContent.includes('npm test'), 5000, 'chosen project command is visible');
+      choose('strict');
+      g.$('#strict-tests').click();
+      await g.waitFor(async () => (await window.api.getConfig()).settings.mode === 'strict-tests', 5000, 'test-first saved with strict review');
+      g.$('#input').value = 'Set the answer to 2.';
+      g.$('#send-btn').click();
+      await g.waitFor(async () => (await g.snapshot()).messages.some((m: any) => m.tag === 'task-summary'), 60000, 'strict review completed');
+      const { messages } = await g.snapshot();
+      const phases = messages.filter((m: any) => m.kind === 'agent').map((m: any) => m.phase?.code);
+      g.check(phases.join(',') === 'tests,execute,review', `strict path skips planning votes and unsupported repairs: ${phases}`);
+      const summary = messages.find((m: any) => m.tag === 'task-summary').taskSummary;
+      g.check(messages.some((m: any) => m.tag === 'tests' && m.text.includes('answer.test.cjs')), 'test-first produced an actual locked test file');
+      g.check(summary.verify === 'passed' && summary.members[0].outcome === 'observations', 'advisory finding remains distinct from approval or failed verification');
+      await g.send('Discuss the next change.', 'discuss');
+      await g.waitFor(() => g.$('.implement-conclusion') && !g.$('.implement-conclusion').disabled, 5000, 'discussion offers implementation');
+      g.$('.implement-conclusion').click();
+      await g.waitFor(async () => (await g.snapshot()).messages.filter((m: any) => m.tag === 'task-summary').length === 2, 30000, 'conclusion starts a verified implementation');
+    },
+  });
+  try { if (!report('Workflow intents and project checks', r)) process.exitCode = 1; }
+  finally { r.cleanup(); }
+}
+
+(async () => {
+  if (!process.argv.includes('--solo-only')) await main();
+  for (const caseName of ['clean', 'repair', 'test-change'] as const) await solo(caseName);
+  await intentWorkflow();
+})().catch((e) => { console.error(e); process.exitCode = 1; });

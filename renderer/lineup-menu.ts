@@ -81,7 +81,7 @@ export function closeLineupMenu(): void {
   $<HTMLButtonElement>('#lineup-btn').setAttribute('aria-expanded', 'false');
 }
 
-function modeLabel(mode: string): string { return t(mode === 'guarded' ? 'lineup.mode.guarded' : mode === 'discuss' ? 'lineup.mode.discuss' : 'lineup.mode.divide'); }
+function modeLabel(mode: string): string { return t(mode === 'strict-tests' ? 'mode.strict-tests' : `composer.mode.${mode}`); }
 
 function renderMenu(): void {
   const menu = $('#lineup-menu');
