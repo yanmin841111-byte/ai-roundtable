@@ -15,6 +15,21 @@ test('browser preview accepts only local HTTP(S) development URLs without creden
   }
 });
 
+test('new workflow defaults do not change legacy saved workflows', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-workflow-defaults-'));
+  try {
+    const load = () => {
+      const { mode, discussionMode } = new Store(dir).get().settings;
+      return [mode, discussionMode];
+    };
+    assert.deepEqual(load(), ['solo', 'independent-first']);
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ settings: { maxRounds: 2 } }));
+    assert.deepEqual(load(), ['divide', 'sequential']);
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ settings: { mode: 'strict', discussionMode: 'independent-first' } }));
+    assert.deepEqual(load(), ['strict', 'independent-first']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('Store.save uses atomic replacement, respects read-only config.json, and backs up corrupt config on load', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ar-store-'));
   const cfgPath = path.join(dir, 'config.json');

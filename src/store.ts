@@ -73,7 +73,8 @@ class Store {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid config root');
       const def = defaultConfig();
       const agents = Array.isArray(raw.agents) ? raw.agents : def.agents;
-      const settings = { ...def.settings, ...(raw.settings || {}) };
+      // Missing workflow fields in an existing config predate quick implementation and independent proposals.
+      const settings = { ...def.settings, mode: 'divide', discussionMode: 'sequential', ...(raw.settings || {}) };
       // 接力已併入多 AI 把關;不足兩位成員時退回平行分工
       if (settings.mode === 'relay') settings.mode = agents.filter((agent: { enabled?: boolean }) => agent.enabled !== false).length >= 2 ? 'guarded' : 'divide';
       return { agents, settings, lineups: sanitizeLineups(raw.lineups) };
