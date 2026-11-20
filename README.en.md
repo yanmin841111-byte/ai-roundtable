@@ -2,13 +2,11 @@
 
 # AI Roundtable
 
-A macOS desktop app that seats multiple AI coding CLIs (Claude Code, Codex CLI,
-Cursor CLI, GitHub Copilot CLI, or any custom command) at one table to discuss a task, divide the
-work, execute it, and review each other.
+Use your existing AI CLIs and APIs to work on a project on macOS. Pick the workflow that fits the task:
 
-> Members debate a task, split the work, execute in parallel, and review each
-> other's output. You watch the whole conversation live and can jump in at any
-> time.
+- **Quick implementation** (default for new installs): when the change is clear, one CLI member with edit access makes it. If project verification fails, the same member can repair the change once and rerun the check.
+- **Strict review**: when you want a second opinion, other members independently review the changes. Review comments are advisory; a failed check or a reproducible counterexample triggers repair.
+- **Discuss only**: when you're still deciding what to build, compare proposals without editing files. You can start implementation once you've chosen an approach.
 
 ![AI Roundtable screenshot](docs/screenshot.png)
 
@@ -28,7 +26,7 @@ work, execute it, and review each other.
   Two ready members are enough; a third member gets a separate review role.
   When members are missing, GitHub Copilot can add three read-only low-cost model
   members in one click.
-- **Multi-AI checks**: discussion and a plan with acceptance criteria both need
+- **Multi-AI checks** (legacy workflow, still available in settings and lineups): discussion and a plan with acceptance criteria both need
   unanimous approval before work starts; steps run in order, and every result
   needs approval from two or more independent reviewers. Works with two members.
 - **Work mode**: "Writing code" verifies the changes automatically and locks

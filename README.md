@@ -2,14 +2,11 @@
 
 # AI Roundtable
 
-讓多個 AI CLI(Claude Code、Codex CLI、Cursor CLI、GitHub Copilot CLI,
-或任何自訂指令)在同一張圓桌上討論、分工、執行、互相審查的 macOS 桌面應用。
+在 macOS 上用你現有的 AI CLI 或 API 處理專案任務。依你想要的結果選流程，不必每次都開一場會：
 
-> A desktop app that seats multiple AI coding CLIs and APIs (Claude Code, Codex
-> CLI, Cursor CLI, GitHub Copilot CLI, Grok, Kimi, DeepSeek, Antigravity CLI, Ollama, or anything you plug
-> in) at one table: they debate a task, split the work, execute in parallel, and
-> review each other's output. You watch the whole conversation live and can jump
-> in at any time.
+- **快速實作**（新安裝預設）：需求明確時，讓一位可改檔的 CLI 成員動手。若專案驗證失敗，同一位成員可修正一次，再跑驗證。
+- **嚴格審查**：需要第二個觀點時，讓其他成員獨立審查改動。審查意見是建議；驗證失敗或能重現的反例才會觸發修正。
+- **只討論**：還沒決定怎麼做時，先比較各成員的提案，不改檔；有結論後再開始實作。
 
 ![AI Roundtable 畫面](docs/screenshot.png)
 
@@ -22,7 +19,7 @@
 - **每位成員各自設定**:角色個性、模型、推理強度、是否允許改檔案。
 - **陣容**:把誰上場、各自的角色、主持人、流程與工作模式存起來,之後一鍵換回來。
 - **快速組隊**:從側欄「陣容」選程式開發組或文件研究組,預覽並調整角色後套用;兩位可用成員即可組隊,三位以上時分開規劃、執行、審查。成員不足時可用 GitHub Copilot 一鍵建立三個低成本模型的唯讀成員。
-- **多 AI 把關**:討論與含驗收條件的計畫都要全員同意才動工,依序執行後,每份成果由兩位以上獨立審查者全數通過才算完成;兩位成員即可使用。
+- **多 AI 把關（舊流程，仍可從設定或陣容使用）**:討論與含驗收條件的計畫都要全員同意才動工,依序執行後,每份成果由兩位以上獨立審查者全數通過才算完成;兩位成員即可使用。
 - **工作模式**:「寫程式」會自動驗證改動、鎖住既有測試;「一般任務」(文件、分析、腦力激盪)不做這些。
 - **測試先行流程**:先把驗收條件寫成測試,鎖起來,再實作到測試通過。
 - **專案規則**:工作目錄的 `CLAUDE.md`、`AGENTS.md`
